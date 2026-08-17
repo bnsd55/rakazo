@@ -1,7 +1,8 @@
 import { approvalEffectKey } from "@rakazo/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   approvalPausedToolResult,
+  claimApprovedEffect,
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
 } from "./approval-effect.js";
@@ -49,6 +50,105 @@ describe("resolveDuplicateEffectGate", () => {
     expect(resolveDuplicateEffectGate({ status: "intended" }, "delete_bot")).toEqual({
       action: "paused",
     });
+  });
+
+  it("fails closed for executing effects", () => {
+    expect(resolveDuplicateEffectGate({ status: "executing" }, "destination.write")).toEqual({
+      action: "uncertain",
+      toolName: "destination.write",
+    });
+  });
+});
+
+describe("claimApprovedEffect", () => {
+  it("claims approved effects exactly once", async () => {
+    const store = {
+      externalEffect: {
+        updateMany: vi
+          .fn()
+          .mockResolvedValueOnce({ count: 1 })
+          .mockResolvedValueOnce({ count: 0 }),
+      },
+    };
+
+    await expect(claimApprovedEffect(store, "effect-1")).resolves.toBe(true);
+    await expect(claimApprovedEffect(store, "effect-1")).resolves.toBe(false);
+    expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
+      where: { id: "effect-1", status: "approved" },
+      data: { status: "executing" },
+    });
+  });
+});
+
+describe("approved effect resume", () => {
+  function createApprovedEffectStore(initialStatus: "approved" | "executing" | "completed" = "approved") {
+    const effectId = "effect-1";
+    let status = initialStatus;
+    let destinationWrites = 0;
+    const storedResult = { ok: true, written: true };
+    const store = {
+      externalEffect: {
+        updateMany: vi.fn(async ({ where, data }) => {
+          if (where.id === effectId && where.status === "approved" && status === "approved") {
+            status = data.status;
+            return { count: 1 };
+          }
+          return { count: 0 };
+        }),
+        findUnique: vi.fn(async () => ({
+          id: effectId,
+          status,
+          result: status === "completed" ? storedResult : undefined,
+        })),
+      },
+    };
+
+    const resumeApprovedTool = async (toolName: string, options?: { complete?: boolean }) => {
+      const current = await store.externalEffect.findUnique({ where: { id: effectId } });
+      const effect = current ?? { id: effectId, status, result: undefined as unknown };
+      const gate = resolveDuplicateEffectGate(effect, toolName);
+      if (gate.action === "return") return { executed: false, result: gate.result };
+      if (gate.action === "uncertain") {
+        throw new Error(`tool ${toolName} has an earlier execution with an uncertain outcome`);
+      }
+      if (!(await claimApprovedEffect(store, effectId))) {
+        const current = await store.externalEffect.findUnique({ where: { id: effectId } });
+        if (!current) {
+          throw new Error(`tool ${toolName} has an earlier execution with an uncertain outcome`);
+        }
+        const retryGate = resolveDuplicateEffectGate(current, toolName);
+        if (retryGate.action === "return") return { executed: false, result: retryGate.result };
+        throw new Error(`tool ${toolName} has an earlier execution with an uncertain outcome`);
+      }
+      destinationWrites += 1;
+      if (options?.complete !== false) {
+        status = "completed";
+      }
+      return { executed: true, result: storedResult };
+    };
+
+    return { store, resumeApprovedTool, getDestinationWrites: () => destinationWrites, getStatus: () => status };
+  }
+
+  it("runs the connector write only once when a worker dies before completeEffect", async () => {
+    const harness = createApprovedEffectStore();
+
+    const first = await harness.resumeApprovedTool("destination.write", { complete: false });
+    await expect(harness.resumeApprovedTool("destination.write")).rejects.toThrow(/uncertain outcome/);
+
+    expect(first).toEqual({ executed: true, result: { ok: true, written: true } });
+    expect(harness.getStatus()).toBe("executing");
+    expect(harness.getDestinationWrites()).toBe(1);
+  });
+
+  it("returns the stored result after the approved effect completed", async () => {
+    const harness = createApprovedEffectStore();
+
+    await harness.resumeApprovedTool("destination.write");
+    const second = await harness.resumeApprovedTool("destination.write");
+
+    expect(second).toEqual({ executed: false, result: { ok: true, written: true } });
+    expect(harness.getDestinationWrites()).toBe(1);
   });
 });
 

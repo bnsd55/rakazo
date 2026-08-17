@@ -29,6 +29,15 @@ export type DuplicateEffectGate =
   | { action: "paused" }
   | { action: "uncertain"; toolName: string };
 
+export type ExternalEffectStore = {
+  externalEffect: {
+    updateMany: (args: {
+      where: { id: string; status: string };
+      data: { status: string };
+    }) => Promise<{ count: number }>;
+  };
+};
+
 export function resolveDuplicateEffectGate(
   effect: { status: string; result?: unknown },
   toolName: string,
@@ -39,6 +48,9 @@ export function resolveDuplicateEffectGate(
   if (effect.status === "denied") {
     return { action: "return", result: { error: "User denied this action." } };
   }
+  if (effect.status === "executing") {
+    return { action: "uncertain", toolName };
+  }
   if (effect.status === "approved") {
     return { action: "execute" };
   }
@@ -46,4 +58,15 @@ export function resolveDuplicateEffectGate(
     return { action: "paused" };
   }
   return { action: "uncertain", toolName };
+}
+
+export async function claimApprovedEffect(
+  store: ExternalEffectStore,
+  effectId: string,
+): Promise<boolean> {
+  const claimed = await store.externalEffect.updateMany({
+    where: { id: effectId, status: "approved" },
+    data: { status: "executing" },
+  });
+  return claimed.count === 1;
 }

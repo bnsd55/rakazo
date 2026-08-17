@@ -33,6 +33,7 @@ import {
 import { buildApprovalAskBlock, resolvesViaConnector } from "./approval-ask.js";
 import {
   approvalPausedToolResult,
+  claimApprovedEffect,
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
 } from "./approval-effect.js";
@@ -407,6 +408,16 @@ export function createRunExecutor(deps: ExecutorDeps) {
               throw new Error(
                 `tool ${gate.toolName} has an earlier execution with an uncertain outcome`,
               );
+            }
+            if (!(await claimApprovedEffect(deps.prisma, applied.effect.id))) {
+              const current = await deps.prisma.externalEffect.findUnique({
+                where: { id: applied.effect.id },
+              });
+              if (current) {
+                const retryGate = resolveDuplicateEffectGate(current, name);
+                if (retryGate.action === "return") return retryGate.result;
+              }
+              throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
             }
           } else if (needsApproval && applied) {
             if (!(await renewRunLease(deps, runId, workerId, fence))) {
