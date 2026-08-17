@@ -71,6 +71,7 @@ import {
 } from "./artifacts.js";
 import { addScreenProxyCapability } from "./screen-proxy.js";
 import { loadAllMessages, loadMessagePage } from "./thread-message-pages.js";
+import { queryWorkspaceSearch } from "./search.js";
 
 const MAX_COMPUTER_TEXT_FILE_BYTES = 2 * 1024 * 1024;
 const THREAD_MESSAGE_PAGE_SIZE = 100;
@@ -379,7 +380,13 @@ export function createRouter(deps: RouterDeps) {
       messages: authed.threads.messages.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
         if (!bot.thread) throw new IsolationError();
-        return loadMessagePage(deps.prisma, bot.thread.id, input.before, THREAD_MESSAGE_PAGE_SIZE);
+        return loadMessagePage(
+          deps.prisma,
+          bot.thread.id,
+          input.before,
+          THREAD_MESSAGE_PAGE_SIZE,
+          input.around,
+        );
       }),
       subscribe: authed.threads.subscribe.handler(async function* ({ context, input }) {
         const bot = await repos.getBot(context.actor, input.botId);
@@ -1437,6 +1444,11 @@ export function createRouter(deps: RouterDeps) {
         await savePushToken(deps.dataDir, context.actor.userId, input.token);
         return { ok: true as const };
       }),
+    },
+    search: {
+      query: authed.search.query.handler(async ({ context, input }) => ({
+        hits: await queryWorkspaceSearch(deps.prisma, context.actor, input.q),
+      })),
     },
   });
 }

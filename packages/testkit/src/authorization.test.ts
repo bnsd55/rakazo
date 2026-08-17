@@ -115,6 +115,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["usage/summary"],
       ["export/bot", { botId: "missing-bot" }],
       ["notifications/registerPush", { token: "ExponentPushToken[not-real]" }],
+      ["search/query", { q: "anything" }],
     ]);
 
     const results = await Promise.all(
@@ -288,6 +289,9 @@ describeWithDatabase("API authorization and resource isolation", () => {
     );
     expect(await rpc<Array<{ id: string }>>(app, intruder, "connections/list")).not.toContainEqual(
       expect.objectContaining({ id: ownerConnection.connectionId }),
+    );
+    expect(await rpc<{ hits: unknown[] }>(app, intruder, "search/query", { q: ownerBot.name })).toEqual(
+      { hits: [] },
     );
 
     // These endpoints are deliberately idempotent for unknown IDs. Success must not mutate

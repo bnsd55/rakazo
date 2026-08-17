@@ -25,6 +25,7 @@ import {
 } from "./domain.js";
 import { ProductEventSchema } from "./events.js";
 import { Id } from "./ids.js";
+import { SearchQueryOutputSchema } from "./search.js";
 
 const botId = z.object({ botId: Id });
 
@@ -116,7 +117,18 @@ export const appContract = {
   threads: {
     get: oc.input(z.object({ botId: Id })).output(ThreadSnapshotSchema),
     messages: oc
-      .input(z.object({ botId: Id, before: z.number().int().nonnegative() }))
+      .input(
+        z.object({
+          botId: Id,
+          before: z.number().int().nonnegative().optional(),
+          around: z
+            .object({
+              messageId: Id.optional(),
+              seq: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
+        }),
+      )
       .output(ThreadMessagePageSchema),
     subscribe: oc
       .input(z.object({ botId: Id, cursor: z.number().int().min(-1) }))
@@ -265,6 +277,11 @@ export const appContract = {
     registerPush: oc
       .input(z.object({ token: z.string().min(8).max(512) }))
       .output(z.object({ ok: z.literal(true) })),
+  },
+  search: {
+    query: oc
+      .input(z.object({ q: z.string().max(200) }))
+      .output(SearchQueryOutputSchema),
   },
 };
 

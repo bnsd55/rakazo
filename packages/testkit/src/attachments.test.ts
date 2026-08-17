@@ -108,6 +108,34 @@ describeAttachments("chat attachments", () => {
     });
     expect(oversize.status).toBeGreaterThanOrEqual(400);
   });
+
+  it("attaches a workspace file into the thread", async () => {
+    const cookie = await signup(app, `attach-thread-${stamp}@rakazo.test`, "Attach Thread User");
+    const bot = await rpc<{ id: string }>(app, cookie, "bots/create", {
+      name: "Attacher",
+      title: "Attacher",
+      description: "tests attach_file",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    await sendAndWait(app, cookie, bot.id, {
+      text: "write notes/result.txt and attach it to the thread",
+    });
+    const snapshot = await rpc<ThreadSnapshot>(app, cookie, "threads/get", { botId: bot.id });
+    const fileMessage = snapshot.messages.find((message) =>
+      message.blocks.some((block) => block.kind === "file"),
+    );
+    const fileBlock = fileMessage?.blocks.find((block) => block.kind === "file");
+    expect(fileBlock).toMatchObject({ kind: "file", name: "result.txt" });
+    if (fileBlock?.kind !== "file") throw new Error("expected file block");
+    const fetched = await rpc<{ contentBase64: string }>(app, cookie, "artifacts/get", {
+      botId: bot.id,
+      artifactId: fileBlock.artifactId,
+    });
+    expect(Buffer.from(fetched.contentBase64, "base64").toString("utf8")).toContain(
+      "write notes/result.txt and attach it to the thread",
+    );
+  });
 });
 
 async function signup(app: App, email: string, name: string) {

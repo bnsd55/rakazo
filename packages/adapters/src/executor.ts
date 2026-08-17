@@ -13,12 +13,13 @@ import type {
 } from "@rakazo/adapter-kit";
 import { routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock, RunStatus } from "@rakazo/contracts";
-import { isAttachmentImageMimeType } from "@rakazo/contracts";
+import { ATTACHMENT_MAX_BYTES, isAttachmentImageMimeType } from "@rakazo/contracts";
 import {
   assertTransition,
   blocksToAgentHistoryText,
   containsSecret,
   createStreamingRedactor,
+  inferAttachmentMimeType,
   isTerminal,
   nextCronDate,
   nextFence,
@@ -63,6 +64,7 @@ import {
 } from "./pi-oauth.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
+import { attachWorkspaceFileToThread } from "./thread-artifacts.js";
 
 const modelCredentialLocks = new Map<string, Promise<void>>();
 const READ_ONLY_AGENT_TOOLS = new Set([
@@ -485,6 +487,46 @@ export function createRunExecutor(deps: ExecutorDeps) {
               context,
             );
             return finish({ ok: true, path: filePath });
+          }
+          if (name === "attach_file") {
+            const filePath = String(args.path ?? "");
+            if (!deps.artifacts) {
+              return finish({ error: "artifact storage unavailable", path: filePath });
+            }
+            const storedPath = resolveBotWorkspacePath(computerMode, bot.id, filePath);
+            let bytes: Uint8Array;
+            try {
+              bytes = await deps.sandbox.readFile(computer, storedPath, context, {
+                maxBytes: ATTACHMENT_MAX_BYTES,
+              });
+            } catch {
+              return finish({ error: "file not found or unreadable", path: filePath });
+            }
+            const mimeType = inferAttachmentMimeType(filePath);
+            if (!mimeType) {
+              return finish({ error: "unsupported attachment type", path: filePath });
+            }
+            try {
+              const attached = await attachWorkspaceFileToThread(
+                { prisma: deps.prisma, artifacts: deps.artifacts },
+                {
+                  workspaceId: run.workspaceId,
+                  userId: run.userId,
+                  botId: bot.id,
+                  runId: run.id,
+                  filePath,
+                  bytes,
+                  operationId: executionId,
+                },
+              );
+              await publishMessage(deps, run, "bot", [attached.block]);
+              return finish({ ok: true, artifactId: attached.artifactId, path: filePath });
+            } catch (error) {
+              return finish({
+                error: error instanceof Error ? error.message : "could not attach file",
+                path: filePath,
+              });
+            }
           }
           if (name === "shell") {
             const command = String(args.command ?? args.cmd ?? "");

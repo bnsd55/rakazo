@@ -2,8 +2,15 @@ import { ChatMarkdown } from "@rakazo/chat-ui/native";
 import { abortableDelay } from "@rakazo/core";
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Alert, AppState, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, AppState, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { NativeSymbol } from "../components/native-symbol";
+import { openMobileArtifact } from "../lib/artifact-open";
+import {
+  type PickedAttachment,
+  pickDocuments,
+  pickFromLibrary,
+  takePhoto,
+} from "../lib/pick-attachments";
 import {
   applyMobileThreadEvent,
   blockText,
@@ -20,12 +27,27 @@ import { confirmDeleteBot } from "../lib/bot-lifecycle";
 export default function Thread() {
   const navigation = useNavigation();
   const router = useRouter();
-  const { botId, name } = useLocalSearchParams<{ botId?: string; name?: string }>();
+  const { botId, name, messageId } = useLocalSearchParams<{
+    botId?: string;
+    name?: string;
+    messageId?: string;
+  }>();
   const scroll = useRef<ScrollView>(null);
   const loadingOlderContent = useRef(false);
   const expandedHistoryThread = useRef<string | null>(null);
+  const pinnedAroundRef = useRef<{
+    botId: string;
+    messageId: string;
+    threadId: string;
+    messages: readonly MobileMessage[];
+    olderCursor: number | null;
+  } | null>(null);
+  const jumpScrollTarget = useRef<string | null>(null);
   const [snap, setSnap] = useState<MobileSnapshot | null>(null);
   const [draft, setDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<PickedAttachment[]>([]);
+  const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
@@ -69,14 +91,53 @@ export default function Thread() {
   async function refresh() {
     if (!botId) return;
     const next = await rpc<MobileSnapshot>("threads/get", { botId });
-    setSnap((prev) =>
-      mergeMobileSnapshot(prev, next, expandedHistoryThread.current === next.threadId),
-    );
+    const pin = pinnedAroundRef.current;
+    setSnap((prev) => {
+      let merged = mergeMobileSnapshot(
+        prev,
+        next,
+        expandedHistoryThread.current === next.threadId,
+      );
+      if (pin && merged && pin.botId === botId) {
+        merged = {
+          ...merged,
+          messages: [...pin.messages],
+          olderCursor: pin.olderCursor,
+        };
+      }
+      return merged;
+    });
     return next;
+  }
+
+  async function applyMessageJump(targetBotId: string, targetMessageId: string) {
+    const [snap, page] = await Promise.all([
+      rpc<MobileSnapshot>("threads/get", { botId: targetBotId }),
+      rpc<MobileMessagePage>("threads/messages", {
+        botId: targetBotId,
+        around: { messageId: targetMessageId },
+      }),
+    ]);
+    expandedHistoryThread.current = page.threadId;
+    pinnedAroundRef.current = {
+      botId: targetBotId,
+      messageId: targetMessageId,
+      threadId: page.threadId,
+      messages: [...page.messages],
+      olderCursor: page.olderCursor,
+    };
+    jumpScrollTarget.current = targetMessageId;
+    setSnap({
+      ...snap,
+      messages: [...page.messages],
+      olderCursor: page.olderCursor,
+    });
   }
 
   async function loadOlderMessages() {
     if (!botId || snap?.olderCursor == null || loadingOlder) return;
+    pinnedAroundRef.current = null;
+    jumpScrollTarget.current = null;
     loadingOlderContent.current = true;
     setLoadingOlder(true);
     try {
@@ -115,6 +176,10 @@ export default function Thread() {
 
   useEffect(() => {
     if (!botId) return;
+    if (!messageId) {
+      pinnedAroundRef.current = null;
+      jumpScrollTarget.current = null;
+    }
     expandedHistoryThread.current = null;
     const abort = new AbortController();
     void (async () => {
@@ -165,12 +230,69 @@ export default function Thread() {
     };
   }, [botId, markReadIfVisible]);
 
+  useEffect(() => {
+    if (!botId || !messageId) return;
+    void applyMessageJump(botId, messageId).catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not open message");
+    });
+  }, [botId, messageId]);
+
   async function send() {
-    if (!botId || !draft.trim()) return;
-    const text = draft;
-    setDraft("");
-    await rpc("threads/send", { botId, text });
-    await refresh();
+    if (!botId || sending) return;
+    const text = draft.trim();
+    if (!text && pendingAttachments.length === 0) return;
+    setSending(true);
+    setError(null);
+    try {
+      const artifactIds: string[] = [];
+      for (const pending of pendingAttachments) {
+        const artifact = await rpc<{ id: string }>("artifacts/create", {
+          botId,
+          name: pending.name,
+          mimeType: pending.mimeType,
+          contentBase64: pending.contentBase64,
+        });
+        artifactIds.push(artifact.id);
+      }
+      await rpc("threads/send", {
+        botId,
+        text: text || undefined,
+        artifactIds: artifactIds.length ? artifactIds : undefined,
+      });
+      setDraft("");
+      setPendingAttachments([]);
+      setAttachmentNotice(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send message");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function showAttachMenu() {
+    Alert.alert("Attach", undefined, [
+      { text: "Photo library", onPress: () => void addAttachments(pickFromLibrary) },
+      { text: "Camera", onPress: () => void addAttachments(takePhoto) },
+      { text: "File", onPress: () => void addAttachments(pickDocuments) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  async function addAttachments(
+    picker: (
+      existingCount: number,
+    ) => Promise<{ attachments: PickedAttachment[]; skipped: Array<{ name: string; reason: string }> }>,
+  ) {
+    const result = await picker(pendingAttachments.length);
+    if (result.attachments.length) {
+      setPendingAttachments((current) => [...current, ...result.attachments]);
+    }
+    setAttachmentNotice(
+      result.skipped.length
+        ? `Skipped ${result.skipped.map((item) => `${item.name} (${item.reason})`).join(", ")}`
+        : null,
+    );
   }
 
   return (
@@ -185,6 +307,7 @@ export default function Thread() {
             loadingOlderContent.current = false;
             return;
           }
+          if (jumpScrollTarget.current || (pinnedAroundRef.current && pinnedAroundRef.current.botId === botId)) return;
           scroll.current?.scrollToEnd({ animated: false });
         }}
       >
@@ -202,6 +325,14 @@ export default function Thread() {
         {(snap?.messages ?? []).map((message) => (
           <View
             key={message.id}
+            onLayout={(event) => {
+              if (jumpScrollTarget.current !== message.id) return;
+              scroll.current?.scrollTo({
+                y: Math.max(0, event.nativeEvent.layout.y - 24),
+                animated: true,
+              });
+              jumpScrollTarget.current = null;
+            }}
             style={{
               marginTop: 12,
               width: "100%",
@@ -210,6 +341,7 @@ export default function Thread() {
             }}
           >
             <MessageBubble
+              botId={botId ?? ""}
               message={message}
               onOpenBot={(id, botName) =>
                 router.push({ pathname: "/thread", params: { botId: id, name: botName } })
@@ -218,7 +350,67 @@ export default function Thread() {
           </View>
         ))}
       </ScrollView>
+      {attachmentNotice ? (
+        <Text style={{ color: "#D6CFA0", marginTop: 12, fontSize: 13 }}>{attachmentNotice}</Text>
+      ) : null}
+      {pendingAttachments.length ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          {pendingAttachments.map((attachment) => (
+            <View
+              key={attachment.id}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: "#26262A",
+                backgroundColor: "#17171A",
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+              }}
+            >
+              {attachment.previewUri ? (
+                <Image
+                  source={{ uri: attachment.previewUri }}
+                  style={{ width: 28, height: 28, borderRadius: 6 }}
+                />
+              ) : (
+                <Text style={{ color: "#C9C9CE" }}>📎</Text>
+              )}
+              <Text style={{ color: "#C9C9CE", maxWidth: 140 }} numberOfLines={1}>
+                {attachment.name}
+              </Text>
+              <Pressable
+                accessibilityLabel={`Remove ${attachment.name}`}
+                onPress={() =>
+                  setPendingAttachments((current) =>
+                    current.filter((item) => item.id !== attachment.id),
+                  )
+                }
+              >
+                <Text style={{ color: "#85858A" }}>✕</Text>
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      ) : null}
       <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
+        <Pressable
+          accessibilityLabel="Attach file"
+          onPress={showAttachMenu}
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: 22,
+            borderWidth: 1,
+            borderColor: "#26262A",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <NativeSymbol ios="plus" android="add" size={18} color="#9A9AA0" />
+        </Pressable>
         <TextInput
           value={draft}
           onChangeText={setDraft}
@@ -237,6 +429,7 @@ export default function Thread() {
           }}
         />
         <Pressable
+          disabled={sending || (!draft.trim() && pendingAttachments.length === 0)}
           onPress={() => void send()}
           style={{
             backgroundColor: "#F1F1EF",
@@ -245,6 +438,7 @@ export default function Thread() {
             height: 44,
             alignItems: "center",
             justifyContent: "center",
+            opacity: sending || (!draft.trim() && pendingAttachments.length === 0) ? 0.5 : 1,
           }}
         >
           <NativeSymbol ios="arrow.up" android="arrow-up" size={18} color="#17171A" />
@@ -263,9 +457,11 @@ export default function Thread() {
 }
 
 function MessageBubble({
+  botId,
   message,
   onOpenBot,
 }: {
+  botId: string;
   message: MobileMessage;
   onOpenBot: (botId: string, name: string) => void;
 }) {
@@ -377,17 +573,48 @@ function MessageBubble({
         ) : null}
         {attachments.map((attachment, index) =>
           attachment.kind === "image" ? (
-            <Text
+            <Pressable
               key={`${attachment.artifactId ?? attachment.name ?? "image"}-${index}`}
-              style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}
+              onPress={() =>
+                attachment.artifactId
+                  ? void openMobileArtifact(
+                      botId,
+                      attachment.artifactId,
+                      attachment.name ?? "Image",
+                      attachment.mimeType ?? "image/png",
+                    ).catch((err) =>
+                      Alert.alert(
+                        "Could not open image",
+                        err instanceof Error ? err.message : "Try again.",
+                      ),
+                    )
+                  : undefined
+              }
             >
-              🖼 {attachment.name ?? "Image"}
-            </Text>
+              <Text style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}>
+                🖼 {attachment.name ?? "Image"}
+              </Text>
+            </Pressable>
           ) : (
-            <View key={`${attachment.artifactId ?? attachment.name ?? "file"}-${index}`}>
-              <Text
-                style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}
-              >
+            <Pressable
+              key={`${attachment.artifactId ?? attachment.name ?? "file"}-${index}`}
+              onPress={() =>
+                attachment.artifactId
+                  ? void openMobileArtifact(
+                      botId,
+                      attachment.artifactId,
+                      attachment.name ?? "File",
+                      attachment.mimeType ?? "text/plain",
+                    ).catch((err) =>
+                      Alert.alert(
+                        "Could not open file",
+                        err instanceof Error ? err.message : "Try again.",
+                      ),
+                    )
+                  : undefined
+              }
+            >
+              <Text style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}>
                 📎 {attachment.name ?? "File"}
               </Text>
               {attachment.size ? (
@@ -395,7 +622,7 @@ function MessageBubble({
                   {attachment.mimeType ?? "file"} · {attachment.size} bytes
                 </Text>
               ) : null}
-            </View>
+            </Pressable>
           ),
         )}
       </View>

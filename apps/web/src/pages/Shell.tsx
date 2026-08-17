@@ -5,6 +5,7 @@ import type {
   ComputerStatus,
   ProductEvent,
   Routine,
+  SearchHit,
   ThreadMessage,
   ThreadSnapshot,
 } from "@rakazo/contracts";
@@ -32,7 +33,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { openArtifact } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { rpc } from "../lib/rpc";
 import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
@@ -48,6 +50,7 @@ import { HostComputerPrompt } from "./HostComputerPrompt";
 import { PluginsOverlay } from "./PluginsOverlay";
 import { RoutineSchedule } from "./RoutineSchedule";
 import { WindowChrome } from "./WindowChrome";
+import { WorkspaceSearchResults } from "./WorkspaceSearch";
 
 type Panel = "computer" | "settings" | "routine" | "create" | null;
 
@@ -62,11 +65,14 @@ const ATTACHMENT_ACCEPT = ATTACHMENT_ALLOWED_MIME_TYPES.join(",");
 export function ShellPage() {
   const { botId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const session = authClient.useSession();
   const [bots, setBots] = useState<Bot[]>([]);
   const [archivedBots, setArchivedBots] = useState<Bot[]>([]);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
   const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -101,6 +107,13 @@ export function ShellPage() {
   const autoBooted = useRef<string | null>(null);
   const expandedHistoryThread = useRef<string | null>(null);
   const messageScroll = useRef<HTMLDivElement>(null);
+  const pinnedAroundRef = useRef<{
+    botId: string;
+    messageId: string;
+    threadId: string;
+    messages: ThreadMessage[];
+    olderCursor: number | null;
+  } | null>(null);
   const manuallyUnread = useRef(new Set<string>());
   const computerVisible = useRef(false);
   computerVisible.current = panel === "computer" || computerOpen;
@@ -175,14 +188,28 @@ export function ShellPage() {
       !scrollElement ||
       scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80;
     const snap = await rpc.threads.get({ botId: id });
-    setSnapshot((prev) =>
-      mergeThreadSnapshot(prev, snap, expandedHistoryThread.current === snap.threadId),
-    );
+    const pin = pinnedAroundRef.current;
+    const keepPin = pin?.botId === id;
+    setSnapshot((prev) => {
+      let merged = mergeThreadSnapshot(
+        prev,
+        snap,
+        expandedHistoryThread.current === snap.threadId,
+      );
+      if (keepPin && merged) {
+        merged = {
+          ...merged,
+          messages: pin.messages,
+          olderCursor: pin.olderCursor,
+        };
+      }
+      return merged;
+    });
     setComputer(snap.computer);
     const routines = await rpc.routines.list({ botId: id });
     setRoutines(routines);
     await refreshComputerScreen(id);
-    if (stickToEnd) {
+    if (!keepPin && stickToEnd) {
       window.requestAnimationFrame(() => {
         const element = messageScroll.current;
         if (element) element.scrollTop = element.scrollHeight;
@@ -207,6 +234,7 @@ export function ShellPage() {
 
   async function loadOlderMessages() {
     if (!active || snapshot?.olderCursor == null || loadingOlder) return;
+    pinnedAroundRef.current = null;
     const scrollElement = messageScroll.current;
     const previousHeight = scrollElement?.scrollHeight ?? 0;
     setLoadingOlder(true);
@@ -250,6 +278,9 @@ export function ShellPage() {
 
   useEffect(() => {
     if (!active) return;
+    if (!searchParams.get("m")) {
+      pinnedAroundRef.current = null;
+    }
     screenRequest.current += 1;
     setScreenUrl(null);
     expandedHistoryThread.current = null;
@@ -304,12 +335,109 @@ export function ShellPage() {
     return () => {
       abort.abort();
     };
-  }, [active?.id, markBotReadIfVisible]);
+  }, [active?.id, markBotReadIfVisible, searchParams]);
 
   const filtered = useMemo(
     () => bots.filter((b) => `${b.name} ${b.preview}`.toLowerCase().includes(query.toLowerCase())),
     [bots, query],
   );
+  const workspaceQuery = query.trim();
+  const showWorkspaceSearch = workspaceQuery.length > 0;
+
+  useEffect(() => {
+    if (!showWorkspaceSearch) {
+      setSearchHits([]);
+      setSearchLoading(false);
+      return;
+    }
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true);
+      void rpc.search
+        .query({ q: workspaceQuery })
+        .then((result) => {
+          if (!abort.signal.aborted) setSearchHits(result.hits);
+        })
+        .catch(() => {
+          if (!abort.signal.aborted) setSearchHits([]);
+        })
+        .finally(() => {
+          if (!abort.signal.aborted) setSearchLoading(false);
+        });
+    }, 200);
+    return () => {
+      abort.abort();
+      window.clearTimeout(timer);
+    };
+  }, [showWorkspaceSearch, workspaceQuery]);
+
+  async function jumpToSearchHit(hit: SearchHit) {
+    setQuery("");
+    setSearchHits([]);
+    const params = new URLSearchParams();
+    if (hit.messageId) params.set("m", hit.messageId);
+    if (hit.routineId) params.set("routine", hit.routineId);
+    navigate({
+      pathname: `/app/${hit.botId}`,
+      search: params.toString() ? `?${params.toString()}` : undefined,
+    });
+  }
+
+  async function jumpToMessage(botId: string, messageId: string) {
+    const [snap, page] = await Promise.all([
+      rpc.threads.get({ botId }),
+      rpc.threads.messages({ botId, around: { messageId } }),
+    ]);
+    expandedHistoryThread.current = page.threadId;
+    pinnedAroundRef.current = {
+      botId,
+      messageId,
+      threadId: page.threadId,
+      messages: page.messages,
+      olderCursor: page.olderCursor,
+    };
+    setSnapshot({
+      ...snap,
+      messages: page.messages,
+      olderCursor: page.olderCursor,
+    });
+    setComputer(snap.computer);
+    setRoutines(await rpc.routines.list({ botId }));
+    window.requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-message-id="${messageId}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
+  useEffect(() => {
+    if (!active) return;
+    const messageId = searchParams.get("m");
+    const routineId = searchParams.get("routine");
+    if (routineId) {
+      const routine = routines.find((item) => item.id === routineId);
+      if (routine) {
+        setRoutineDraft({
+          name: routine.name,
+          prompt: routine.prompt,
+          schedule: presetFromCron(routine.cron),
+        });
+        setPanel("routine");
+      } else {
+        setPanel("computer");
+      }
+      const next = new URLSearchParams(searchParams);
+      next.delete("routine");
+      setSearchParams(next, { replace: true });
+    }
+    if (messageId) {
+      void jumpToMessage(active.id, messageId).finally(() => {
+        const next = new URLSearchParams(searchParams);
+        next.delete("m");
+        setSearchParams(next, { replace: true });
+      });
+    }
+  }, [active?.id, routines, searchParams, setSearchParams]);
   const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
 
   async function send() {
@@ -518,7 +646,14 @@ export function ShellPage() {
           />
         </div>
         <div className="rk-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2.5">
-          {filtered.map((bot) => (
+          {showWorkspaceSearch ? (
+            <WorkspaceSearchResults
+              hits={searchHits}
+              loading={searchLoading}
+              onSelect={(hit) => void jumpToSearchHit(hit)}
+            />
+          ) : (
+            filtered.map((bot) => (
             <button
               key={bot.id}
               type="button"
@@ -562,8 +697,9 @@ export function ShellPage() {
                 </div>
               </div>
             </button>
-          ))}
-          {archivedBots.length > 0 ? (
+          ))
+          )}
+          {archivedBots.length > 0 && !showWorkspaceSearch ? (
             <div className="mt-2 border-t border-[#202023] pt-2">
               <button
                 type="button"
@@ -716,23 +852,24 @@ export function ShellPage() {
             </button>
           ) : null}
           {(snapshot?.messages ?? []).map((message) => (
-            <MessageView
-              key={message.id}
-              message={message}
-              botId={active?.id ?? ""}
-              canAnswer={message.id === answerableAskMessageId}
-              onOpenBot={(id) => navigate(`/app/${id}`)}
-              onAnswer={async (text) => {
-                if (!active) return;
-                await rpc.threads.answer({
-                  botId: active.id,
-                  runId: message.runId ?? "",
-                  messageId: message.id,
-                  answer: text,
-                });
-                await refreshThread(active.id);
-              }}
-            />
+            <div key={message.id} data-message-id={message.id}>
+              <MessageView
+                message={message}
+                botId={active?.id ?? ""}
+                canAnswer={message.id === answerableAskMessageId}
+                onOpenBot={(id) => navigate(`/app/${id}`)}
+                onAnswer={async (text) => {
+                  if (!active) return;
+                  await rpc.threads.answer({
+                    botId: active.id,
+                    runId: message.runId ?? "",
+                    messageId: message.id,
+                    answer: text,
+                  });
+                  await refreshThread(active.id);
+                }}
+              />
+            </div>
           ))}
           {snapshot?.run && ["running", "queued", "leased"].includes(snapshot.run.status) ? (
             <div className="flex justify-start">
@@ -1381,12 +1518,18 @@ function MessageView({
               key={i}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              <div className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-[14px] text-[#DFDFE2]">
+              <button
+                type="button"
+                onClick={() =>
+                  void openArtifact(botId, block.artifactId, block.name, block.mimeType)
+                }
+                className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-left text-[14px] text-[#DFDFE2] hover:bg-[#1F1F22]"
+              >
                 <div className="font-medium">{block.name}</div>
                 <div className="mt-1 text-[#85858A]">
                   {block.mimeType} · {formatBytes(block.size)}
                 </div>
-              </div>
+              </button>
             </div>
           );
         }
