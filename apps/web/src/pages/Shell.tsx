@@ -35,6 +35,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import { authClient } from "../lib/auth";
 import { rpc } from "../lib/rpc";
+import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import {
   isComputerStatusEvent,
   mergeThreadSnapshot,
@@ -338,9 +339,7 @@ export function ShellPage() {
         text: text || undefined,
         artifactIds: artifactIds.length ? artifactIds : undefined,
       });
-      for (const pending of pendingAttachments) {
-        if (pending.previewUrl) URL.revokeObjectURL(pending.previewUrl);
-      }
+      revokePendingAttachmentPreviews(pendingAttachments);
       setDraft("");
       setPendingAttachments([]);
       setAttachmentNotice(null);
@@ -439,6 +438,14 @@ export function ShellPage() {
 
   useEffect(() => {
     setComputerOpen(false);
+  }, [active?.id]);
+
+  useEffect(() => {
+    setPendingAttachments((current) => {
+      revokePendingAttachmentPreviews(current);
+      return [];
+    });
+    setAttachmentNotice(null);
   }, [active?.id]);
 
   useEffect(() => {
@@ -770,7 +777,7 @@ export function ShellPage() {
                     type="button"
                     aria-label={`Remove ${attachment.file.name}`}
                     onClick={() => {
-                      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+                      revokePendingAttachmentPreviews([attachment]);
                       setPendingAttachments((current) =>
                         current.filter((item) => item.id !== attachment.id),
                       );
