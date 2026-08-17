@@ -2,6 +2,7 @@ import type {
   AgentHomeStore,
   AgentModelOAuthCredential,
   AgentRuntime,
+  ArtifactStore,
   ComputerRef,
   ConnectorProvider,
   JobPublisher,
@@ -12,8 +13,10 @@ import type {
 } from "@rakazo/adapter-kit";
 import { routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock, RunStatus } from "@rakazo/contracts";
+import { isAttachmentImageMimeType } from "@rakazo/contracts";
 import {
   assertTransition,
+  blocksToAgentHistoryText,
   containsSecret,
   createStreamingRedactor,
   isTerminal,
@@ -21,6 +24,7 @@ import {
   nextFence,
   redactSecrets,
   sandboxCommandTimeoutMs,
+  userTurnBlocksForRun,
 } from "@rakazo/core";
 import {
   createThreadMessage,
@@ -84,6 +88,7 @@ export interface ExecutorDeps {
   sandbox: SandboxProvider;
   memory: MemoryStore;
   home: AgentHomeStore;
+  artifacts?: ArtifactStore;
   connector?: ConnectorProvider;
   secrets: string[];
   secretStore?: EncryptedSecretStore;
@@ -271,7 +276,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               where: { threadId: run.threadId },
               orderBy: { seq: "desc" },
               take: MAX_AGENT_HISTORY_MESSAGES,
-              select: { role: true, blocks: true },
+              select: { role: true, runId: true, blocks: true },
             }),
             deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
             deps.prisma.connection.findMany({
@@ -311,8 +316,18 @@ export function createRunExecutor(deps: ExecutorDeps) {
             | "user"
             | "assistant"
             | "system",
-          content: blocksToText(m.blocks as MessageBlock[]),
+          content: blocksToAgentHistoryText(m.blocks as MessageBlock[]),
         }));
+        const turnBlocks = userTurnBlocksForRun(
+          run.trigger,
+          runId,
+          messages.map((message) => ({
+            role: message.role,
+            runId: message.runId,
+            blocks: message.blocks as MessageBlock[],
+          })),
+        );
+        const currentTurnImages = await loadCurrentTurnImages(deps, turnBlocks, context);
         const memoryContext = await loadAgentMemoryContext(deps.memory, bot.id, context);
         const resolved = await resolveModelKey(
           deps,
@@ -689,6 +704,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 .filter((instruction): instruction is string => Boolean(instruction))
                 .join("\n\n"),
               history,
+              currentTurnImages,
               tools,
               model: {
                 provider: credential?.provider ?? settings?.defaultModelProvider ?? "scripted",
@@ -1290,11 +1306,46 @@ async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Pr
   }
 }
 
-function blocksToText(blocks: MessageBlock[]): string {
-  return blocks
-    .map((block) => {
-      if ("text" in block && block.text) return block.text;
-      return JSON.stringify(block);
-    })
-    .join("\n");
+async function loadCurrentTurnImages(
+  deps: ExecutorDeps,
+  blocks: MessageBlock[] | undefined,
+  context: {
+    operationId: string;
+    traceId: string;
+    workspaceId: string;
+    userId: string;
+    botId: string;
+    runId: string;
+    signal: AbortSignal;
+  },
+) {
+  if (!deps.artifacts || !blocks?.length) return undefined;
+  const imageBlocks = blocks.filter(
+    (block): block is Extract<MessageBlock, { kind: "image" }> => block.kind === "image",
+  );
+  if (!imageBlocks.length) return undefined;
+
+  const rows = await deps.prisma.artifact.findMany({
+    where: {
+      id: { in: imageBlocks.map((block) => block.artifactId) },
+      workspaceId: context.workspaceId,
+      botId: context.botId,
+    },
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const images: NonNullable<import("@rakazo/adapter-kit").AgentRunRequest["currentTurnImages"]> =
+    [];
+
+  for (const block of imageBlocks) {
+    const row = byId.get(block.artifactId);
+    if (!row || !isAttachmentImageMimeType(block.mimeType)) continue;
+    const bytes = await deps.artifacts.get(row.storageKey, context);
+    images.push({
+      name: block.name,
+      mimeType: block.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+      data: bytes,
+    });
+  }
+
+  return images.length ? images : undefined;
 }

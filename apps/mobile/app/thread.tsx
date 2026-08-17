@@ -349,6 +349,58 @@ function MessageBubble({
       </Pressable>
     );
   }
+  const attachments = message.blocks.filter(
+    (block) => block.kind === "image" || block.kind === "file",
+  );
+  const caption = message.blocks
+    .filter((block) => block.kind === "text" && block.text)
+    .map((block) => block.text)
+    .join("\n");
+  if (attachments.length > 0) {
+    return (
+      <View
+        style={{
+          maxWidth: "85%",
+          borderRadius: 20,
+          borderWidth: 1,
+          borderColor: "#26262A",
+          backgroundColor: message.role === "user" ? "#F1F1EF" : "#1A1A1D",
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          gap: 8,
+        }}
+      >
+        {caption ? (
+          <Text style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}>
+            {caption}
+          </Text>
+        ) : null}
+        {attachments.map((attachment, index) =>
+          attachment.kind === "image" ? (
+            <Text
+              key={`${attachment.artifactId ?? attachment.name ?? "image"}-${index}`}
+              style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}
+            >
+              🖼 {attachment.name ?? "Image"}
+            </Text>
+          ) : (
+            <View key={`${attachment.artifactId ?? attachment.name ?? "file"}-${index}`}>
+              <Text
+                style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}
+              >
+                📎 {attachment.name ?? "File"}
+              </Text>
+              {attachment.size ? (
+                <Text style={{ color: "#85858A", marginTop: 4, fontSize: 13 }}>
+                  {attachment.mimeType ?? "file"} · {attachment.size} bytes
+                </Text>
+              ) : null}
+            </View>
+          ),
+        )}
+      </View>
+    );
+  }
   return (
     <View
       style={{

@@ -3,6 +3,7 @@ import { implement, ORPCError } from "@orpc/server";
 import {
   type AdapterContext,
   type AgentHomeStore,
+  type ArtifactStore,
   computerControlExpireJobKey,
   type JobPublisher,
   type MemoryStore,
@@ -46,7 +47,12 @@ import {
   type Me,
   type ThreadSnapshot,
 } from "@rakazo/contracts";
-import { ACTIVE_RUN_STATUSES, nextCronDate, projectMessages } from "@rakazo/core";
+import {
+  ACTIVE_RUN_STATUSES,
+  AttachmentValidationError,
+  nextCronDate,
+  projectMessages,
+} from "@rakazo/core";
 import {
   createRepos,
   createThreadMessage,
@@ -56,6 +62,13 @@ import {
   parseComputerMode,
   type ThreadEvents,
 } from "@rakazo/db";
+import {
+  buildSendPrompt,
+  buildUserMessageBlocks,
+  createOwnedArtifact,
+  getOwnedArtifact,
+  resolveSendAttachments,
+} from "./artifacts.js";
 import { addScreenProxyCapability } from "./screen-proxy.js";
 import { loadAllMessages, loadMessagePage } from "./thread-message-pages.js";
 
@@ -85,6 +98,7 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   composio?: ComposioConnector;
+  artifacts: ArtifactStore;
   dataDir: string;
   env: {
     defaultProvider: string;
@@ -383,10 +397,18 @@ export function createRouter(deps: RouterDeps) {
           });
           if (dup) return { taskId: dup.taskId, runId: dup.id, seq: 0 };
         }
+        const { blocks: attachmentBlocks, artifacts } = await resolveSendAttachments(
+          deps,
+          context.actor,
+          bot.id,
+          input.artifactIds,
+        );
+        const blocks = buildUserMessageBlocks(input.text, attachmentBlocks);
+        const prompt = buildSendPrompt(input.text, artifacts);
         const message = await createThreadMessage(deps.prisma, {
           threadId: bot.thread.id,
           role: "user",
-          blocks: [{ kind: "text", text: input.text }],
+          blocks,
         });
         await deps.events.append({
           workspaceId: context.actor.workspaceId,
@@ -396,7 +418,7 @@ export function createRouter(deps: RouterDeps) {
           payload: {
             messageId: message.id,
             role: "user",
-            blocks: [{ kind: "text", text: input.text }],
+            blocks,
           },
         });
         const task = await deps.prisma.task.create({
@@ -405,7 +427,7 @@ export function createRouter(deps: RouterDeps) {
             botId: bot.id,
             threadId: bot.thread.id,
             userId: context.actor.userId,
-            prompt: input.text,
+            prompt,
             status: "queued",
           },
         });
@@ -420,6 +442,10 @@ export function createRouter(deps: RouterDeps) {
             trigger: "user",
             clientNonce: input.clientNonce,
           },
+        });
+        await deps.prisma.message.update({
+          where: { id: message.id },
+          data: { runId: run.id },
         });
         await deps.prisma.run.updateMany({
           where: {
@@ -1301,6 +1327,26 @@ export function createRouter(deps: RouterDeps) {
           size: row.size,
           createdAt: row.createdAt.toISOString(),
         }));
+      }),
+      create: authed.artifacts.create.handler(async ({ context, input }) => {
+        await repos.getBot(context.actor, input.botId);
+        try {
+          return await createOwnedArtifact(deps, context.actor, input);
+        } catch (error) {
+          if (error instanceof AttachmentValidationError) {
+            throw new ORPCError("BAD_REQUEST", { message: error.message });
+          }
+          throw error;
+        }
+      }),
+      get: authed.artifacts.get.handler(async ({ context, input }) => {
+        await repos.getBot(context.actor, input.botId);
+        try {
+          return await getOwnedArtifact(deps, context.actor, input);
+        } catch (error) {
+          if (error instanceof IsolationError) throw error;
+          throw error;
+        }
       }),
     },
     usage: {

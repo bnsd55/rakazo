@@ -9,10 +9,16 @@ import type {
   ThreadSnapshot,
 } from "@rakazo/contracts";
 import {
+  ATTACHMENT_ALLOWED_MIME_TYPES,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_MAX_COUNT,
+} from "@rakazo/contracts";
+import {
   abortableDelay,
   cronFromPreset,
   defaultCronPreset,
   formatCron,
+  inferAttachmentMimeType,
   isActive,
   presetFromCron,
 } from "@rakazo/core";
@@ -44,6 +50,14 @@ import { WindowChrome } from "./WindowChrome";
 
 type Panel = "computer" | "settings" | "routine" | "create" | null;
 
+type PendingAttachment = {
+  id: string;
+  file: File;
+  previewUrl?: string;
+};
+
+const ATTACHMENT_ACCEPT = ATTACHMENT_ALLOWED_MIME_TYPES.join(",");
+
 export function ShellPage() {
   const { botId } = useParams();
   const navigate = useNavigate();
@@ -54,6 +68,11 @@ export function ShellPage() {
   const [query, setQuery] = useState("");
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
   const [draft, setDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
@@ -293,11 +312,73 @@ export function ShellPage() {
   const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
 
   async function send() {
-    if (!active || !draft.trim()) return;
-    const text = draft;
-    setDraft("");
-    await rpc.threads.send({ botId: active.id, text });
-    await refreshThread(active.id);
+    if (!active || sending) return;
+    const text = draft.trim();
+    if (!text && pendingAttachments.length === 0) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const artifactIds: string[] = [];
+      for (const pending of pendingAttachments) {
+        const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
+        if (!mimeType) {
+          throw new Error(`Unsupported file type: ${pending.file.name}`);
+        }
+        const contentBase64 = await readFileAsBase64(pending.file);
+        const artifact = await rpc.artifacts.create({
+          botId: active.id,
+          name: pending.file.name,
+          mimeType,
+          contentBase64,
+        });
+        artifactIds.push(artifact.id);
+      }
+      await rpc.threads.send({
+        botId: active.id,
+        text: text || undefined,
+        artifactIds: artifactIds.length ? artifactIds : undefined,
+      });
+      for (const pending of pendingAttachments) {
+        if (pending.previewUrl) URL.revokeObjectURL(pending.previewUrl);
+      }
+      setDraft("");
+      setPendingAttachments([]);
+      setAttachmentNotice(null);
+      await refreshThread(active.id);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Failed to send message");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function onAttachmentPick(files: FileList | null) {
+    if (!files?.length) return;
+    const next: PendingAttachment[] = [];
+    const skipped: string[] = [];
+    for (const file of Array.from(files)) {
+      if (pendingAttachments.length + next.length >= ATTACHMENT_MAX_COUNT) {
+        skipped.push(`${file.name} (max ${ATTACHMENT_MAX_COUNT} attachments)`);
+        continue;
+      }
+      if (file.size > ATTACHMENT_MAX_BYTES) {
+        skipped.push(`${file.name} (over 10 MiB)`);
+        continue;
+      }
+      const mimeType = inferAttachmentMimeType(file.name, file.type);
+      if (!mimeType) {
+        skipped.push(file.name);
+        continue;
+      }
+      next.push({
+        id: `${file.name}-${file.size}-${file.lastModified}`,
+        file,
+        previewUrl: mimeType.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+      });
+    }
+    if (next.length) setPendingAttachments((current) => [...current, ...next]);
+    setAttachmentNotice(skipped.length ? `Skipped ${skipped.join(", ")}` : null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function createBot(input: {
@@ -631,6 +712,7 @@ export function ShellPage() {
             <MessageView
               key={message.id}
               message={message}
+              botId={active?.id ?? ""}
               canAnswer={message.id === answerableAskMessageId}
               onOpenBot={(id) => navigate(`/app/${id}`)}
               onAnswer={async (text) => {
@@ -657,10 +739,67 @@ export function ShellPage() {
           ) : null}
         </div>
         <div className="px-6 pb-6 pt-3">
+          {sendError ? (
+            <div className="mb-3 rounded-[14px] border border-[#5A2A2A] bg-[#2A1717] px-4 py-2 text-[13px] text-[#F1A8A8]">
+              {sendError}
+            </div>
+          ) : null}
+          {attachmentNotice ? (
+            <div className="mb-3 rounded-[14px] border border-[#3A3A20] bg-[#232316] px-4 py-2 text-[13px] text-[#D6CFA0]">
+              {attachmentNotice}
+            </div>
+          ) : null}
+          {pendingAttachments.length ? (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {pendingAttachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className="flex items-center gap-2 rounded-full border border-[#26262A] bg-[#17171A] px-3 py-1.5 text-[13px] text-[#C9C9CE]"
+                >
+                  {attachment.previewUrl ? (
+                    <img
+                      src={attachment.previewUrl}
+                      alt={attachment.file.name}
+                      className="h-8 w-8 rounded object-cover"
+                    />
+                  ) : (
+                    <span>📎</span>
+                  )}
+                  <span className="max-w-[180px] truncate">{attachment.file.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${attachment.file.name}`}
+                    onClick={() => {
+                      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+                      setPendingAttachments((current) =>
+                        current.filter((item) => item.id !== attachment.id),
+                      );
+                    }}
+                    className="text-[#85858A] hover:text-[#ECECEE]"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="flex items-center gap-3.5 rounded-full border border-[#202023] bg-[#131315] py-[9px] pr-2.5 pl-3">
-            <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[18px] text-[#9A9AA0]">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ATTACHMENT_ACCEPT}
+              className="hidden"
+              onChange={(event) => void onAttachmentPick(event.target.files)}
+            />
+            <button
+              type="button"
+              aria-label="Attach file"
+              onClick={() => fileInputRef.current?.click()}
+              className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[18px] text-[#9A9AA0]"
+            >
               +
-            </span>
+            </button>
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -689,8 +828,9 @@ export function ShellPage() {
               <button
                 type="button"
                 aria-label="Send"
+                disabled={sending || (!draft.trim() && pendingAttachments.length === 0)}
                 onClick={() => void send()}
-                className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A]"
+                className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A] disabled:opacity-50"
               >
                 ↑
               </button>
@@ -1111,11 +1251,13 @@ function latestAnswerableAskMessageId(snapshot: ThreadSnapshot | null): string |
 }
 
 function MessageView({
+  botId,
   canAnswer,
   message,
   onAnswer,
   onOpenBot,
 }: {
+  botId: string;
   canAnswer: boolean;
   message: ThreadMessage;
   onAnswer: (text: string) => Promise<void>;
@@ -1214,6 +1356,31 @@ function MessageView({
                   : block.title || "Opened its own thread. Tap to switch."}
               </div>
             </button>
+          );
+        }
+        if (block.kind === "image") {
+          return (
+            <div
+              key={i}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <ArtifactImage botId={botId} artifactId={block.artifactId} name={block.name} />
+            </div>
+          );
+        }
+        if (block.kind === "file") {
+          return (
+            <div
+              key={i}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <div className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-[14px] text-[#DFDFE2]">
+                <div className="font-medium">{block.name}</div>
+                <div className="mt-1 text-[#85858A]">
+                  {block.mimeType} · {formatBytes(block.size)}
+                </div>
+              </div>
+            </div>
           );
         }
         if (block.kind === "text" && message.role === "user") {
@@ -1732,4 +1899,85 @@ function computerPlaceholder(
 
 function computerLabel(mode: ComputerStatus["mode"] | undefined, botName: string) {
   return mode === "dedicated" ? `${botName}’s computer` : "Team Computer";
+}
+
+function ArtifactImage({
+  botId,
+  artifactId,
+  name,
+}: {
+  botId: string;
+  artifactId: string;
+  name: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void rpc.artifacts
+      .get({ botId, artifactId })
+      .then((artifact) => {
+        if (!cancelled) {
+          setSrc(`data:${artifact.mimeType};base64,${artifact.contentBase64}`);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId, botId]);
+
+  if (!src) {
+    return (
+      <div className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-[14px] text-[#85858A]">
+        {name}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="max-w-[240px] overflow-hidden rounded-[20px]"
+      >
+        <img src={src} alt={name} className="max-h-48 w-full object-cover" />
+      </button>
+      {open ? (
+        <button
+          type="button"
+          aria-label="Close image preview"
+          className="fixed inset-0 z-50 grid place-items-center bg-[rgba(4,4,5,.82)] p-6"
+          onClick={() => setOpen(false)}
+        >
+          <img
+            src={src}
+            alt={name}
+            className="max-h-[85vh] max-w-[90vw] rounded-[12px] object-contain"
+          />
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const base64 = result.includes(",") ? (result.split(",")[1] ?? "") : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
