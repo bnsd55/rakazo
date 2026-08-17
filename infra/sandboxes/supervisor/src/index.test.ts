@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { supervisorApp } from "./index.js";
 import {
   assertRequestIdentity,
+  clearComputerScreenRegistry,
   containerActionStep,
   ensureScreenCommand,
   hasValidBearerToken,
@@ -161,6 +162,26 @@ describe("sandbox supervisor input containment", () => {
     expect(nextScreenIndex(assigned, "bot-0")).toBe(0);
     expect(releaseAssignedScreen(assigned, "missing")).toBeUndefined();
     expect(() => nextScreenIndex(assigned, "bot-9")).toThrow(/cannot allocate another screen/);
+  });
+
+  it("clears all screen assignments when a container stops so slots can be reused", () => {
+    const registry = new Map<string, Map<string, number>>();
+    const containerId = "container-1";
+    const assigned = new Map<string, number>();
+    registry.set(containerId, assigned);
+    for (let index = 0; index < 8; index += 1) {
+      nextScreenIndex(assigned, `bot-${index}`);
+    }
+    expect(() => nextScreenIndex(assigned, "bot-8")).toThrow(/cannot allocate another screen/);
+
+    clearComputerScreenRegistry(registry, containerId);
+    expect(registry.has(containerId)).toBe(false);
+
+    const fresh = new Map<string, number>();
+    registry.set(containerId, fresh);
+    for (let index = 0; index < 8; index += 1) {
+      expect(nextScreenIndex(fresh, `bot-fresh-${index}`)).toBe(index);
+    }
   });
 
   it("stops extra displays without touching the primary desktop", () => {

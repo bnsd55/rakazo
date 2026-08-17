@@ -19,6 +19,7 @@ import {
 } from "./computer-spec.js";
 import {
   assertRequestIdentity,
+  clearComputerScreenRegistry,
   computerActionSchema,
   containerActionStep,
   ensureScreenCommand,
@@ -433,13 +434,15 @@ app.delete("/computers/:id/screen", async (c) => {
 });
 
 app.post("/computers/:id/stop", async (c) => {
+  const id = c.req.param("id");
   try {
     const { container } = await managedContainer(
-      c.req.param("id"),
+      id,
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
     );
     await container.stop().catch(() => undefined);
+    clearComputerScreenRegistry(computerScreens, id);
     return c.json({ ok: true });
   } catch {
     return c.json({ error: "computer not found" }, 404);
@@ -455,7 +458,7 @@ app.delete("/computers/:id", async (c) => {
       c.req.header("x-rakazo-workspace-id"),
     );
     await container.remove({ force: true }).catch(() => undefined);
-    computerScreens.delete(id);
+    clearComputerScreenRegistry(computerScreens, id);
     return c.json({ ok: true });
   } catch {
     return c.json({ error: "computer not found" }, 404);

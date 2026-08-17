@@ -206,6 +206,7 @@ async function rollbackProvisionedComputer(
   cause: unknown,
 ): Promise<unknown | undefined> {
   try {
+    await sandbox.releaseScreen?.(computer, context).catch(() => undefined);
     if (computer.fresh) {
       await sandbox.destroy(computer, context);
     } else if (cause instanceof ComputerBusyError) {

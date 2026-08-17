@@ -29,6 +29,7 @@ describe("computer provisioning", () => {
   it("stops a provider when archive invalidates its boot claim", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-provision-race-"));
     const stop = vi.fn().mockResolvedValue(undefined);
+    const releaseScreen = vi.fn().mockResolvedValue(undefined);
     const updateMany = vi
       .fn()
       .mockResolvedValueOnce({ count: 1 })
@@ -57,6 +58,7 @@ describe("computer provisioning", () => {
       }),
       prepare: vi.fn().mockResolvedValue(undefined),
       stop,
+      releaseScreen,
     } as unknown as SandboxProvider;
 
     try {
@@ -74,6 +76,7 @@ describe("computer provisioning", () => {
           context,
         ),
       ).rejects.toThrow("Computer is busy");
+      expect(releaseScreen).toHaveBeenCalledOnce();
       expect(stop).toHaveBeenCalledOnce();
       expect(updateMany).toHaveBeenNthCalledWith(
         2,
@@ -104,6 +107,7 @@ describe("computer provisioning", () => {
     };
     const stop = vi.fn().mockResolvedValue(undefined);
     const destroy = vi.fn().mockResolvedValue(undefined);
+    const releaseScreen = vi.fn().mockResolvedValue(undefined);
     const prepare = vi.fn().mockRejectedValue(new Error("provider preparation failed"));
     const prisma = {
       computer: {
@@ -124,6 +128,7 @@ describe("computer provisioning", () => {
       prepare,
       stop,
       destroy,
+      releaseScreen,
     } as unknown as SandboxProvider;
 
     try {
@@ -142,8 +147,72 @@ describe("computer provisioning", () => {
         ),
       ).rejects.toThrow("provider preparation failed");
       expect(prepare).toHaveBeenCalledWith(ref, context);
+      expect(releaseScreen).toHaveBeenCalledWith(ref, context);
       expect(cleanup === "destroy" ? destroy : stop).toHaveBeenCalledWith(ref, context);
       expect(cleanup === "destroy" ? stop : destroy).not.toHaveBeenCalled();
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the screen when activation fails on a resumed Team computer", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-team-activation-rollback-"));
+    const ref = {
+      id: "provider-1",
+      botId: "team-home",
+      kind: "docker" as const,
+      providerRef: "provider-1",
+      fresh: false,
+    };
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const releaseScreen = vi.fn().mockResolvedValue(undefined);
+    const updateMany = vi
+      .fn()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 });
+    const prisma = {
+      computer: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          id: "computer-1",
+          homeKey: "team-home",
+          providerRef: "provider-1",
+          kind: "docker",
+          scope: "team",
+          state: "stopped",
+          controlLeaseId: null,
+        }),
+        updateMany,
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: vi.fn().mockResolvedValue(ref),
+      prepare: vi.fn().mockResolvedValue(undefined),
+      execute: vi.fn(async function* () {
+        yield { type: "exit", code: 0 };
+      }),
+      stop,
+      releaseScreen,
+    } as unknown as SandboxProvider;
+
+    try {
+      await expect(
+        provisionComputer(
+          {
+            prisma,
+            sandbox,
+            home: {} as AgentHomeStore,
+            jobs: {} as JobPublisher,
+            events: {} as ThreadEvents,
+            dataDir,
+          },
+          "computer-1",
+          context,
+        ),
+      ).rejects.toThrow("Computer is busy");
+      expect(sandbox.execute).toHaveBeenCalled();
+      expect(releaseScreen).toHaveBeenCalledWith(ref, context);
+      expect(stop).toHaveBeenCalledWith(ref, context);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

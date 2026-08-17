@@ -95,6 +95,13 @@ export function releaseAssignedScreen(
   return index;
 }
 
+export function clearComputerScreenRegistry(
+  registry: Map<string, Map<string, number>>,
+  containerId: string,
+) {
+  registry.delete(containerId);
+}
+
 export function stopExtraScreenCommand(index: number) {
   if (index <= 0) return "";
   const layout = screenPorts(index);
