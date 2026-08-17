@@ -27,4 +27,18 @@ describe("filterPickedAttachments", () => {
     expect(result.attachments[0]?.name).toBe("notes.txt");
     expect(result.skipped.map((item) => item.name)).toEqual(["evil.zip", "big.bin"]);
   });
+
+  it("assigns distinct ids to duplicate files", () => {
+    const candidate = {
+      name: "notes.txt",
+      mimeType: "text/plain",
+      size: 12,
+      contentBase64: "aGVsbG8=",
+    };
+    const result = filterPickedAttachments(0, [candidate, candidate]);
+    expect(result.attachments.map((attachment) => attachment.id)).toEqual([
+      "notes.txt-12-0",
+      "notes.txt-12-1",
+    ]);
+  });
 });

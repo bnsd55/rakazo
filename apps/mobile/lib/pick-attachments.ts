@@ -1,6 +1,7 @@
+import { ATTACHMENT_MAX_BYTES } from "@rakazo/contracts";
 import { inferAttachmentMimeType } from "@rakazo/core";
-import { File } from "expo-file-system";
 import * as DocumentPicker from "expo-document-picker";
+import { File } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import {
   filterPickedAttachments,
@@ -12,8 +13,12 @@ export type { PickedAttachment, PickSkip } from "./pick-attachments-filter.js";
 
 async function readUriAsBase64(uri: string): Promise<{ contentBase64: string; size: number }> {
   const file = new File(uri);
+  const knownSize = file.info().size;
+  if (typeof knownSize === "number" && knownSize > ATTACHMENT_MAX_BYTES) {
+    return { contentBase64: "", size: knownSize };
+  }
   const contentBase64 = await file.base64();
-  const size = file.info().size ?? Math.floor((contentBase64.length * 3) / 4);
+  const size = knownSize ?? Math.floor((contentBase64.length * 3) / 4);
   return { contentBase64, size };
 }
 
@@ -62,7 +67,10 @@ export async function pickDocuments(existingCount = 0): Promise<{
   attachments: PickedAttachment[];
   skipped: PickSkip[];
 }> {
-  const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+  const result = await DocumentPicker.getDocumentAsync({
+    multiple: true,
+    copyToCacheDirectory: true,
+  });
   if (result.canceled) return { attachments: [], skipped: [] };
   const assets = result.assets ?? [];
   const candidates = await Promise.all(

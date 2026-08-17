@@ -65,7 +65,11 @@ import {
 } from "./pi-oauth.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
-import { attachWorkspaceFileToThread } from "./thread-artifacts.js";
+import {
+  attachWorkspaceFileToThread,
+  currentTurnFilesInstruction,
+  materializeCurrentTurnFiles,
+} from "./thread-artifacts.js";
 
 const modelCredentialLocks = new Map<string, Promise<void>>();
 const READ_ONLY_AGENT_TOOLS = new Set([
@@ -343,6 +347,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const computerMode = parseComputerMode(storedComputer.scope);
         const computer = await provisionComputer(deps, storedComputer.id, context, "bot");
         scheduleComputerSleep(deps.jobs, storedComputer.id);
+        const currentTurnFiles = deps.artifacts
+          ? await materializeCurrentTurnFiles(
+              { prisma: deps.prisma, artifacts: deps.artifacts, sandbox: deps.sandbox },
+              turnBlocks,
+              { context, computer, computerMode },
+            )
+          : [];
+        const attachedFilesPrompt = currentTurnFilesInstruction(currentTurnFiles);
         const graphical =
           computer.kind !== "desktop" && deps.sandbox.describe().capabilities.graphical;
         const builtins = graphical
@@ -729,7 +741,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               botId: bot.id,
               threadId: thread.id,
               runId,
-              prompt: task.prompt,
+              prompt: [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n"),
               instructions: [
                 bot.instructions || `${bot.name}: ${bot.title}\n${bot.description}`,
                 memoryContext ? redactSecrets(memoryContext, runSecrets) : undefined,

@@ -272,9 +272,7 @@ export const appContract = {
       .output(z.object({ ok: z.literal(true) })),
   },
   search: {
-    query: oc
-      .input(z.object({ q: z.string().max(200) }))
-      .output(SearchQueryOutputSchema),
+    query: oc.input(z.object({ q: z.string().max(200) })).output(SearchQueryOutputSchema),
   },
 };
 

@@ -40,7 +40,7 @@ export function filterPickedAttachments(
       continue;
     }
     attachments.push({
-      id: `${candidate.name}-${candidate.size}`,
+      id: `${candidate.name}-${candidate.size}-${existingCount + attachments.length}`,
       name: candidate.name,
       mimeType: candidate.mimeType as AttachmentMimeType,
       contentBase64: candidate.contentBase64,

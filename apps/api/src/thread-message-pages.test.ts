@@ -53,9 +53,33 @@ describe("thread message pages", () => {
     const findMany = vi
       .fn()
       .mockResolvedValueOnce([
-        { id: "message-3", threadId: "thread-1", seq: 3, role: "bot", blocks: [], runId: null, createdAt: new Date() },
-        { id: "message-4", threadId: "thread-1", seq: 4, role: "bot", blocks: [], runId: null, createdAt: new Date() },
-        { id: "message-5", threadId: "thread-1", seq: 5, role: "bot", blocks: [], runId: null, createdAt: new Date() },
+        {
+          id: "message-3",
+          threadId: "thread-1",
+          seq: 3,
+          role: "bot",
+          blocks: [],
+          runId: null,
+          createdAt: new Date(),
+        },
+        {
+          id: "message-4",
+          threadId: "thread-1",
+          seq: 4,
+          role: "bot",
+          blocks: [],
+          runId: null,
+          createdAt: new Date(),
+        },
+        {
+          id: "message-5",
+          threadId: "thread-1",
+          seq: 5,
+          role: "bot",
+          blocks: [],
+          runId: null,
+          createdAt: new Date(),
+        },
       ])
       .mockResolvedValueOnce(1);
     const count = vi.fn(async () => 1);
@@ -67,6 +91,11 @@ describe("thread message pages", () => {
 
     expect(page.messages.map((message) => message.seq)).toEqual([3, 4, 5]);
     expect(page.olderCursor).toBe(3);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { threadId: "thread-1", seq: { gte: 3, lte: 7 } },
+      orderBy: { seq: "asc" },
+      take: 4,
+    });
   });
 
   it("collects bounded pages into chronological export order", async () => {

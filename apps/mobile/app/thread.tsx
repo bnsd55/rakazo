@@ -1,16 +1,9 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
-import { abortableDelay } from "@rakazo/core";
+import { abortableDelay, attachmentsForBot } from "@rakazo/core";
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AppState, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { NativeSymbol } from "../components/native-symbol";
-import { openMobileArtifact } from "../lib/artifact-open";
-import {
-  type PickedAttachment,
-  pickDocuments,
-  pickFromLibrary,
-  takePhoto,
-} from "../lib/pick-attachments";
 import {
   applyMobileThreadEvent,
   blockText,
@@ -22,7 +15,16 @@ import {
   rpc,
   subscribeThread,
 } from "../lib/api";
+import { openMobileArtifact } from "../lib/artifact-open";
 import { confirmDeleteBot } from "../lib/bot-lifecycle";
+import {
+  type PickedAttachment,
+  pickDocuments,
+  pickFromLibrary,
+  takePhoto,
+} from "../lib/pick-attachments";
+
+type PendingAttachment = PickedAttachment & { botId: string };
 
 export default function Thread() {
   const navigation = useNavigation();
@@ -43,13 +45,16 @@ export default function Thread() {
     olderCursor: number | null;
   } | null>(null);
   const jumpScrollTarget = useRef<string | null>(null);
+  const activeBotId = useRef(botId);
+  activeBotId.current = botId;
   const [snap, setSnap] = useState<MobileSnapshot | null>(null);
   const [draft, setDraft] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<PickedAttachment[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const activePendingAttachments = attachmentsForBot(pendingAttachments, botId);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -93,11 +98,7 @@ export default function Thread() {
     const next = await rpc<MobileSnapshot>("threads/get", { botId });
     const pin = pinnedAroundRef.current;
     setSnap((prev) => {
-      let merged = mergeMobileSnapshot(
-        prev,
-        next,
-        expandedHistoryThread.current === next.threadId,
-      );
+      let merged = mergeMobileSnapshot(prev, next, expandedHistoryThread.current === next.threadId);
       if (pin && merged && pin.botId === botId) {
         merged = {
           ...merged,
@@ -237,17 +238,26 @@ export default function Thread() {
     });
   }, [botId, messageId]);
 
+  useEffect(() => {
+    setPendingAttachments((current) => attachmentsForBot(current, botId));
+    setDraft("");
+    setAttachmentNotice(null);
+    setError(null);
+  }, [botId]);
+
   async function send() {
-    if (!botId || sending) return;
+    const targetBotId = botId;
+    if (!targetBotId || sending) return;
+    const attachments = attachmentsForBot(pendingAttachments, targetBotId);
     const text = draft.trim();
-    if (!text && pendingAttachments.length === 0) return;
+    if (!text && attachments.length === 0) return;
     setSending(true);
     setError(null);
     try {
       const artifactIds: string[] = [];
-      for (const pending of pendingAttachments) {
+      for (const pending of attachments) {
         const artifact = await rpc<{ id: string }>("artifacts/create", {
-          botId,
+          botId: targetBotId,
           name: pending.name,
           mimeType: pending.mimeType,
           contentBase64: pending.contentBase64,
@@ -255,16 +265,22 @@ export default function Thread() {
         artifactIds.push(artifact.id);
       }
       await rpc("threads/send", {
-        botId,
+        botId: targetBotId,
         text: text || undefined,
         artifactIds: artifactIds.length ? artifactIds : undefined,
       });
-      setDraft("");
-      setPendingAttachments([]);
-      setAttachmentNotice(null);
-      await refresh();
+      setPendingAttachments((current) =>
+        current.filter((attachment) => attachment.botId !== targetBotId),
+      );
+      if (activeBotId.current === targetBotId) {
+        setDraft("");
+        setAttachmentNotice(null);
+        await refresh();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send message");
+      if (activeBotId.current === targetBotId) {
+        setError(err instanceof Error ? err.message : "Failed to send message");
+      }
     } finally {
       setSending(false);
     }
@@ -280,13 +296,20 @@ export default function Thread() {
   }
 
   async function addAttachments(
-    picker: (
-      existingCount: number,
-    ) => Promise<{ attachments: PickedAttachment[]; skipped: Array<{ name: string; reason: string }> }>,
+    picker: (existingCount: number) => Promise<{
+      attachments: PickedAttachment[];
+      skipped: Array<{ name: string; reason: string }>;
+    }>,
   ) {
-    const result = await picker(pendingAttachments.length);
+    const targetBotId = botId;
+    if (!targetBotId) return;
+    const result = await picker(activePendingAttachments.length);
+    if (activeBotId.current !== targetBotId) return;
     if (result.attachments.length) {
-      setPendingAttachments((current) => [...current, ...result.attachments]);
+      setPendingAttachments((current) => [
+        ...current,
+        ...result.attachments.map((attachment) => ({ ...attachment, botId: targetBotId })),
+      ]);
     }
     setAttachmentNotice(
       result.skipped.length
@@ -307,7 +330,11 @@ export default function Thread() {
             loadingOlderContent.current = false;
             return;
           }
-          if (jumpScrollTarget.current || (pinnedAroundRef.current && pinnedAroundRef.current.botId === botId)) return;
+          if (
+            jumpScrollTarget.current ||
+            (pinnedAroundRef.current && pinnedAroundRef.current.botId === botId)
+          )
+            return;
           scroll.current?.scrollToEnd({ animated: false });
         }}
       >
@@ -353,9 +380,9 @@ export default function Thread() {
       {attachmentNotice ? (
         <Text style={{ color: "#D6CFA0", marginTop: 12, fontSize: 13 }}>{attachmentNotice}</Text>
       ) : null}
-      {pendingAttachments.length ? (
+      {activePendingAttachments.length ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-          {pendingAttachments.map((attachment) => (
+          {activePendingAttachments.map((attachment) => (
             <View
               key={attachment.id}
               style={{
@@ -429,7 +456,7 @@ export default function Thread() {
           }}
         />
         <Pressable
-          disabled={sending || (!draft.trim() && pendingAttachments.length === 0)}
+          disabled={sending || (!draft.trim() && activePendingAttachments.length === 0)}
           onPress={() => void send()}
           style={{
             backgroundColor: "#F1F1EF",
@@ -438,7 +465,7 @@ export default function Thread() {
             height: 44,
             alignItems: "center",
             justifyContent: "center",
-            opacity: sending || (!draft.trim() && pendingAttachments.length === 0) ? 0.5 : 1,
+            opacity: sending || (!draft.trim() && activePendingAttachments.length === 0) ? 0.5 : 1,
           }}
         >
           <NativeSymbol ios="arrow.up" android="arrow-up" size={18} color="#17171A" />
@@ -591,7 +618,9 @@ function MessageBubble({
                   : undefined
               }
             >
-              <Text style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}>
+              <Text
+                style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}
+              >
                 🖼 {attachment.name ?? "Image"}
               </Text>
             </Pressable>
@@ -614,7 +643,9 @@ function MessageBubble({
                   : undefined
               }
             >
-              <Text style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}>
+              <Text
+                style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}
+              >
                 📎 {attachment.name ?? "File"}
               </Text>
               {attachment.size ? (

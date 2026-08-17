@@ -38,18 +38,23 @@ export async function createOwnedArtifact(
     context,
   );
   const hash = createHash("sha256").update(bytes).digest("hex");
-  const row = await deps.prisma.artifact.create({
-    data: {
-      workspaceId: actor.workspaceId,
-      userId: actor.userId,
-      botId: input.botId,
-      name: input.name,
-      mimeType: input.mimeType,
-      size: bytes.byteLength,
-      hash,
-      storageKey: stored.id,
-    },
-  });
+  const row = await deps.prisma.artifact
+    .create({
+      data: {
+        workspaceId: actor.workspaceId,
+        userId: actor.userId,
+        botId: input.botId,
+        name: input.name,
+        mimeType: input.mimeType,
+        size: bytes.byteLength,
+        hash,
+        storageKey: stored.id,
+      },
+    })
+    .catch(async (error) => {
+      await deps.artifacts.remove(stored.id, context).catch(() => undefined);
+      throw error;
+    });
   return {
     id: row.id,
     botId: row.botId,

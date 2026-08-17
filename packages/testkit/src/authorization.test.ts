@@ -292,9 +292,9 @@ describeWithDatabase("API authorization and resource isolation", () => {
     expect(await rpc<Array<{ id: string }>>(app, intruder, "connections/list")).not.toContainEqual(
       expect.objectContaining({ id: ownerConnection.connectionId }),
     );
-    expect(await rpc<{ hits: unknown[] }>(app, intruder, "search/query", { q: ownerBot.name })).toEqual(
-      { hits: [] },
-    );
+    expect(
+      await rpc<{ hits: unknown[] }>(app, intruder, "search/query", { q: ownerBot.name }),
+    ).toEqual({ hits: [] });
 
     // These endpoints are deliberately idempotent for unknown IDs. Success must not mutate
     // a row in a different workspace or disclose whether it exists.

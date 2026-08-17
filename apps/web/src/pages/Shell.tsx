@@ -17,6 +17,7 @@ import {
 } from "@rakazo/contracts";
 import {
   abortableDelay,
+  attachmentsForBot,
   cronFromPreset,
   defaultCronPreset,
   formatCron,
@@ -40,12 +41,12 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { openArtifact } from "../lib/artifact-open";
+import { decodeArtifactBase64, openArtifact } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
+import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
 import { rpc } from "../lib/rpc";
-import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import {
   isComputerStatusEvent,
   mergeThreadSnapshot,
@@ -75,6 +76,7 @@ type Panel = "computer" | "settings" | "routine" | "create" | null;
 
 type PendingAttachment = {
   id: string;
+  botId: string;
   file: File;
   previewUrl?: string;
 };
@@ -100,6 +102,7 @@ export function ShellPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
+  const [routinesBotId, setRoutinesBotId] = useState<string | null>(null);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -142,6 +145,10 @@ export function ShellPage() {
   computerVisible.current = panel === "computer" || computerOpen;
 
   const active = bots.find((b) => b.id === botId) ?? bots[0];
+  const activePendingAttachments = useMemo(
+    () => attachmentsForBot(pendingAttachments, active?.id),
+    [active?.id, pendingAttachments],
+  );
   const routeBotId = useRef<string | undefined>(botId);
   routeBotId.current = botId;
   const activeBotId = useRef<string | undefined>(active?.id);
@@ -225,12 +232,9 @@ export function ShellPage() {
       refreshComputerScreen(id),
     ]);
     markOnce("rk:renderer:thread-response");
+    if (activeBotId.current !== id) return snap;
     setSnapshot((prev) => {
-      let merged = mergeThreadSnapshot(
-        prev,
-        snap,
-        expandedHistoryThread.current === snap.threadId,
-      );
+      let merged = mergeThreadSnapshot(prev, snap, expandedHistoryThread.current === snap.threadId);
       if (keepPin && merged) {
         merged = {
           ...merged,
@@ -242,6 +246,7 @@ export function ShellPage() {
     });
     setComputer(snap.computer);
     setRoutines(routines);
+    setRoutinesBotId(id);
     if (!keepPin && stickToEnd) {
       window.requestAnimationFrame(() => {
         const element = messageScroll.current;
@@ -301,6 +306,7 @@ export function ShellPage() {
           setSnapshot(bootstrap.thread);
           setComputer(bootstrap.thread.computer);
           setRoutines(bootstrap.routines);
+          setRoutinesBotId(bootstrap.thread.botId);
           markOnce("rk:renderer:bots-response");
           markOnce("rk:renderer:thread-response");
         }
@@ -482,6 +488,7 @@ export function ShellPage() {
     });
     setComputer(snap.computer);
     setRoutines(await rpc.routines.list({ botId }));
+    setRoutinesBotId(botId);
     window.requestAnimationFrame(() => {
       document
         .querySelector(`[data-message-id="${messageId}"]`)
@@ -493,7 +500,7 @@ export function ShellPage() {
     if (!active) return;
     const messageId = searchParams.get("m");
     const routineId = searchParams.get("routine");
-    if (routineId) {
+    if (routineId && routinesBotId === active.id) {
       const routine = routines.find((item) => item.id === routineId);
       if (routine) {
         setRoutineDraft({
@@ -516,7 +523,7 @@ export function ShellPage() {
         setSearchParams(next, { replace: true });
       });
     }
-  }, [active?.id, routines, searchParams, setSearchParams]);
+  }, [active?.id, routines, routinesBotId, searchParams, setSearchParams]);
   const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
   const shellReady = initialBotsLoaded && Boolean(active && snapshot?.botId === active.id);
   const refreshThreadRef = useRef(refreshThread);
@@ -562,76 +569,88 @@ export function ShellPage() {
     });
     await refreshThreadRef.current(id);
   }, []);
-  const onAttachmentPick = useCallback(async (files: FileList | null) => {
-    if (!files?.length) return;
-    const next: PendingAttachment[] = [];
-    const skipped: string[] = [];
-    for (const file of Array.from(files)) {
-      if (pendingAttachments.length + next.length >= ATTACHMENT_MAX_COUNT) {
-        skipped.push(`${file.name} (max ${ATTACHMENT_MAX_COUNT} attachments)`);
-        continue;
+  const onAttachmentPick = useCallback(
+    async (files: FileList | null) => {
+      const id = activeBotId.current;
+      if (!id || !files?.length) return;
+      const existing = attachmentsForBot(pendingAttachments, id);
+      const next: PendingAttachment[] = [];
+      const skipped: string[] = [];
+      for (const file of Array.from(files)) {
+        if (existing.length + next.length >= ATTACHMENT_MAX_COUNT) {
+          skipped.push(`${file.name} (max ${ATTACHMENT_MAX_COUNT} attachments)`);
+          continue;
+        }
+        if (file.size > ATTACHMENT_MAX_BYTES) {
+          skipped.push(`${file.name} (over 10 MiB)`);
+          continue;
+        }
+        const mimeType = inferAttachmentMimeType(file.name, file.type);
+        if (!mimeType) {
+          skipped.push(file.name);
+          continue;
+        }
+        next.push({
+          id: `${file.name}-${file.size}-${file.lastModified}-${next.length}`,
+          botId: id,
+          file,
+          previewUrl: mimeType.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+        });
       }
-      if (file.size > ATTACHMENT_MAX_BYTES) {
-        skipped.push(`${file.name} (over 10 MiB)`);
-        continue;
-      }
-      const mimeType = inferAttachmentMimeType(file.name, file.type);
-      if (!mimeType) {
-        skipped.push(file.name);
-        continue;
-      }
-      next.push({
-        id: `${file.name}-${file.size}-${file.lastModified}`,
-        file,
-        previewUrl: mimeType.startsWith("image/") ? URL.createObjectURL(file) : undefined,
-      });
-    }
-    if (next.length) setPendingAttachments((current) => [...current, ...next]);
-    setAttachmentNotice(skipped.length ? `Skipped ${skipped.join(", ")}` : null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [pendingAttachments.length]);
+      if (next.length) setPendingAttachments((current) => [...current, ...next]);
+      setAttachmentNotice(skipped.length ? `Skipped ${skipped.join(", ")}` : null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    [pendingAttachments],
+  );
   const removeAttachment = useCallback((attachment: PendingAttachment) => {
     revokePendingAttachmentPreviews([attachment]);
     setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id));
   }, []);
-  const sendMessage = useCallback(async (text: string) => {
-    const id = activeBotId.current;
-    if (!id || sending) return;
-    const trimmed = text.trim();
-    if (!trimmed && pendingAttachments.length === 0) return;
-    setSending(true);
-    setSendError(null);
-    try {
-      const artifactIds: string[] = [];
-      for (const pending of pendingAttachments) {
-        const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
-        if (!mimeType) {
-          throw new Error(`Unsupported file type: ${pending.file.name}`);
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const id = activeBotId.current;
+      if (!id || sending) return;
+      const attachments = attachmentsForBot(pendingAttachments, id);
+      const trimmed = text.trim();
+      if (!trimmed && attachments.length === 0) return;
+      setSending(true);
+      setSendError(null);
+      try {
+        const artifactIds: string[] = [];
+        for (const pending of attachments) {
+          const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
+          if (!mimeType) {
+            throw new Error(`Unsupported file type: ${pending.file.name}`);
+          }
+          const contentBase64 = await readFileAsBase64(pending.file);
+          const artifact = await rpc.artifacts.create({
+            botId: id,
+            name: pending.file.name,
+            mimeType,
+            contentBase64,
+          });
+          artifactIds.push(artifact.id);
         }
-        const contentBase64 = await readFileAsBase64(pending.file);
-        const artifact = await rpc.artifacts.create({
+        await rpc.threads.send({
           botId: id,
-          name: pending.file.name,
-          mimeType,
-          contentBase64,
+          text: trimmed || undefined,
+          artifactIds: artifactIds.length ? artifactIds : undefined,
         });
-        artifactIds.push(artifact.id);
+        revokePendingAttachmentPreviews(attachments);
+        setPendingAttachments((current) => current.filter((attachment) => attachment.botId !== id));
+        if (activeBotId.current === id) setAttachmentNotice(null);
+        await refreshThreadRef.current(id);
+      } catch (error) {
+        if (activeBotId.current === id) {
+          setSendError(error instanceof Error ? error.message : "Failed to send message");
+        }
+      } finally {
+        setSending(false);
       }
-      await rpc.threads.send({
-        botId: id,
-        text: trimmed || undefined,
-        artifactIds: artifactIds.length ? artifactIds : undefined,
-      });
-      revokePendingAttachmentPreviews(pendingAttachments);
-      setPendingAttachments([]);
-      setAttachmentNotice(null);
-      await refreshThreadRef.current(id);
-    } catch (error) {
-      setSendError(error instanceof Error ? error.message : "Failed to send message");
-    } finally {
-      setSending(false);
-    }
-  }, [pendingAttachments, sending]);
+    },
+    [pendingAttachments, sending],
+  );
   const stopRun = useCallback(async () => {
     const id = activeBotId.current;
     if (!id) return;
@@ -701,10 +720,12 @@ export function ShellPage() {
 
   useEffect(() => {
     setPendingAttachments((current) => {
-      revokePendingAttachmentPreviews(current);
-      return [];
+      const stale = current.filter((attachment) => attachment.botId !== active?.id);
+      revokePendingAttachmentPreviews(stale);
+      return attachmentsForBot(current, active?.id);
     });
     setAttachmentNotice(null);
+    setSendError(null);
   }, [active?.id]);
 
   useEffect(() => {
@@ -791,50 +812,50 @@ export function ShellPage() {
             />
           ) : (
             filtered.map((bot) => (
-            <button
-              key={bot.id}
-              type="button"
-              onClick={() => navigate(`/app/${bot.id}`)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setBotMenu({ botId: bot.id, position: { x: event.clientX, y: event.clientY } });
-              }}
-              className="flex gap-3 rounded-xl px-2.5 py-[11px] text-left"
-              style={{
-                background: active?.id === bot.id ? "#161618" : "transparent",
-              }}
-            >
-              <BotAvatar color={bot.color} size={38} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span
-                    className={`text-[15px] text-[#ECECEE] ${
-                      bot.unread ? "font-semibold" : "font-medium"
+              <button
+                key={bot.id}
+                type="button"
+                onClick={() => navigate(`/app/${bot.id}`)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setBotMenu({ botId: bot.id, position: { x: event.clientX, y: event.clientY } });
+                }}
+                className="flex gap-3 rounded-xl px-2.5 py-[11px] text-left"
+                style={{
+                  background: active?.id === bot.id ? "#161618" : "transparent",
+                }}
+              >
+                <BotAvatar color={bot.color} size={38} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span
+                      className={`text-[15px] text-[#ECECEE] ${
+                        bot.unread ? "font-semibold" : "font-medium"
+                      }`}
+                    >
+                      {bot.name}
+                      {bot.unread ? <span className="sr-only"> (unread)</span> : null}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-[#6C6C70]">
+                      {bot.status === "idle" ? "" : bot.status}
+                      {bot.unread ? (
+                        <span
+                          aria-hidden="true"
+                          className="inline-block h-2 w-2 rounded-full bg-[#8B5CF6]"
+                        />
+                      ) : null}
+                    </span>
+                  </div>
+                  <div
+                    className={`mt-0.5 truncate text-[13.5px] ${
+                      bot.unread ? "font-medium text-[#C9C9CE]" : "text-[#85858A]"
                     }`}
                   >
-                    {bot.name}
-                    {bot.unread ? <span className="sr-only"> (unread)</span> : null}
-                  </span>
-                  <span className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-[#6C6C70]">
-                    {bot.status === "idle" ? "" : bot.status}
-                    {bot.unread ? (
-                      <span
-                        aria-hidden="true"
-                        className="inline-block h-2 w-2 rounded-full bg-[#8B5CF6]"
-                      />
-                    ) : null}
-                  </span>
+                    {bot.preview || bot.title}
+                  </div>
                 </div>
-                <div
-                  className={`mt-0.5 truncate text-[13.5px] ${
-                    bot.unread ? "font-medium text-[#C9C9CE]" : "text-[#85858A]"
-                  }`}
-                >
-                  {bot.preview || bot.title}
-                </div>
-              </div>
-            </button>
-          ))
+              </button>
+            ))
           )}
           {archivedBots.length > 0 && !showWorkspaceSearch ? (
             <div className="mt-2 border-t border-[#202023] pt-2">
@@ -1003,7 +1024,7 @@ export function ShellPage() {
         <Composer
           activeName={active?.name}
           running={Boolean(snapshot?.run && isActive(snapshot.run.status))}
-          pendingAttachments={pendingAttachments}
+          pendingAttachments={activePendingAttachments}
           attachmentNotice={attachmentNotice}
           sendError={sendError}
           sending={sending}
@@ -2309,40 +2330,66 @@ function ArtifactImage({
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const element = container.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "320px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
+    let objectUrl: string | null = null;
+    setSrc(null);
     void rpc.artifacts
       .get({ botId, artifactId })
       .then((artifact) => {
-        if (!cancelled) {
-          setSrc(`data:${artifact.mimeType};base64,${artifact.contentBase64}`);
-        }
+        const bytes = decodeArtifactBase64(artifact.contentBase64);
+        objectUrl = URL.createObjectURL(
+          new Blob([new Uint8Array(bytes)], { type: artifact.mimeType }),
+        );
+        if (cancelled) URL.revokeObjectURL(objectUrl);
+        else setSrc(objectUrl);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [artifactId, botId]);
-
-  if (!src) {
-    return (
-      <div className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-[14px] text-[#85858A]">
-        {name}
-      </div>
-    );
-  }
+  }, [artifactId, botId, visible]);
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="max-w-[240px] overflow-hidden rounded-[20px]"
-      >
-        <img src={src} alt={name} className="max-h-48 w-full object-cover" />
-      </button>
-      {open ? (
+    <div ref={container}>
+      {src ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="max-w-[240px] overflow-hidden rounded-[20px]"
+        >
+          <img src={src} alt={name} className="max-h-48 w-full object-cover" />
+        </button>
+      ) : (
+        <div className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-[14px] text-[#85858A]">
+          {name}
+        </div>
+      )}
+      {open && src ? (
         <button
           type="button"
           aria-label="Close image preview"
@@ -2356,7 +2403,7 @@ function ArtifactImage({
           />
         </button>
       ) : null}
-    </>
+    </div>
   );
 }
 

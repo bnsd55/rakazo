@@ -57,14 +57,13 @@ export async function queryWorkspaceSearch(
       workspaceId: actor.workspaceId,
       userId: actor.userId,
       name: { contains: query, mode: "insensitive" },
+      bot: { archivedAt: null },
     },
     include: { bot: { select: { name: true } } },
     take: SEARCH_LIMIT,
   });
   for (const artifact of artifacts) {
-    const messageRows = await prisma.$queryRaw<
-      Array<{ id: string; seq: number }>
-    >`
+    const messageRows = await prisma.$queryRaw<Array<{ id: string; seq: number }>>`
       SELECT m.id, m.seq
       FROM messages m
       INNER JOIN threads t ON t.id = m."threadId"
@@ -76,6 +75,7 @@ export async function queryWorkspaceSearch(
       LIMIT 1
     `;
     const message = messageRows[0];
+    if (!message) continue;
     push({
       kind: "file",
       botId: artifact.botId,
@@ -96,6 +96,7 @@ export async function queryWorkspaceSearch(
         { name: { contains: query, mode: "insensitive" } },
         { prompt: { contains: query, mode: "insensitive" } },
       ],
+      bot: { archivedAt: null },
     },
     include: { bot: { select: { name: true } } },
     take: SEARCH_LIMIT,

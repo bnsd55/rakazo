@@ -20,6 +20,12 @@ export function decodeAttachmentBase64(contentBase64: string): Uint8Array {
   if (normalized.length > ATTACHMENT_MAX_BASE64_LENGTH) {
     throw new AttachmentValidationError("Attachment exceeds the 10 MiB limit");
   }
+  if (
+    normalized.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(normalized)
+  ) {
+    throw new AttachmentValidationError("Attachment content is not valid base64");
+  }
   let bytes: Buffer;
   try {
     bytes = Buffer.from(normalized, "base64");
@@ -75,7 +81,7 @@ export function promptTextForAttachments(
     .filter((artifact) => !isAttachmentImageMimeType(artifact.mimeType))
     .map(
       (artifact) =>
-        `User attached file "${artifact.name}" (${artifact.mimeType}, ${artifact.size} bytes).`,
+        `User attached file ${JSON.stringify(artifact.name)} (${artifact.mimeType}, ${artifact.size} bytes).`,
     );
   return [caption, ...notes].filter(Boolean).join("\n\n") || "See attached files.";
 }
@@ -107,6 +113,17 @@ const EXTENSION_MIME_TYPES: Record<string, AttachmentMimeType> = {
   ".json": "application/json",
 };
 
+const MIME_TYPE_EXTENSIONS: Record<AttachmentMimeType, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "application/pdf": ".pdf",
+  "text/plain": ".txt",
+  "text/csv": ".csv",
+  "application/json": ".json",
+};
+
 export function inferAttachmentMimeType(
   name: string,
   reportedType?: string,
@@ -115,6 +132,18 @@ export function inferAttachmentMimeType(
   const dot = name.lastIndexOf(".");
   if (dot < 0) return null;
   return EXTENSION_MIME_TYPES[name.slice(dot).toLowerCase()] ?? null;
+}
+
+export function attachmentExtensionForMimeType(mimeType: string): string {
+  return isAllowedAttachmentMimeType(mimeType) ? MIME_TYPE_EXTENSIONS[mimeType] : "";
+}
+
+export function attachmentsForBot<T extends { botId: string }>(
+  attachments: readonly T[],
+  botId: string | undefined,
+): T[] {
+  if (!botId) return [];
+  return attachments.filter((attachment) => attachment.botId === botId);
 }
 
 export function userTurnBlocksForRun(

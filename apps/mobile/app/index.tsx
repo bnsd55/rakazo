@@ -1,3 +1,4 @@
+import type { SearchHit } from "@rakazo/contracts";
 import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -11,7 +12,6 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { SearchHit } from "@rakazo/contracts";
 import { BotAvatar } from "../components/bot-avatar";
 import { NativeSymbol } from "../components/native-symbol";
 import { loadSessionToken, type MobileBot, type MobileMe, rpc } from "../lib/api";
@@ -20,6 +20,7 @@ import { native } from "../lib/native";
 import { previewSnippet } from "../lib/preview";
 import { registerPushToken } from "../lib/push";
 import { queryWorkspaceSearch } from "../lib/search";
+import { mobileSearchDestination } from "../lib/search-destination";
 
 const FALLBACK_COLOR = "#9B5CF6";
 
@@ -103,8 +104,7 @@ export default function Home() {
 
   const visible = useMemo(() => filterBots(bots, query), [bots, query]);
   const listData = useMemo(
-    (): Array<MobileBot | SearchHit> =>
-      query.trim() && searching ? searchHits : visible,
+    (): Array<MobileBot | SearchHit> => (query.trim() && searching ? searchHits : visible),
     [query, searching, searchHits, visible],
   );
   const initials = userInitials(me?.name ?? "");
@@ -203,14 +203,7 @@ export default function Home() {
               onPress={() => {
                 setQuery("");
                 setSearchHits([]);
-                router.push({
-                  pathname: "/thread",
-                  params: {
-                    botId: item.botId,
-                    name: item.botName,
-                    messageId: item.messageId,
-                  },
-                });
+                router.push(mobileSearchDestination(item));
               }}
             />
           ) : (
@@ -248,7 +241,10 @@ function CircleButton({
 
 function SearchRow({ hit, onPress }: { hit: SearchHit; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+    >
       <View style={styles.rowBody}>
         <View style={styles.rowTop}>
           <Text style={styles.name} numberOfLines={1}>

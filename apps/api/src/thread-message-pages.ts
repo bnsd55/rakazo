@@ -24,6 +24,7 @@ export async function loadMessagePage(
       const rows = await prisma.message.findMany({
         where: { threadId, seq: { gte: minSeq, lte: maxSeq } },
         orderBy: { seq: "asc" },
+        take: pageSize,
       });
       const first = rows[0];
       const hasOlder = first
