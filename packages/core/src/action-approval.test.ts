@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  type ActionApprovalRule,
   connectorKindFromToolName,
   connectorToolRequiresApproval,
   isApprovalAskBlock,
   resolveActionApproval,
   toolRequiresApproval,
-  type ActionApprovalRule,
 } from "./action-approval.js";
 
 describe("toolRequiresApproval", () => {
@@ -41,6 +41,9 @@ describe("toolRequiresApproval", () => {
     expect(toolRequiresApproval("search_threads", true)).toBe(false);
     expect(toolRequiresApproval("find_user", true)).toBe(false);
     expect(toolRequiresApproval("read_inbox", true)).toBe(false);
+    expect(toolRequiresApproval("contacts_get_or_create", true)).toBe(true);
+    expect(toolRequiresApproval("notion_search_and_update", true)).toBe(true);
+    expect(toolRequiresApproval("crm_get_then_upsert", true)).toBe(true);
   });
 });
 
@@ -56,6 +59,7 @@ describe("isApprovalAskBlock", () => {
     expect(
       isApprovalAskBlock({
         kind: "ask",
+        approvalEffectId: "effect-1",
         actions: [
           { id: "allow", label: "Allow once" },
           { id: "always", label: "Always allow" },
@@ -64,12 +68,25 @@ describe("isApprovalAskBlock", () => {
       }),
     ).toBe(true);
     expect(isApprovalAskBlock({ kind: "ask" })).toBe(false);
+    expect(
+      isApprovalAskBlock({
+        kind: "ask",
+        approvalEffectId: "effect-1",
+        actions: [{ id: "deny", label: "No" }],
+      }),
+    ).toBe(false);
   });
 });
 
 describe("connectorKindFromToolName", () => {
   it("uses the first underscore segment", () => {
     expect(connectorKindFromToolName("gmail_send_email")).toBe("gmail");
+  });
+
+  it("prefers the longest matching connected provider slug", () => {
+    expect(
+      connectorKindFromToolName("microsoft_outlook_send_email", ["microsoft", "microsoft_outlook"]),
+    ).toBe("microsoft_outlook");
   });
 });
 
@@ -102,6 +119,26 @@ describe("resolveActionApproval", () => {
         rules: [...alwaysAllowDestination, ...requireEmail],
       }),
     ).toBe("ask");
+  });
+
+  it("does not apply consequential categories to connector reads", () => {
+    expect(
+      resolveActionApproval({
+        toolName: "gmail_list_threads",
+        viaConnector: true,
+        rules: requireEmail,
+      }),
+    ).toBe("allow");
+  });
+
+  it("does not let standing rules gate approval-exempt local tools", () => {
+    expect(
+      resolveActionApproval({
+        toolName: "read_file",
+        viaConnector: false,
+        rules: [{ effect: "require_approval", matchKind: "tool", matchValue: "read_file" }],
+      }),
+    ).toBe("allow");
   });
 
   it("lets require_approval on a tool beat always-allow on that tool", () => {

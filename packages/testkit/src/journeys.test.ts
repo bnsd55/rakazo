@@ -455,7 +455,7 @@ describeJourneys("required product journeys", () => {
       label: "test",
       modelId: "scripted",
     });
-    await sendAndWait(app, cookie, bot.id, "write this to the destination crm as a note");
+    await sendApproveAndWait(app, cookie, bot.id, "write this to the destination crm as a note");
     expect(connector.records.length).toBeGreaterThan(before);
     const snap = await rpc<Snap>(app, cookie, "threads/get", { botId: bot.id });
     expect(JSON.stringify(snap)).not.toContain(secret);
@@ -478,6 +478,7 @@ describeJourneys("required product journeys", () => {
       botId: bot.id,
       text: "write this to the destination crm as a note",
     });
+    await answerPendingApproval(app, cookie, bot.id, sent.runId, "allow");
     await waitFor(
       app,
       cookie,
@@ -668,17 +669,17 @@ describeJourneys("required product journeys", () => {
       (s) => !s.run || ["completed", "failed", "cancelled"].includes(s.run.status),
     );
 
-    await sendAndWait(app, cookie, parent.id, "delete the bot named Nested");
+    await sendApproveAndWait(app, cookie, parent.id, "delete the bot named Nested");
     expect((await rpc<Bot[]>(app, cookie, "bots/list")).some((bot) => bot.id === nested!.id)).toBe(
       true,
     );
 
-    await sendAndWait(app, cookie, parent.id, "delete the bot named WrongName");
+    await sendApproveAndWait(app, cookie, parent.id, "delete the bot named WrongName");
     expect((await rpc<Bot[]>(app, cookie, "bots/list")).some((bot) => bot.id === scout!.id)).toBe(
       true,
     );
 
-    await sendAndWait(app, cookie, parent.id, "delete the bot named Scout");
+    await sendApproveAndWait(app, cookie, parent.id, "delete the bot named Scout");
     const afterScout = await rpc<Bot[]>(app, cookie, "bots/list");
     expect(afterScout.some((bot) => bot.id === scout!.id)).toBe(false);
     expect(afterScout.some((bot) => bot.id === nested!.id)).toBe(true);
@@ -913,25 +914,7 @@ describeJourneys("required product journeys", () => {
     );
     expect(JSON.stringify(waiting.messages)).toMatch(/allow once|review before/i);
     expect(connector.records).toHaveLength(recordsBefore);
-    const askMessage = waiting.messages.find((message) =>
-      message.blocks.some(
-        (block) =>
-          typeof block === "object" &&
-          block !== null &&
-          "kind" in block &&
-          block.kind === "ask" &&
-          "actions" in block &&
-          Array.isArray(block.actions),
-      ),
-    );
-    expect(askMessage).toBeTruthy();
-
-    await rpc(app, cookie, "threads/answer", {
-      botId: bot.id,
-      runId: sent.runId,
-      messageId: (askMessage as { id: string }).id,
-      answer: "allow",
-    });
+    await answerPendingApproval(app, cookie, bot.id, sent.runId, "allow", waiting);
     await waitFor(
       app,
       cookie,
@@ -957,22 +940,7 @@ describeJourneys("required product journeys", () => {
       (snap) => snap.run?.status === "waiting_input",
     );
     expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
-    const denyMessage = waitingAgain.messages.find((message) =>
-      message.blocks.some(
-        (block) =>
-          typeof block === "object" &&
-          block !== null &&
-          "kind" in block &&
-          block.kind === "ask" &&
-          "actions" in block,
-      ),
-    );
-    await rpc(app, cookie, "threads/answer", {
-      botId: bot.id,
-      runId: second.runId,
-      messageId: (denyMessage as { id: string }).id,
-      answer: "deny",
-    });
+    await answerPendingApproval(app, cookie, bot.id, second.runId, "deny", waitingAgain);
     const denied = await waitFor(
       app,
       cookie,
@@ -999,29 +967,17 @@ describeJourneys("required product journeys", () => {
     const prompt = "write this to the destination crm as a note";
     const recordsBefore = connector.records.length;
 
-    const first = await rpc<{ runId: string }>(app, cookie, "threads/send", { botId: bot.id, text: prompt });
+    const first = await rpc<{ runId: string }>(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: prompt,
+    });
     const waiting = await waitFor(
       app,
       cookie,
       bot.id,
       (snap) => snap.run?.status === "waiting_input",
     );
-    const askMessage = waiting.messages.find((message) =>
-      message.blocks.some(
-        (block) =>
-          typeof block === "object" &&
-          block !== null &&
-          "kind" in block &&
-          block.kind === "ask" &&
-          "actions" in block,
-      ),
-    );
-    await rpc(app, cookie, "threads/answer", {
-      botId: bot.id,
-      runId: first.runId,
-      messageId: (askMessage as { id: string }).id,
-      answer: "always",
-    });
+    await answerPendingApproval(app, cookie, bot.id, first.runId, "always", waiting);
     await waitFor(
       app,
       cookie,
@@ -1060,22 +1016,7 @@ describeJourneys("required product journeys", () => {
     );
     expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
     expect(connector.records.length).toBe(recordsAfterAlways + 1);
-    const thirdAsk = waitingAgain.messages.find((message) =>
-      message.blocks.some(
-        (block) =>
-          typeof block === "object" &&
-          block !== null &&
-          "kind" in block &&
-          block.kind === "ask" &&
-          "actions" in block,
-      ),
-    );
-    await rpc(app, cookie, "threads/answer", {
-      botId: bot.id,
-      runId: third.runId,
-      messageId: (thirdAsk as { id: string }).id,
-      answer: "allow",
-    });
+    await answerPendingApproval(app, cookie, bot.id, third.runId, "allow", waitingAgain);
     await waitFor(
       app,
       cookie,
@@ -1157,8 +1098,8 @@ type Bot = {
   parentBotId?: string | null;
 };
 type Snap = {
-  messages: Array<{ seq: number; blocks: unknown[] }>;
-  run: { status: string } | null;
+  messages: Array<{ id: string; seq: number; runId?: string; blocks: unknown[] }>;
+  run: { id: string; status: string } | null;
 };
 
 async function signup(app: App, email: string, name: string) {
@@ -1211,6 +1152,59 @@ async function sendAndWait(app: App, cookie: string, botId: string, text: string
     botId,
     (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
   );
+}
+
+async function sendApproveAndWait(app: App, cookie: string, botId: string, text: string) {
+  const sent = await rpc<{ runId: string }>(app, cookie, "threads/send", { botId, text });
+  await answerPendingApproval(app, cookie, botId, sent.runId, "allow");
+  return waitFor(
+    app,
+    cookie,
+    botId,
+    (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+  );
+}
+
+async function answerPendingApproval(
+  app: App,
+  cookie: string,
+  botId: string,
+  runId: string,
+  answer: "allow" | "always" | "deny",
+  current?: Snap,
+) {
+  const waiting =
+    current ??
+    (await waitFor(
+      app,
+      cookie,
+      botId,
+      (snap) => snap.run?.id === runId && snap.run.status === "waiting_input",
+    ));
+  const message = [...waiting.messages]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate.runId === runId &&
+        candidate.blocks.some(
+          (block) =>
+            typeof block === "object" &&
+            block !== null &&
+            "kind" in block &&
+            block.kind === "ask" &&
+            "approvalEffectId" in block &&
+            typeof block.approvalEffectId === "string" &&
+            "actions" in block &&
+            Array.isArray(block.actions),
+        ),
+    );
+  if (!message) throw new Error(`run ${runId} did not expose an approval card`);
+  await rpc(app, cookie, "threads/answer", {
+    botId,
+    runId,
+    messageId: message.id,
+    answer,
+  });
 }
 
 async function waitFor(app: App, cookie: string, botId: string, pred: (snap: Snap) => boolean) {

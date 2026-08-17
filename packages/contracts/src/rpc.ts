@@ -1,6 +1,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 import {
+  ActionApprovalRuleSchema,
   AppBootstrapSchema,
   ArtifactSchema,
   BotSchema,
@@ -9,7 +10,6 @@ import {
   ComputerStatusSchema,
   ConnectionCatalogItemSchema,
   ConnectionSchema,
-  ActionApprovalRuleSchema,
   CreateBotInput,
   CreateRoutineInput,
   DeploymentSettingsSchema,

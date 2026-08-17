@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export function stableJsonValue(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJsonValue).join(",")}]`;
@@ -11,5 +13,6 @@ export function approvalEffectKey(
   toolName: string,
   args: Record<string, unknown>,
 ): string {
-  return `${runId}:${toolName}:${stableJsonValue(args)}`;
+  const digest = createHash("sha256").update(stableJsonValue(args)).digest("hex");
+  return `${runId}:${toolName}:${digest}`;
 }

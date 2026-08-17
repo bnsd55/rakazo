@@ -9,7 +9,9 @@ function describeRule(rule: ActionApprovalRule) {
       : rule.matchKind === "connector"
         ? `${rule.matchValue} connector`
         : rule.matchValue;
-  return rule.effect === "require_approval" ? `Require approval for ${target}` : `Always allow ${target}`;
+  return rule.effect === "require_approval"
+    ? `Require approval for ${target}`
+    : `Always allow ${target}`;
 }
 
 export function ApprovalRulesSettings() {
@@ -61,8 +63,8 @@ export function ApprovalRulesSettings() {
     <div className="mt-8 border-t border-[#232326] pt-6">
       <h3 className="text-[15px] font-medium text-[#ECECEE]">Action approvals</h3>
       <p className="mt-2 text-[13.5px] leading-[1.5] text-[#85858A]">
-        Standing rules apply to every bot in this workspace. Require-approval beats always-allow.
-        These rules do not cover browser or computer control.
+        Standing rules apply to your bots in this workspace. Require-approval beats always-allow.
+        These rules do not cover browser or computer control, passwords, or other protected input.
       </p>
       <div className="mt-4 flex flex-col items-start gap-2">
         <button

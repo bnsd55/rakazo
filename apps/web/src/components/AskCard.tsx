@@ -16,14 +16,18 @@ export function AskCard({
   const [editing, setEditing] = useState(false);
   const [answer, setAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const approvalActions = block.actions?.length ? block.actions : undefined;
 
   async function submitAnswer(value: string) {
     const text = value.trim();
     if (!text || submitting) return;
     setSubmitting(true);
+    setError(null);
     try {
       await onAnswer(text);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not submit this answer");
     } finally {
       setSubmitting(false);
     }
@@ -35,7 +39,7 @@ export function AskCard({
         <ChatMarkdown>{block.text}</ChatMarkdown>
       </div>
       {block.detail ? (
-        <pre className="mt-3 rounded-xl bg-[#0E0E10] px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-[#85858A]">
+        <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-[#0E0E10] px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-[#85858A]">
           {block.detail}
         </pre>
       ) : null}
@@ -129,6 +133,7 @@ export function AskCard({
           </button>
         </div>
       )}
+      {error ? <p className="mt-3 text-[13px] text-[#E65707]">{error}</p> : null}
     </div>
   );
 }

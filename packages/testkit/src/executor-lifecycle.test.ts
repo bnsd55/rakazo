@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { approvalEffectKey } from "@rakazo/core";
+import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import { createThreadEvents } from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -89,7 +89,7 @@ describeIntegration("run executor lifecycle", () => {
     ).resolves.toMatchObject({ status });
   });
 
-  it("fails closed when a retried external effect has an uncertain outcome", async () => {
+  it("fails closed when a retried external effect was already executing", async () => {
     const prompt = "write this to the destination crm as a note";
     const seeded = await seedRun("uncertain-effect", prompt);
     const args = { collection: "notes", title: "Rakazo result", body: prompt };
@@ -100,7 +100,7 @@ describeIntegration("run executor lifecycle", () => {
         runId: seeded.run.id,
         kind: "destination.write",
         idempotencyKey: executionId,
-        status: "intended",
+        status: "executing",
         request: args,
       },
     });
@@ -121,13 +121,50 @@ describeIntegration("run executor lifecycle", () => {
       status: "failed",
       error: expect.stringMatching(/uncertain outcome/),
     });
-    expect(effect.status).toBe("intended");
+    expect(effect.status).toBe("executing");
     expect(handles.connector.records).toHaveLength(recordsBefore);
     expect(
       await handles.prisma.event.count({
         where: { runId: seeded.run.id, type: "effect.reconciled" },
       }),
     ).toBe(1);
+  });
+
+  it("recreates the approval pause when an intended effect was interrupted before the card", async () => {
+    const prompt = "write this to the destination crm as a note";
+    const seeded = await seedRun("interrupted-before-approval", prompt);
+    const args = { collection: "notes", title: "Rakazo result", body: prompt };
+    const executionId = approvalEffectKey(seeded.run.id, "destination.write", args);
+    const effect = await handles.prisma.externalEffect.create({
+      data: {
+        workspaceId: seeded.me.workspaceId,
+        runId: seeded.run.id,
+        kind: "destination.write",
+        idempotencyKey: executionId,
+        status: "intended",
+        request: args,
+      },
+    });
+    const recordsBefore = handles.connector.records.length;
+
+    await handles.executor.continueRun(seeded.run.id, "retry-worker");
+
+    const [run, attempt, message] = await Promise.all([
+      handles.prisma.run.findUniqueOrThrow({ where: { id: seeded.run.id } }),
+      handles.prisma.attempt.findFirstOrThrow({ where: { runId: seeded.run.id } }),
+      handles.prisma.message.findFirstOrThrow({
+        where: { runId: seeded.run.id, role: "bot" },
+        orderBy: { seq: "desc" },
+      }),
+    ]);
+    expect(run.status).toBe("waiting_input");
+    expect(attempt.status).toBe("waiting_input");
+    expect(message.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "ask", approvalEffectId: effect.id, status: "pending" }),
+      ]),
+    );
+    expect(handles.connector.records).toHaveLength(recordsBefore);
   });
 
   it("fences concurrent terminal commits so only one final message is durable", async () => {

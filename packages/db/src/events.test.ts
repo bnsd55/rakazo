@@ -299,6 +299,7 @@ describe("answerRunInput", () => {
           blocks: [
             {
               kind: "ask",
+              approvalEffectId: "effect-1",
               text: "Review before writing",
               status: "pending",
               actions: [
@@ -344,6 +345,14 @@ describe("answerRunInput", () => {
     ).resolves.toBe(true);
 
     expect(tx.task.updateMany).not.toHaveBeenCalled();
+    expect(tx.externalEffect.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "effect-1",
+        workspaceId: "workspace-1",
+        runId: "run-1",
+        status: "intended",
+      },
+    });
     expect(tx.externalEffect.update).toHaveBeenCalledWith({
       where: { id: "effect-1" },
       data: { status: "approved" },
@@ -359,6 +368,7 @@ describe("answerRunInput", () => {
           blocks: [
             {
               kind: "ask",
+              approvalEffectId: "effect-1",
               text: "Review before writing",
               status: "pending",
               actions: [
@@ -377,7 +387,9 @@ describe("answerRunInput", () => {
       },
       task: { updateMany: vi.fn() },
       externalEffect: {
-        findFirst: vi.fn().mockResolvedValue({ id: "effect-1", status: "intended", kind: "destination.write" }),
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: "effect-1", status: "intended", kind: "destination.write" }),
         update: vi.fn().mockResolvedValue({ id: "effect-1" }),
       },
       actionApprovalRule: {
@@ -417,8 +429,9 @@ describe("answerRunInput", () => {
     });
     expect(tx.actionApprovalRule.upsert).toHaveBeenCalledWith({
       where: {
-        workspaceId_effect_matchKind_matchValue: {
+        workspaceId_createdByUserId_effect_matchKind_matchValue: {
           workspaceId: "workspace-1",
+          createdByUserId: "user-1",
           effect: "always_allow",
           matchKind: "tool",
           matchValue: "destination.write",
@@ -433,6 +446,85 @@ describe("answerRunInput", () => {
       },
       update: {},
     });
+  });
+
+  it("does not queue a run when an approval card has no matching effect", async () => {
+    const tx = {
+      message: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "message-1",
+          blocks: [
+            {
+              kind: "ask",
+              approvalEffectId: "missing-effect",
+              text: "Review before writing",
+              status: "pending",
+              actions: [
+                { id: "allow", label: "Allow once" },
+                { id: "deny", label: "Deny" },
+              ],
+            },
+          ],
+        }),
+      },
+      run: { updateMany: vi.fn() },
+      externalEffect: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      answerRunInput(prisma, {
+        workspaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        messageId: "message-1",
+        answer: "allow",
+      }),
+    ).resolves.toBe(false);
+    expect(tx.run.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("does not queue a run for an action that the approval card did not offer", async () => {
+    const tx = {
+      message: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "message-1",
+          blocks: [
+            {
+              kind: "ask",
+              approvalEffectId: "effect-1",
+              text: "Review before writing",
+              status: "pending",
+              actions: [
+                { id: "allow", label: "Allow once" },
+                { id: "deny", label: "Deny" },
+              ],
+            },
+          ],
+        }),
+      },
+      run: { updateMany: vi.fn() },
+      externalEffect: { findFirst: vi.fn() },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      answerRunInput(prisma, {
+        workspaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        messageId: "message-1",
+        answer: "always",
+      }),
+    ).resolves.toBe(false);
+    expect(tx.externalEffect.findFirst).not.toHaveBeenCalled();
+    expect(tx.run.updateMany).not.toHaveBeenCalled();
   });
 
   it("rejects an already answered prompt without queuing the run", async () => {

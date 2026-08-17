@@ -1329,7 +1329,10 @@ export function createRouter(deps: RouterDeps) {
     approvalRules: {
       list: authed.approvalRules.list.handler(async ({ context }) => {
         const rows = await deps.prisma.actionApprovalRule.findMany({
-          where: { workspaceId: context.actor.workspaceId },
+          where: {
+            workspaceId: context.actor.workspaceId,
+            createdByUserId: context.actor.userId,
+          },
           orderBy: { createdAt: "asc" },
         });
         return rows.map((row) => ({
@@ -1343,8 +1346,9 @@ export function createRouter(deps: RouterDeps) {
       set: authed.approvalRules.set.handler(async ({ context, input }) => {
         const row = await deps.prisma.actionApprovalRule.upsert({
           where: {
-            workspaceId_effect_matchKind_matchValue: {
+            workspaceId_createdByUserId_effect_matchKind_matchValue: {
               workspaceId: context.actor.workspaceId,
+              createdByUserId: context.actor.userId,
               effect: input.effect,
               matchKind: input.matchKind,
               matchValue: input.matchValue,
@@ -1369,7 +1373,11 @@ export function createRouter(deps: RouterDeps) {
       }),
       remove: authed.approvalRules.remove.handler(async ({ context, input }) => {
         await deps.prisma.actionApprovalRule.deleteMany({
-          where: { id: input.id, workspaceId: context.actor.workspaceId },
+          where: {
+            id: input.id,
+            workspaceId: context.actor.workspaceId,
+            createdByUserId: context.actor.userId,
+          },
         });
         return { ok: true as const };
       }),

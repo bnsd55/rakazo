@@ -13,7 +13,7 @@ import type {
 import { routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock, RunStatus } from "@rakazo/contracts";
 import {
-  approvalEffectKey,
+  type ActionApprovalRule,
   assertTransition,
   connectorKindFromToolName,
   containsSecret,
@@ -25,8 +25,8 @@ import {
   resolveActionApproval,
   sandboxCommandTimeoutMs,
   toolRequiresApproval,
-  type ActionApprovalRule,
 } from "@rakazo/core";
+import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import {
   createThreadMessage,
   findDefaultModelCredential,
@@ -34,7 +34,7 @@ import {
   parseComputerMode,
   type ThreadEvents,
 } from "@rakazo/db";
-import { buildApprovalAskBlock, resolvesViaConnector } from "./approval-ask.js";
+import { buildApprovalAskBlock } from "./approval-ask.js";
 import {
   approvalPausedToolResult,
   claimApprovedEffect,
@@ -90,6 +90,7 @@ const GRAPHICAL_AGENT_TOOLS = new Set([
   "open_path",
   "launch_app",
 ]);
+const BUILTIN_AGENT_TOOL_NAMES = new Set(builtinAgentTools.map((tool) => tool.name));
 
 export interface ExecutorDeps {
   prisma: PrismaClient;
@@ -295,7 +296,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             findDefaultModelCredential(deps.prisma, run),
             deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
             deps.prisma.actionApprovalRule.findMany({
-              where: { workspaceId: run.workspaceId },
+              where: { workspaceId: run.workspaceId, createdByUserId: run.userId },
               select: { effect: true, matchKind: true, matchValue: true },
             }),
           ]);
@@ -392,18 +393,23 @@ export function createRunExecutor(deps: ExecutorDeps) {
           args: Record<string, unknown>,
           executionId: string,
         ) => {
-          const viaConnector = resolvesViaConnector(name);
+          const viaConnector = !BUILTIN_AGENT_TOOL_NAMES.has(name);
+          const requiresApprovalByDefault = toolRequiresApproval(name, viaConnector);
           const approvalDecision = resolveActionApproval({
             toolName: name,
             viaConnector,
-            connectorKind: connectorKindFromToolName(name),
+            connectorKind: connectorKindFromToolName(
+              name,
+              connectedPlugins.map((plugin) => plugin.provider),
+            ),
             rules: approvalRules as ActionApprovalRule[],
           });
           const needsApproval = approvalDecision === "ask";
-          const bypassApproval = approvalDecision === "allow" && toolRequiresApproval(name, viaConnector);
-          const effectKey = toolRequiresApproval(name, viaConnector)
-            ? approvalEffectKey(runId, name, args)
-            : executionId;
+          const bypassApproval = approvalDecision === "allow" && requiresApprovalByDefault;
+          const effectKey =
+            needsApproval || requiresApprovalByDefault
+              ? approvalEffectKey(runId, name, args)
+              : executionId;
           const applied = READ_ONLY_AGENT_TOOLS.has(name)
             ? undefined
             : await recordEffect(deps, run, name, effectKey, args);
@@ -420,35 +426,10 @@ export function createRunExecutor(deps: ExecutorDeps) {
               const retryGate = resolveDuplicateEffectGate(current, name);
               if (retryGate.action === "return") return retryGate.result;
             }
-            throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
+            throw uncertainEffectError(name);
           };
 
-          if (applied?.duplicate) {
-            const gate = resolveDuplicateEffectGate(applied.effect, name);
-            if (gate.action === "return") return gate.result;
-            if (gate.action === "paused") {
-              if (bypassApproval) {
-                const early = await claimOrReturn("intended");
-                if (early !== undefined) return early;
-              } else {
-                const current = await deps.prisma.run.findUnique({
-                  where: { id: runId },
-                  select: { status: true },
-                });
-                if (current?.status === "waiting_input") {
-                  return pauseForApproval();
-                }
-                throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
-              }
-            }
-            if (gate.action === "uncertain") {
-              throw new Error(
-                `tool ${gate.toolName} has an earlier execution with an uncertain outcome`,
-              );
-            }
-            const early = await claimOrReturn("approved");
-            if (early !== undefined) return early;
-          } else if (needsApproval && applied) {
+          const requestApproval = async () => {
             if (!(await renewRunLease(deps, runId, workerId, fence))) {
               return pauseForApproval();
             }
@@ -461,7 +442,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               attemptId: attempt.id,
               leaseOwner: workerId,
               leaseFence: fence,
-              blocks: [buildApprovalAskBlock(name, args, runSecrets)],
+              blocks: [buildApprovalAskBlock(applied!.effect.id, name, args, runSecrets)],
             });
             if (!paused) return pauseForApproval();
             await notifyRun(deps, run, {
@@ -472,6 +453,33 @@ export function createRunExecutor(deps: ExecutorDeps) {
               threadId: thread.id,
             });
             return pauseForApproval();
+          };
+
+          if (applied?.duplicate) {
+            const gate = resolveDuplicateEffectGate(applied.effect, name);
+            if (gate.action === "return") return gate.result;
+            if (gate.action === "paused") {
+              if (!needsApproval) {
+                const early = await claimOrReturn("intended");
+                if (early !== undefined) return early;
+              } else {
+                const current = await deps.prisma.run.findUnique({
+                  where: { id: runId },
+                  select: { status: true },
+                });
+                if (current?.status === "waiting_input") {
+                  return pauseForApproval();
+                }
+                return requestApproval();
+              }
+            }
+            if (gate.action === "uncertain") {
+              throw uncertainEffectError(gate.toolName);
+            }
+            const early = await claimOrReturn("approved");
+            if (early !== undefined) return early;
+          } else if (needsApproval && applied) {
+            return requestApproval();
           } else if (bypassApproval && applied) {
             const early = await claimOrReturn("intended");
             if (early !== undefined) return early;
@@ -733,7 +741,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           if (deps.connector) {
             let result: unknown = { error: `unknown tool ${name}` };
             for await (const event of deps.connector.execute(
-              { tool: name, args, executionId },
+              { tool: name, args, executionId: effectKey },
               context,
             )) {
               if (event.type === "result") {
@@ -1268,6 +1276,12 @@ async function completeEffect(deps: ExecutorDeps, effectId: string, result: unkn
     where: { id: effectId },
     data: { status: "completed", result: storedResult as never },
   });
+}
+
+function uncertainEffectError(toolName: string): Error {
+  return new Error(
+    `tool ${toolName} has an earlier execution with an uncertain outcome; it may already have completed, so verify the destination before retrying`,
+  );
 }
 
 async function runSandboxCommand(

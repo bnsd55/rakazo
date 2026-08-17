@@ -1,4 +1,4 @@
-import { approvalEffectKey } from "@rakazo/core";
+import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import { describe, expect, it, vi } from "vitest";
 import {
   approvalPausedToolResult,
@@ -65,10 +65,7 @@ describe("claimApprovedEffect", () => {
   it("claims approved effects exactly once", async () => {
     const store = {
       externalEffect: {
-        updateMany: vi
-          .fn()
-          .mockResolvedValueOnce({ count: 1 })
-          .mockResolvedValueOnce({ count: 0 }),
+        updateMany: vi.fn().mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 }),
       },
     };
 
@@ -85,10 +82,7 @@ describe("claimIntendedEffect", () => {
   it("claims intended effects exactly once", async () => {
     const store = {
       externalEffect: {
-        updateMany: vi
-          .fn()
-          .mockResolvedValueOnce({ count: 1 })
-          .mockResolvedValueOnce({ count: 0 }),
+        updateMany: vi.fn().mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 }),
       },
     };
 
@@ -102,7 +96,9 @@ describe("claimIntendedEffect", () => {
 });
 
 describe("approved effect resume", () => {
-  function createApprovedEffectStore(initialStatus: "approved" | "executing" | "completed" = "approved") {
+  function createApprovedEffectStore(
+    initialStatus: "approved" | "executing" | "completed" = "approved",
+  ) {
     const effectId = "effect-1";
     let status = initialStatus;
     let destinationWrites = 0;
@@ -116,7 +112,7 @@ describe("approved effect resume", () => {
           }
           return { count: 0 };
         }),
-        findUnique: vi.fn(async () => ({
+        findUnique: vi.fn(async (_args: { where: { id: string } }) => ({
           id: effectId,
           status,
           result: status === "completed" ? storedResult : undefined,
@@ -148,14 +144,21 @@ describe("approved effect resume", () => {
       return { executed: true, result: storedResult };
     };
 
-    return { store, resumeApprovedTool, getDestinationWrites: () => destinationWrites, getStatus: () => status };
+    return {
+      store,
+      resumeApprovedTool,
+      getDestinationWrites: () => destinationWrites,
+      getStatus: () => status,
+    };
   }
 
   it("runs the connector write only once when a worker dies before completeEffect", async () => {
     const harness = createApprovedEffectStore();
 
     const first = await harness.resumeApprovedTool("destination.write", { complete: false });
-    await expect(harness.resumeApprovedTool("destination.write")).rejects.toThrow(/uncertain outcome/);
+    await expect(harness.resumeApprovedTool("destination.write")).rejects.toThrow(
+      /uncertain outcome/,
+    );
 
     expect(first).toEqual({ executed: true, result: { ok: true, written: true } });
     expect(harness.getStatus()).toBe("executing");

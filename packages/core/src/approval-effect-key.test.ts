@@ -8,9 +8,10 @@ describe("stableJsonValue", () => {
 });
 
 describe("approvalEffectKey", () => {
-  it("includes run, tool, and canonical args", () => {
-    expect(approvalEffectKey("run-1", "destination.write", { body: "x" })).toBe(
-      'run-1:destination.write:{"body":"x"}',
-    );
+  it("includes run and tool with an opaque digest of canonical args", () => {
+    const key = approvalEffectKey("run-1", "destination.write", { body: "private draft" });
+
+    expect(key).toMatch(/^run-1:destination\.write:[a-f0-9]{64}$/);
+    expect(key).not.toContain("private draft");
   });
 });

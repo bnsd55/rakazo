@@ -109,8 +109,31 @@ export async function answerRunInput(
     const pendingAsk = parsed.data.find(
       (block) => block.kind === "ask" && block.status !== "answered",
     );
-    if (!pendingAsk) return null;
+    if (pendingAsk?.kind !== "ask") return null;
     const approvalAsk = isApprovalAskBlock(pendingAsk);
+    let approvalEffect: { id: string; kind: string } | null = null;
+    let approvalUserId: string | null = null;
+
+    if (approvalAsk) {
+      if (!pendingAsk.actions?.some((action) => action.id === input.answer)) return null;
+      approvalEffect = await tx.externalEffect.findFirst({
+        where: {
+          id: pendingAsk.approvalEffectId,
+          workspaceId: input.workspaceId,
+          runId: input.runId,
+          status: "intended",
+        },
+      });
+      if (!approvalEffect) return null;
+      if (input.answer === "always") {
+        const run = await tx.run.findUnique({
+          where: { id: input.runId },
+          select: { userId: true },
+        });
+        if (!run) return null;
+        approvalUserId = run.userId;
+      }
+    }
 
     const queued = await tx.run.updateMany({
       where: {
@@ -125,37 +148,28 @@ export async function answerRunInput(
     if (queued.count !== 1) return null;
 
     if (approvalAsk) {
-      const effect = await tx.externalEffect.findFirst({
-        where: { runId: input.runId, status: "intended" },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!effect) return null;
       const allowed = input.answer === "allow" || input.answer === "always";
       await tx.externalEffect.update({
-        where: { id: effect.id },
+        where: { id: approvalEffect!.id },
         data: { status: allowed ? "approved" : "denied" },
       });
       if (input.answer === "always") {
-        const run = await tx.run.findUnique({
-          where: { id: input.runId },
-          select: { userId: true },
-        });
-        if (!run) return null;
         await tx.actionApprovalRule.upsert({
           where: {
-            workspaceId_effect_matchKind_matchValue: {
+            workspaceId_createdByUserId_effect_matchKind_matchValue: {
               workspaceId: input.workspaceId,
+              createdByUserId: approvalUserId!,
               effect: "always_allow",
               matchKind: "tool",
-              matchValue: effect.kind,
+              matchValue: approvalEffect!.kind,
             },
           },
           create: {
             workspaceId: input.workspaceId,
-            createdByUserId: run.userId,
+            createdByUserId: approvalUserId!,
             effect: "always_allow",
             matchKind: "tool",
-            matchValue: effect.kind,
+            matchValue: approvalEffect!.kind,
           },
           update: {},
         });

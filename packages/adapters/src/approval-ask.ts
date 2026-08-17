@@ -1,42 +1,27 @@
 import type { MessageBlock } from "@rakazo/contracts";
 import { redactSecrets } from "@rakazo/core";
 
-const BUILTIN_TOOL_NAMES = new Set([
-  "computer_observe",
-  "computer_act",
-  "list_files",
-  "read_file",
-  "write_file",
-  "shell",
-  "open_path",
-  "launch_app",
-  "remember",
-  "request_takeover",
-  "run_subagent",
-  "spawn_bot",
-  "archive_bot",
-  "delete_bot",
-]);
-
-export function resolvesViaConnector(toolName: string): boolean {
-  return !BUILTIN_TOOL_NAMES.has(toolName);
-}
+const MAX_APPROVAL_SUMMARY_LENGTH = 500;
+const MAX_APPROVAL_DETAIL_LENGTH = 4_000;
 
 export function buildApprovalAskBlock(
+  effectId: string,
   toolName: string,
   args: Record<string, unknown>,
   secrets: string[],
 ): MessageBlock {
   const summary = describeApprovalAction(toolName, args);
-  const detail = formatApprovalDetail(args, secrets);
+  const detail = formatApprovalDetail(args);
+  const safeDetail = detail ? redactSecrets(detail, secrets) : undefined;
   return {
     kind: "ask",
-    text: redactSecrets(`Review before ${summary}`, secrets),
-    detail: detail ? redactSecrets(detail, secrets) : undefined,
+    approvalEffectId: effectId,
+    text: truncate(redactSecrets(`Review before ${summary}`, secrets), MAX_APPROVAL_SUMMARY_LENGTH),
+    detail: safeDetail ? truncate(safeDetail, MAX_APPROVAL_DETAIL_LENGTH) : undefined,
     status: "pending",
     actions: [
       { id: "allow", label: "Allow once" },
-      { id: "always", label: "Always allow" },
+      { id: "always", label: "Always allow this tool" },
       { id: "deny", label: "Deny" },
     ],
   };
@@ -56,10 +41,7 @@ function describeApprovalAction(toolName: string, args: Record<string, unknown>)
   return target ? `${toolName} → ${target}` : toolName;
 }
 
-function formatApprovalDetail(
-  args: Record<string, unknown>,
-  secrets: string[],
-): string | undefined {
+function formatApprovalDetail(args: Record<string, unknown>): string | undefined {
   const lines: string[] = [];
   for (const key of ["collection", "title", "to", "subject", "amount", "body"]) {
     const value = args[key];
@@ -67,7 +49,7 @@ function formatApprovalDetail(
     lines.push(`${key}: ${String(value)}`);
   }
   if (lines.length === 0) return undefined;
-  return redactSecrets(lines.join("\n"), secrets);
+  return lines.join("\n");
 }
 
 function pickScopeLabel(args: Record<string, unknown>): string | undefined {
@@ -76,4 +58,8 @@ function pickScopeLabel(args: Record<string, unknown>): string | undefined {
     if (value != null && value !== "") return String(value);
   }
   return undefined;
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
 }

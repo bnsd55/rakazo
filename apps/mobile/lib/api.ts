@@ -165,6 +165,7 @@ export type MobileMessage = {
   blocks: Array<{
     kind: string;
     text?: string;
+    approvalEffectId?: string;
     detail?: string;
     state?: string;
     name?: string;
