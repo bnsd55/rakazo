@@ -1,6 +1,5 @@
 import { type Sandbox, TimeoutError } from "@e2b/desktop";
 import { describe, expect, it, vi } from "vitest";
-import { withComputerScreenAvailability } from "./computer-screens.js";
 import { shouldSkipPortableWorkspaceFile } from "./computer-workspace.js";
 import { E2BSandboxProvider, type E2BSandboxSdk } from "./e2b-sandbox.js";
 
@@ -273,11 +272,29 @@ describe("E2B computer backend", () => {
     expect(streamStop).toHaveBeenCalled();
   });
 
-  it("fails a second Team bot's graphical tools on the shared E2B display", async () => {
+  it("gives Team bots distinct E2B screens and shared files", async () => {
     const files = new Map<string, Uint8Array>();
+    const command = vi.fn(async (value: string) => {
+      if (value.includes("command -v Xvfb")) return { stdout: "", stderr: "", exitCode: 0 };
+      if (value.includes("Xvfb :2")) return { stdout: "", stderr: "", exitCode: 0 };
+      if (value.includes("scrot") || value.includes("import")) {
+        return {
+          stdout: `${Buffer.from([137, 80, 78, 71]).toString("base64")}\nCURSOR X=3 Y=4`,
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (value.includes("xdotool")) return { stdout: "", stderr: "", exitCode: 0 };
+      if (value.includes("pkill -x x11vnc")) {
+        throw new Error("global x11vnc kill is forbidden");
+      }
+      return { stdout: "shell-ok\n", stderr: "", exitCode: 0 };
+    });
     const desktop = {
       sandboxId: "e2b-shared",
-      commands: { run: vi.fn(async () => ({ stdout: "shell-ok\n", stderr: "", exitCode: 0 })) },
+      display: ":0",
+      getHost: (port: number) => `${port}-desktop.test`,
+      commands: { run: command },
       files: {
         makeDir: vi.fn(async () => undefined),
         write: vi.fn(async (entries: Array<{ path: string; data: ArrayBuffer }>) => {
@@ -304,13 +321,17 @@ describe("E2B computer backend", () => {
         start: vi.fn(async () => undefined),
         stop: vi.fn(async () => undefined),
         getAuthKey: () => "key",
-        getUrl: () => "https://desktop.test/vnc.html",
+        getUrl: () => "https://6080-desktop.test/vnc.html",
       },
       screenshot: vi.fn(async () => new Uint8Array([137, 80, 78, 71])),
       getScreenSize: vi.fn(async () => ({ width: 1280, height: 800 })),
       getCursorPosition: vi.fn(async () => ({ x: 1, y: 1 })),
       getCurrentWindowId: vi.fn(async () => "1"),
       getWindowTitle: vi.fn(async () => "Desk"),
+      leftClick: vi.fn(async () => undefined),
+      moveMouse: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+      wait: vi.fn(async () => undefined),
     };
     const provider = new E2BSandboxProvider("e2b_test", {
       create: vi.fn(async () => desktop as never),
@@ -320,41 +341,60 @@ describe("E2B computer backend", () => {
     const computer = await provider.provision({ botId: "team-home", homePath: "/tmp" }, context);
     const writer = { ...context, botId: "writer" };
     const researcher = { ...context, botId: "researcher" };
+
     await provider.observe(computer, writer);
-    await expect(provider.connectScreen(computer, { view: "stream" }, researcher)).resolves.toEqual(
-      expect.objectContaining({ url: expect.stringContaining("vnc.html") }),
+    await provider.observe(computer, researcher);
+    const writerView = await provider.connectScreen(computer, { view: "stream" }, writer);
+    const researcherView = await provider.connectScreen(computer, { view: "stream" }, researcher);
+    expect(writerView.url).toContain("6080-desktop.test");
+    expect(researcherView.url).toContain("6082-desktop.test");
+    expect(writerView.url).not.toBe(researcherView.url);
+    expect(command.mock.calls.some(([value]) => String(value).includes("Xvfb :2"))).toBe(true);
+    expect(command.mock.calls.some(([value]) => String(value).includes("pkill -x x11vnc"))).toBe(
+      false,
     );
-    await expect(provider.observe(computer, writer)).resolves.toMatchObject({
-      activeWindow: { title: "Desk" },
-    });
-    await expect(provider.observe(computer, researcher)).rejects.toThrow(
-      /does not support multiple screens/,
+
+    await provider.act(
+      computer,
+      { actions: [{ kind: "pointer", type: "click", x: 1, y: 2 }], observe: false },
+      researcher,
     );
-    const refused = await withComputerScreenAvailability(() =>
-      provider.observe(computer, researcher),
+    expect(command.mock.calls.some(([value]) => String(value).includes("DISPLAY=:2 xdotool"))).toBe(
+      true,
     );
-    expect(refused).toEqual({ error: expect.stringMatching(/does not support multiple screens/) });
+    expect(desktop.moveMouse).not.toHaveBeenCalled();
+
+    const control = await provider.connectScreen(
+      computer,
+      { view: "stream", interactive: true, controlToken: "lease-1" },
+      researcher,
+    );
+    expect(control.url).toMatch(/6083-desktop\.test/);
+    expect(
+      command.mock.calls.some(([value]) => String(value).includes("-rfbport 5903")),
+    ).toBe(true);
+
     await provider.writeFile(
       computer,
       { path: "shared/note.txt", content: new TextEncoder().encode("office") },
       researcher,
     );
     expect(
-      new TextDecoder().decode(await provider.readFile(computer, "shared/note.txt", researcher)),
+      new TextDecoder().decode(await provider.readFile(computer, "shared/note.txt", writer)),
     ).toBe("office");
-    const events: Array<{ type: string; data?: string; code?: number }> = [];
-    for await (const event of provider.execute(
-      computer,
-      { argv: ["echo", "shell-ok"] },
-      researcher,
-    )) {
-      events.push(event);
-    }
-    expect(events).toContainEqual({ type: "exit", code: 0 });
+
     await provider.releaseScreen(computer, writer);
     await expect(provider.observe(computer, researcher)).resolves.toMatchObject({
-      activeWindow: { title: "Desk" },
+      width: 1280,
+      height: 800,
     });
-    expect(provider.describe().capabilities.multiScreen).toBe(false);
+    expect(provider.describe().capabilities.multiScreen).toBe(true);
+
+    for (let index = 0; index < 7; index += 1) {
+      await provider.observe(computer, { ...context, botId: `bot-${index + 2}` });
+    }
+    await expect(provider.observe(computer, { ...context, botId: "bot-9" })).rejects.toThrow(
+      /does not support multiple screens/,
+    );
   });
 });

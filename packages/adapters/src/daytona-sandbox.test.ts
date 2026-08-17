@@ -204,6 +204,78 @@ describe("DaytonaSandboxProvider", () => {
     await expect(provider.stop(computer, context)).rejects.toThrow("temporary Daytona outage");
     await expect(provider.stop(computer, context)).resolves.toBeUndefined();
   });
+
+  it("gives Team bots distinct Daytona previews without a second computerUse.start", async () => {
+    const fixture = daytonaFixture();
+    const provider = new DaytonaSandboxProvider({ apiKey: "test-key" }, fixture.client);
+    const computer = await provider.provision({ botId: "team-home", homePath: "/unused" }, context);
+    await provider.prepare(computer, context);
+    const writer = { ...context, botId: "writer" };
+    const researcher = { ...context, botId: "researcher" };
+
+    fixture.getSignedPreviewUrl.mockImplementation(async (port: number) => ({
+      url: `https://${port}-preview.proxy.daytona.test`,
+      token: `token-${port}`,
+    }));
+    fixture.executeCommand.mockImplementation(async (command: string) => {
+      if (command.includes("command -v Xvfb")) return { exitCode: 0, result: "" };
+      if (command.includes("Xvfb :2")) return { exitCode: 0, result: "" };
+      if (command.includes("scrot") || command.includes("import")) {
+        return {
+          exitCode: 0,
+          result: `${Buffer.from([1, 2, 3]).toString("base64")}\nCURSOR X=1 Y=2`,
+        };
+      }
+      if (command.includes("xdotool")) return { exitCode: 0, result: "" };
+      return { exitCode: 0, result: "" };
+    });
+
+    await provider.observe(computer, writer);
+    await provider.observe(computer, researcher);
+    const writerView = await provider.connectScreen(
+      computer,
+      { view: "stream", interactive: false },
+      writer,
+    );
+    const researcherView = await provider.connectScreen(
+      computer,
+      { view: "stream", interactive: false },
+      researcher,
+    );
+    expect(writerView.url).toContain("6080-preview");
+    expect(researcherView.url).toContain("6082-preview");
+    expect(fixture.computerUse.start).toHaveBeenCalledTimes(1);
+    expect(fixture.click).not.toHaveBeenCalled();
+
+    await provider.act(
+      computer,
+      { actions: [{ kind: "pointer", type: "click", x: 4, y: 5 }], observe: false },
+      researcher,
+    );
+    expect(fixture.executeCommand.mock.calls.some(([command]) => command.includes("DISPLAY=:2"))).toBe(
+      true,
+    );
+    expect(fixture.click).not.toHaveBeenCalled();
+
+    await provider.releaseScreen(computer, writer);
+    await expect(provider.observe(computer, researcher)).resolves.toMatchObject({
+      width: 1280,
+      height: 800,
+    });
+
+    const researcherControl = await provider.connectScreen(
+      computer,
+      { view: "stream", interactive: true, controlToken: "lease-1" },
+      researcher,
+    );
+    expect(researcherControl.url).toContain("6083-preview");
+    expect(researcherControl.url).not.toContain("6082-preview");
+    expect(
+      fixture.executeCommand.mock.calls.some(([command]) => String(command).includes("-rfbport 5903")),
+    ).toBe(true);
+
+    expect(provider.describe().capabilities.multiScreen).toBe(true);
+  });
 });
 
 function daytonaFixture(options: { id?: string; state?: string; prepareFails?: boolean } = {}) {
@@ -247,6 +319,7 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
   const deleteSandbox = vi.fn(async () => undefined);
   const expireSignedPreviewUrl = vi.fn(async () => undefined);
   const drag = vi.fn(async () => ({}));
+  const click = vi.fn(async () => ({}));
   const press = vi.fn(async () => undefined);
   const type = vi.fn(async () => undefined);
   const scroll = vi.fn(async () => true);
@@ -277,7 +350,7 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
       mouse: {
         getPosition: vi.fn(async () => ({ x: 10, y: 20 })),
         move: vi.fn(async () => ({ x: 10, y: 20 })),
-        click: vi.fn(async () => ({})),
+        click,
         drag,
         scroll,
       },
@@ -303,12 +376,14 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
     create,
     get,
     executeCommand,
+    computerUse: sandbox.computerUse,
     start,
     stop,
     deleteSandbox,
     getSignedPreviewUrl: sandbox.getSignedPreviewUrl,
     expireSignedPreviewUrl,
     drag,
+    click,
     press,
     type,
     scroll,

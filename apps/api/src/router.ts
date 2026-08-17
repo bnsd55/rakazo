@@ -650,7 +650,24 @@ export function createRouter(deps: RouterDeps) {
           };
         }
         if (hasActiveComputerControl(bot.computer) && bot.computer.controlBotId !== bot.id) {
-          throw new ORPCError("CONFLICT", { message: "Another screen is already in control" });
+          const previousBotId = bot.computer.controlBotId!;
+          await deps.sandbox.setScreenControl?.(
+            toComputerRef(bot.computer),
+            false,
+            computerContext(context.actor, previousBotId, "screen.release"),
+            bot.computer.controlLeaseId ?? undefined,
+          );
+          await deps.prisma.computer.updateMany({
+            where: { id: bot.computer.id, controlLeaseId: bot.computer.controlLeaseId },
+            data: {
+              controlHolder: "none",
+              controlLeaseId: null,
+              controlLeaseExpiresAt: null,
+              controlBotId: null,
+            },
+          });
+          bot = await repos.getBot(context.actor, input.botId);
+          if (!bot.computer) throw new IsolationError();
         }
         if (bot.computer.controlLeaseId) {
           await expireComputerControl(deps, bot.computer.id, bot.computer.controlLeaseId);
@@ -1563,6 +1580,7 @@ function toComputerStatus(
     state: string;
     scope: string;
     controlHolder: string;
+    controlBotId?: string | null;
     homeRevision: string;
     executionBotId: string | null;
     executionLeaseExpiresAt: Date | null;
@@ -1585,6 +1603,7 @@ function toComputerStatus(
     kind: (computer?.kind ?? "fake") as ComputerStatus["kind"],
     state,
     controlHolder: (computer?.controlHolder ?? "none") as ComputerStatus["controlHolder"],
+    controlBotId: computer?.controlBotId ?? null,
     screenAvailable: state === "running" || state === "booting",
     homeRevision: computer?.homeRevision ?? null,
     busyBotName: computer && isComputerBusyForBot(computer, botId) ? busyBotName : null,
