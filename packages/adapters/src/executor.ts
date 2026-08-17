@@ -13,6 +13,7 @@ import type {
 import { routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock, RunStatus } from "@rakazo/contracts";
 import {
+  approvalEffectKey,
   assertTransition,
   containsSecret,
   createStreamingRedactor,
@@ -21,6 +22,7 @@ import {
   nextFence,
   redactSecrets,
   sandboxCommandTimeoutMs,
+  toolRequiresApproval,
 } from "@rakazo/core";
 import {
   createThreadMessage,
@@ -28,6 +30,12 @@ import {
   parseComputerMode,
   type ThreadEvents,
 } from "@rakazo/db";
+import { buildApprovalAskBlock, resolvesViaConnector } from "./approval-ask.js";
+import {
+  approvalPausedToolResult,
+  isApprovalPausedResult,
+  resolveDuplicateEffectGate,
+} from "./approval-effect.js";
 import { builtinAgentTools } from "./builtin-tools.js";
 import { archiveSpawnedBot, spawnBot } from "./child-bots.js";
 import { collectLogIds } from "./composio-connector.js";
@@ -351,6 +359,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         let lastProgressAt = 0;
         let lastComputerFrameId: string | undefined;
         let terminalCheckpointComplete = false;
+        let approvalPausePending = false;
         const progressRedactor = createStreamingRedactor(runSecrets);
         const scripted = deps.runtime.describe().capabilities.scripted;
         const script = scripted
@@ -365,21 +374,64 @@ export function createRunExecutor(deps: ExecutorDeps) {
           return result;
         };
 
+        const pauseForApproval = () => {
+          approvalPausePending = true;
+          return approvalPausedToolResult();
+        };
+
         const applyTool = async (
           name: string,
           args: Record<string, unknown>,
           executionId: string,
         ) => {
+          const viaConnector = resolvesViaConnector(name);
+          const needsApproval = toolRequiresApproval(name, viaConnector);
+          const effectKey = needsApproval ? approvalEffectKey(runId, name, args) : executionId;
           const applied = READ_ONLY_AGENT_TOOLS.has(name)
             ? undefined
-            : await recordEffect(deps, run, name, executionId, args);
+            : await recordEffect(deps, run, name, effectKey, args);
           if (applied?.duplicate) {
-            if (applied.effect.status === "completed") {
-              return applied.effect.result ?? { duplicate: true };
-            }
-            if (name !== "spawn_bot" && name !== "archive_bot" && name !== "delete_bot") {
+            const gate = resolveDuplicateEffectGate(applied.effect, name);
+            if (gate.action === "return") return gate.result;
+            if (gate.action === "paused") {
+              const current = await deps.prisma.run.findUnique({
+                where: { id: runId },
+                select: { status: true },
+              });
+              if (current?.status === "waiting_input") {
+                return pauseForApproval();
+              }
               throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
             }
+            if (gate.action === "uncertain") {
+              throw new Error(
+                `tool ${gate.toolName} has an earlier execution with an uncertain outcome`,
+              );
+            }
+          } else if (needsApproval && applied) {
+            if (!(await renewRunLease(deps, runId, workerId, fence))) {
+              return pauseForApproval();
+            }
+            await checkpointAndRecordComputerWorkspace(deps, storedComputer, computer, context);
+            const paused = await deps.events.pauseRunForInput({
+              workspaceId: run.workspaceId,
+              threadId: run.threadId,
+              botId: run.botId,
+              runId,
+              attemptId: attempt.id,
+              leaseOwner: workerId,
+              leaseFence: fence,
+              blocks: [buildApprovalAskBlock(name, args, runSecrets)],
+            });
+            if (!paused) return pauseForApproval();
+            await notifyRun(deps, run, {
+              kind: "help",
+              title: `${bot.name} needs approval`,
+              body: `Review before ${name}`,
+              botId: bot.id,
+              threadId: thread.id,
+            });
+            return pauseForApproval();
           }
           const finish = async (result: unknown) => {
             if (applied) await completeEffect(deps, applied.effect.id, result);
@@ -704,6 +756,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             },
             context,
           )) {
+            if (approvalPausePending) return;
             if (!leaseValid) return;
             const now = Date.now();
             if (now - lastLeaseCheckAt >= 1_000) {
@@ -835,7 +888,10 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 runId,
                 payload: { name: event.name, executionId: event.executionId },
               });
-              if (scripted) await applyTool(event.name, event.args, event.executionId);
+              if (scripted) {
+                const result = await applyTool(event.name, event.args, event.executionId);
+                if (isApprovalPausedResult(result)) return;
+              }
             } else if (event.type === "subagent") {
               const safeTask = redactSecrets(event.task, runSecrets);
               const safeProgress = event.progress
@@ -887,6 +943,8 @@ export function createRunExecutor(deps: ExecutorDeps) {
               assembled = assembled || event.text || assembled;
             }
           }
+
+          if (approvalPausePending) return;
 
           for (const turn of script ?? []) {
             for (const file of turn.files ?? []) {

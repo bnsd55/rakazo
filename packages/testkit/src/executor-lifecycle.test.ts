@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { approvalEffectKey } from "@rakazo/core";
 import { createThreadEvents } from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -89,8 +90,10 @@ describeIntegration("run executor lifecycle", () => {
   });
 
   it("fails closed when a retried external effect has an uncertain outcome", async () => {
-    const seeded = await seedRun("uncertain-effect", "write this to the destination crm as a note");
-    const executionId = `${seeded.run.id}:destination.write`;
+    const prompt = "write this to the destination crm as a note";
+    const seeded = await seedRun("uncertain-effect", prompt);
+    const args = { collection: "notes", title: "Rakazo result", body: prompt };
+    const executionId = approvalEffectKey(seeded.run.id, "destination.write", args);
     await handles.prisma.externalEffect.create({
       data: {
         workspaceId: seeded.me.workspaceId,
@@ -98,7 +101,7 @@ describeIntegration("run executor lifecycle", () => {
         kind: "destination.write",
         idempotencyKey: executionId,
         status: "intended",
-        request: { collection: "notes", title: "Result", body: "unknown" },
+        request: args,
       },
     });
     const recordsBefore = handles.connector.records.length;

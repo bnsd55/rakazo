@@ -4,6 +4,7 @@ import {
   MessageBlock as MessageBlockSchema,
   type ProductEvent,
 } from "@rakazo/contracts";
+import { isApprovalAskBlock } from "@rakazo/core";
 import type { Prisma, PrismaClient } from "./client.js";
 import { createThreadMessageInTransaction } from "./messages.js";
 
@@ -109,6 +110,7 @@ export async function answerRunInput(
       (block) => block.kind === "ask" && block.status !== "answered",
     );
     if (!pendingAsk) return null;
+    const approvalAsk = isApprovalAskBlock(pendingAsk);
 
     const queued = await tx.run.updateMany({
       where: {
@@ -122,11 +124,24 @@ export async function answerRunInput(
     });
     if (queued.count !== 1) return null;
 
-    const task = await tx.task.updateMany({
-      where: { runs: { some: { id: input.runId } } },
-      data: { prompt: input.answer },
-    });
-    if (task.count !== 1) throw new Error("Run task was not available to answer");
+    if (approvalAsk) {
+      const effect = await tx.externalEffect.findFirst({
+        where: { runId: input.runId, status: "intended" },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!effect) return null;
+      const allowed = input.answer === "allow";
+      await tx.externalEffect.update({
+        where: { id: effect.id },
+        data: { status: allowed ? "approved" : "denied" },
+      });
+    } else {
+      const task = await tx.task.updateMany({
+        where: { runs: { some: { id: input.runId } } },
+        data: { prompt: input.answer },
+      });
+      if (task.count !== 1) throw new Error("Run task was not available to answer");
+    }
 
     const blocks = parsed.data.map((block) =>
       block === pendingAsk

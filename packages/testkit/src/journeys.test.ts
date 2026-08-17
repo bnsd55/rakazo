@@ -889,6 +889,103 @@ describeJourneys("required product journeys", () => {
       )?.status,
     ).toBe("revoked");
   });
+
+  it("17: destination writes pause for approval before side effects", async () => {
+    const cookie = await signup(app, `approval-j-${stamp}@rakazo.test`, "Approval");
+    const bot = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Chief",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const recordsBefore = connector.records.length;
+
+    const sent = await rpc<{ runId: string }>(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "write this to the destination crm as a note",
+    });
+    const waiting = await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => snap.run?.status === "waiting_input",
+    );
+    expect(JSON.stringify(waiting.messages)).toMatch(/allow once|review before/i);
+    expect(connector.records).toHaveLength(recordsBefore);
+    const askMessage = waiting.messages.find((message) =>
+      message.blocks.some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          "kind" in block &&
+          block.kind === "ask" &&
+          "actions" in block &&
+          Array.isArray(block.actions),
+      ),
+    );
+    expect(askMessage).toBeTruthy();
+
+    await rpc(app, cookie, "threads/answer", {
+      botId: bot.id,
+      runId: sent.runId,
+      messageId: (askMessage as { id: string }).id,
+      answer: "allow",
+    });
+    await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    expect(connector.records.length).toBeGreaterThan(recordsBefore);
+
+    const task = await prisma.task.findFirstOrThrow({
+      where: { runs: { some: { id: sent.runId } } },
+    });
+    expect(task.prompt).toBe("write this to the destination crm as a note");
+
+    const recordsAfterAllow = connector.records.length;
+    const second = await rpc<{ runId: string }>(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "write this to the destination crm as a note again",
+    });
+    const waitingAgain = await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => snap.run?.status === "waiting_input",
+    );
+    expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
+    const denyMessage = waitingAgain.messages.find((message) =>
+      message.blocks.some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          "kind" in block &&
+          block.kind === "ask" &&
+          "actions" in block,
+      ),
+    );
+    await rpc(app, cookie, "threads/answer", {
+      botId: bot.id,
+      runId: second.runId,
+      messageId: (denyMessage as { id: string }).id,
+      answer: "deny",
+    });
+    const denied = await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    expect(connector.records).toHaveLength(recordsAfterAllow);
+    expect(denied.run?.status ?? "completed").toBe("completed");
+    const deniedEffect = await prisma.externalEffect.findFirst({
+      where: { runId: second.runId, kind: "destination.write" },
+    });
+    expect(deniedEffect?.status).toBe("denied");
+  });
 });
 
 type Me = { workspaceId: string; userId: string; canChooseHostComputer: boolean };
