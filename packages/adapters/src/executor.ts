@@ -15,14 +15,17 @@ import type { MessageBlock, RunStatus } from "@rakazo/contracts";
 import {
   approvalEffectKey,
   assertTransition,
+  connectorKindFromToolName,
   containsSecret,
   createStreamingRedactor,
   isTerminal,
   nextCronDate,
   nextFence,
   redactSecrets,
+  resolveActionApproval,
   sandboxCommandTimeoutMs,
   toolRequiresApproval,
+  type ActionApprovalRule,
 } from "@rakazo/core";
 import {
   createThreadMessage,
@@ -34,6 +37,7 @@ import { buildApprovalAskBlock, resolvesViaConnector } from "./approval-ask.js";
 import {
   approvalPausedToolResult,
   claimApprovedEffect,
+  claimIntendedEffect,
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
 } from "./approval-effect.js";
@@ -269,7 +273,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
 
       const runSecrets = [...deps.secrets];
       try {
-        const [bot, thread, messages, task, connectedPlugins, credential, settings] =
+        const [bot, thread, messages, task, connectedPlugins, credential, settings, approvalRules] =
           await Promise.all([
             deps.prisma.bot.findUniqueOrThrow({
               where: { id: run.botId },
@@ -291,6 +295,10 @@ export function createRunExecutor(deps: ExecutorDeps) {
               where: { userId: run.userId, workspaceId: run.workspaceId, isDefault: true },
             }),
             deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
+            deps.prisma.actionApprovalRule.findMany({
+              where: { workspaceId: run.workspaceId },
+              select: { effect: true, matchKind: true, matchValue: true },
+            }),
           ]);
         runAbortController = new AbortController();
         if (!leaseValid) runAbortController.abort();
@@ -386,39 +394,61 @@ export function createRunExecutor(deps: ExecutorDeps) {
           executionId: string,
         ) => {
           const viaConnector = resolvesViaConnector(name);
-          const needsApproval = toolRequiresApproval(name, viaConnector);
-          const effectKey = needsApproval ? approvalEffectKey(runId, name, args) : executionId;
+          const approvalDecision = resolveActionApproval({
+            toolName: name,
+            viaConnector,
+            connectorKind: connectorKindFromToolName(name),
+            rules: approvalRules as ActionApprovalRule[],
+          });
+          const needsApproval = approvalDecision === "ask";
+          const bypassApproval = approvalDecision === "allow" && toolRequiresApproval(name, viaConnector);
+          const effectKey = toolRequiresApproval(name, viaConnector)
+            ? approvalEffectKey(runId, name, args)
+            : executionId;
           const applied = READ_ONLY_AGENT_TOOLS.has(name)
             ? undefined
             : await recordEffect(deps, run, name, effectKey, args);
+
+          const claimOrReturn = async (
+            from: "approved" | "intended",
+          ): Promise<unknown | undefined> => {
+            const claim = from === "approved" ? claimApprovedEffect : claimIntendedEffect;
+            if (await claim(deps.prisma, applied!.effect.id)) return undefined;
+            const current = await deps.prisma.externalEffect.findUnique({
+              where: { id: applied!.effect.id },
+            });
+            if (current) {
+              const retryGate = resolveDuplicateEffectGate(current, name);
+              if (retryGate.action === "return") return retryGate.result;
+            }
+            throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
+          };
+
           if (applied?.duplicate) {
             const gate = resolveDuplicateEffectGate(applied.effect, name);
             if (gate.action === "return") return gate.result;
             if (gate.action === "paused") {
-              const current = await deps.prisma.run.findUnique({
-                where: { id: runId },
-                select: { status: true },
-              });
-              if (current?.status === "waiting_input") {
-                return pauseForApproval();
+              if (bypassApproval) {
+                const early = await claimOrReturn("intended");
+                if (early !== undefined) return early;
+              } else {
+                const current = await deps.prisma.run.findUnique({
+                  where: { id: runId },
+                  select: { status: true },
+                });
+                if (current?.status === "waiting_input") {
+                  return pauseForApproval();
+                }
+                throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
               }
-              throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
             }
             if (gate.action === "uncertain") {
               throw new Error(
                 `tool ${gate.toolName} has an earlier execution with an uncertain outcome`,
               );
             }
-            if (!(await claimApprovedEffect(deps.prisma, applied.effect.id))) {
-              const current = await deps.prisma.externalEffect.findUnique({
-                where: { id: applied.effect.id },
-              });
-              if (current) {
-                const retryGate = resolveDuplicateEffectGate(current, name);
-                if (retryGate.action === "return") return retryGate.result;
-              }
-              throw new Error(`tool ${name} has an earlier execution with an uncertain outcome`);
-            }
+            const early = await claimOrReturn("approved");
+            if (early !== undefined) return early;
           } else if (needsApproval && applied) {
             if (!(await renewRunLease(deps, runId, workerId, fence))) {
               return pauseForApproval();
@@ -443,6 +473,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
               threadId: thread.id,
             });
             return pauseForApproval();
+          } else if (bypassApproval && applied) {
+            const early = await claimOrReturn("intended");
+            if (early !== undefined) return early;
           }
           const finish = async (result: unknown) => {
             if (applied) await completeEffect(deps, applied.effect.id, result);

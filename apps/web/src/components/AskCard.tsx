@@ -45,9 +45,11 @@ export function AskCard({
             ? approvalActions
               ? block.answer === "allow"
                 ? "Allowed once"
-                : block.answer === "deny"
-                  ? "Denied"
-                  : `Answered: ${block.answer}`
+                : block.answer === "always"
+                  ? "Always allowed"
+                  : block.answer === "deny"
+                    ? "Denied"
+                    : `Answered: ${block.answer}`
               : `Answered: ${block.answer}`
             : "Answered"}
         </div>

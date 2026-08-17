@@ -36,6 +36,7 @@ export function buildApprovalAskBlock(
     status: "pending",
     actions: [
       { id: "allow", label: "Allow once" },
+      { id: "always", label: "Always allow" },
       { id: "deny", label: "Deny" },
     ],
   };

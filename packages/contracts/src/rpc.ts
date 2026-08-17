@@ -8,6 +8,7 @@ import {
   ComputerStatusSchema,
   ConnectionCatalogItemSchema,
   ConnectionSchema,
+  ActionApprovalRuleSchema,
   CreateBotInput,
   CreateRoutineInput,
   DeploymentSettingsSchema,
@@ -218,6 +219,19 @@ export const appContract = {
       .input(z.object({ connectionId: Id, code: z.string().optional() }))
       .output(ConnectionSchema),
     revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
+  },
+  approvalRules: {
+    list: oc.output(z.array(ActionApprovalRuleSchema)),
+    set: oc
+      .input(
+        z.object({
+          effect: z.enum(["always_allow", "require_approval"]),
+          matchKind: z.enum(["tool", "connector", "category"]),
+          matchValue: z.string().min(1),
+        }),
+      )
+      .output(ActionApprovalRuleSchema),
+    remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
   },
   artifacts: {
     list: oc.input(botId).output(z.array(ArtifactSchema)),

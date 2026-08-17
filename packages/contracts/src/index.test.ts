@@ -15,6 +15,9 @@ describe("contracts", () => {
     expect(appContract.bots.archive).toBeTruthy();
     expect(appContract.bots.restore).toBeTruthy();
     expect(appContract.bots.remove).toBeTruthy();
+    expect(appContract.approvalRules.list).toBeTruthy();
+    expect(appContract.approvalRules.set).toBeTruthy();
+    expect(appContract.approvalRules.remove).toBeTruthy();
     expect(appContract.threads.subscribe).toBeTruthy();
     expect(appContract.notifications.registerPush).toBeTruthy();
     expect(ProductEventType.options).toContain("thread.message.created");

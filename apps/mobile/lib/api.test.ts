@@ -242,7 +242,7 @@ describe("mobile thread event reduction", () => {
   });
 
   it("applies the durable waiting-input run transition", () => {
-    const initial: MobileSnapshot = { ...snapshot(), run: { status: "running" } };
+    const initial: MobileSnapshot = { ...snapshot(), run: { id: "run-1", status: "running" } };
     const waiting = applyMobileThreadEvent(initial, {
       type: "run.waiting_input",
       runId: "run-1",
@@ -252,6 +252,33 @@ describe("mobile thread event reduction", () => {
     expect(applyMobileThreadEvent(waiting, { type: "run.waiting_input", runId: "run-1" })).toBe(
       waiting,
     );
+  });
+
+  it("preserves ask actions and runId on created messages", () => {
+    const initial = snapshot();
+    const askBlock = {
+      kind: "ask",
+      text: "Review before writing",
+      detail: "title: Result",
+      status: "pending",
+      actions: [
+        { id: "allow", label: "Allow once" },
+        { id: "always", label: "Always allow" },
+        { id: "deny", label: "Deny" },
+      ],
+    };
+
+    const next = applyMobileThreadEvent(initial, {
+      type: "thread.message.created",
+      runId: "run-1",
+      payload: { messageId: "message-ask", role: "bot", blocks: [askBlock] },
+    });
+
+    expect(next?.messages.at(-1)).toMatchObject({
+      id: "message-ask",
+      runId: "run-1",
+      blocks: [askBlock],
+    });
   });
 
   it("leaves the snapshot unchanged for unrelated events", () => {

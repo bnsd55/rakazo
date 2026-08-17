@@ -3,6 +3,7 @@ import { abortableDelay } from "@rakazo/core";
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AppState, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { AskActions } from "../components/AskActions";
 import { NativeSymbol } from "../components/native-symbol";
 import {
   applyMobileThreadEvent,
@@ -211,6 +212,18 @@ export default function Thread() {
           >
             <MessageBubble
               message={message}
+              canAnswer={message.id === latestAnswerableAskMessageId(snap)}
+              onAnswer={async (answer) => {
+                const runId = message.runId ?? snap?.run?.id;
+                if (!botId || !runId) return;
+                await rpc("threads/answer", {
+                  botId,
+                  runId,
+                  messageId: message.id,
+                  answer,
+                });
+                await refresh();
+              }}
               onOpenBot={(id, botName) =>
                 router.push({ pathname: "/thread", params: { botId: id, name: botName } })
               }
@@ -262,11 +275,36 @@ export default function Thread() {
   );
 }
 
+function latestAnswerableAskMessageId(snap: MobileSnapshot | null): string | null {
+  if (snap?.run?.status !== "waiting_input") return null;
+  const runId = snap.run.id;
+  for (let index = snap.messages.length - 1; index >= 0; index -= 1) {
+    const message = snap.messages[index];
+    if (!message || (message.runId ?? runId) !== runId) continue;
+    if (
+      message.blocks.some(
+        (block) =>
+          block.kind === "ask" &&
+          block.status !== "answered" &&
+          Array.isArray(block.actions) &&
+          block.actions.length > 0,
+      )
+    ) {
+      return message.id;
+    }
+  }
+  return null;
+}
+
 function MessageBubble({
   message,
+  canAnswer,
+  onAnswer,
   onOpenBot,
 }: {
   message: MobileMessage;
+  canAnswer?: boolean;
+  onAnswer?: (answer: string) => Promise<void>;
   onOpenBot: (botId: string, name: string) => void;
 }) {
   const special = message.blocks.find(
@@ -347,6 +385,58 @@ function MessageBubble({
             : special.title || "Opened its own thread. Tap to switch."}
         </Text>
       </Pressable>
+    );
+  }
+  const askBlock = message.blocks.find(
+    (block) => block.kind === "ask" && Array.isArray(block.actions) && block.actions.length > 0,
+  );
+  if (askBlock?.kind === "ask" && askBlock.actions?.length) {
+    return (
+      <View
+        style={{
+          width: "90%",
+          borderRadius: 18,
+          borderWidth: 1,
+          borderColor: "#232326",
+          backgroundColor: "#17171A",
+          paddingHorizontal: 16,
+          paddingVertical: 14,
+        }}
+      >
+        {askBlock.text ? (
+          <Text style={{ color: "#ECECEE", fontSize: 15.5, lineHeight: 23 }}>{askBlock.text}</Text>
+        ) : null}
+        {askBlock.detail ? (
+          <Text
+            style={{
+              color: "#85858A",
+              marginTop: 8,
+              fontSize: 12.5,
+              fontFamily: "Menlo",
+              lineHeight: 20,
+            }}
+          >
+            {askBlock.detail}
+          </Text>
+        ) : null}
+        {askBlock.status === "answered" ? (
+          <Text style={{ color: "#4ECB71", marginTop: 12, fontSize: 13.5, fontWeight: "600" }}>
+            {askBlock.answer === "allow"
+              ? "Allowed once"
+              : askBlock.answer === "always"
+                ? "Always allowed"
+                : askBlock.answer === "deny"
+                  ? "Denied"
+                  : askBlock.answer
+                    ? `Answered: ${askBlock.answer}`
+                    : "Answered"}
+          </Text>
+        ) : canAnswer && onAnswer ? (
+          <AskActions actions={askBlock.actions} onAnswer={onAnswer} />
+        ) : (
+          <Text style={{ color: "#85858A", marginTop: 12, fontSize: 13.5 }}>No longer active</Text>
+        )}
+      </View>
     );
   }
   return (

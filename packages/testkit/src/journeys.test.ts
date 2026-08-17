@@ -986,6 +986,160 @@ describeJourneys("required product journeys", () => {
     });
     expect(deniedEffect?.status).toBe("denied");
   });
+
+  it("18: always allow skips later pauses until require-approval wins", async () => {
+    const cookie = await signup(app, `always-j-${stamp}@rakazo.test`, "Always");
+    const bot = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Chief",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const prompt = "write this to the destination crm as a note";
+    const recordsBefore = connector.records.length;
+
+    const first = await rpc<{ runId: string }>(app, cookie, "threads/send", { botId: bot.id, text: prompt });
+    const waiting = await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => snap.run?.status === "waiting_input",
+    );
+    const askMessage = waiting.messages.find((message) =>
+      message.blocks.some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          "kind" in block &&
+          block.kind === "ask" &&
+          "actions" in block,
+      ),
+    );
+    await rpc(app, cookie, "threads/answer", {
+      botId: bot.id,
+      runId: first.runId,
+      messageId: (askMessage as { id: string }).id,
+      answer: "always",
+    });
+    await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    expect(connector.records.length).toBeGreaterThan(recordsBefore);
+    const recordsAfterAlways = connector.records.length;
+
+    await rpc(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "write this to the destination crm as a note again",
+    });
+    await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    expect(connector.records.length).toBeGreaterThan(recordsAfterAlways);
+
+    await rpc(app, cookie, "approvalRules/set", {
+      effect: "require_approval",
+      matchKind: "tool",
+      matchValue: "destination.write",
+    });
+    const third = await rpc<{ runId: string }>(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "write this to the destination crm as a note once more",
+    });
+    const waitingAgain = await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => snap.run?.status === "waiting_input",
+    );
+    expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
+    expect(connector.records.length).toBe(recordsAfterAlways + 1);
+    const thirdAsk = waitingAgain.messages.find((message) =>
+      message.blocks.some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          "kind" in block &&
+          block.kind === "ask" &&
+          "actions" in block,
+      ),
+    );
+    await rpc(app, cookie, "threads/answer", {
+      botId: bot.id,
+      runId: third.runId,
+      messageId: (thirdAsk as { id: string }).id,
+      answer: "allow",
+    });
+    await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    expect(connector.records.length).toBe(recordsAfterAlways + 2);
+  });
+
+  it("19: routine destination writes pause on the same approval card", async () => {
+    const cookie = await signup(app, `routine-approval-j-${stamp}@rakazo.test`, "Routine Approval");
+    const bot = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Chief",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const prompt = "write this to the destination crm as a note";
+    const routine = await rpc<{ id: string }>(app, cookie, "routines/create", {
+      botId: bot.id,
+      name: "Send note",
+      prompt,
+      cron: "0 9 * * 1",
+      timezone: "UTC",
+      notify: false,
+      active: false,
+    });
+    const recordsBefore = connector.records.length;
+    const tested = await rpc<{ runId: string }>(app, cookie, "routines/testRun", {
+      routineId: routine.id,
+    });
+    const waiting = await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => snap.run?.status === "waiting_input",
+    );
+    expect(JSON.stringify(waiting.messages)).toMatch(/allow once|review before/i);
+    expect(connector.records).toHaveLength(recordsBefore);
+    const askMessage = waiting.messages.find((message) =>
+      message.blocks.some(
+        (block) =>
+          typeof block === "object" &&
+          block !== null &&
+          "kind" in block &&
+          block.kind === "ask" &&
+          "actions" in block,
+      ),
+    );
+    await rpc(app, cookie, "threads/answer", {
+      botId: bot.id,
+      runId: tested.runId,
+      messageId: (askMessage as { id: string }).id,
+      answer: "allow",
+    });
+    await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    expect(connector.records.length).toBeGreaterThan(recordsBefore);
+  });
 });
 
 type Me = { workspaceId: string; userId: string; canChooseHostComputer: boolean };

@@ -70,3 +70,14 @@ export async function claimApprovedEffect(
   });
   return claimed.count === 1;
 }
+
+export async function claimIntendedEffect(
+  store: ExternalEffectStore,
+  effectId: string,
+): Promise<boolean> {
+  const claimed = await store.externalEffect.updateMany({
+    where: { id: effectId, status: "intended" },
+    data: { status: "executing" },
+  });
+  return claimed.count === 1;
+}

@@ -151,10 +151,12 @@ export type MobileMessage = {
   id: string;
   threadId?: string;
   seq?: number;
+  runId?: string;
   role: "user" | "bot" | "system";
   blocks: Array<{
     kind: string;
     text?: string;
+    detail?: string;
     state?: string;
     name?: string;
     task?: string;
@@ -165,6 +167,7 @@ export type MobileMessage = {
     botId?: string;
     title?: string;
     agentId?: string;
+    actions?: Array<{ id: string; label: string }>;
   }>;
 };
 
@@ -174,7 +177,7 @@ export type MobileSnapshot = {
   cursor?: number;
   messages: MobileMessage[];
   olderCursor: number | null;
-  run: { status: string } | null;
+  run: { id: string; status: string } | null;
   computer: {
     state: string;
     controlHolder: string;
@@ -326,6 +329,7 @@ export function applyMobileThreadEvent(
   if (event.type === "thread.message.created" || event.type === "thread.message.updated") {
     const next: MobileMessage = {
       id: String(event.payload?.messageId ?? event.id ?? `msg:${event.seq ?? 0}`),
+      runId: event.runId ? String(event.runId) : undefined,
       role: (event.payload?.role as MobileMessage["role"]) ?? "bot",
       blocks: (event.payload?.blocks as MobileMessage["blocks"]) ?? [],
     };

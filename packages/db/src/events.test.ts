@@ -350,6 +350,91 @@ describe("answerRunInput", () => {
     });
   });
 
+  it("approves and upserts always-allow without overwriting the task prompt", async () => {
+    const fanout = new TestFanout();
+    const tx = {
+      message: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "message-1",
+          blocks: [
+            {
+              kind: "ask",
+              text: "Review before writing",
+              status: "pending",
+              actions: [
+                { id: "allow", label: "Allow once" },
+                { id: "always", label: "Always allow" },
+                { id: "deny", label: "Deny" },
+              ],
+            },
+          ],
+        }),
+        update: vi.fn().mockResolvedValue({ id: "message-1" }),
+      },
+      run: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockResolvedValue({ userId: "user-1" }),
+      },
+      task: { updateMany: vi.fn() },
+      externalEffect: {
+        findFirst: vi.fn().mockResolvedValue({ id: "effect-1", status: "intended", kind: "destination.write" }),
+        update: vi.fn().mockResolvedValue({ id: "effect-1" }),
+      },
+      actionApprovalRule: {
+        upsert: vi.fn().mockResolvedValue({ id: "rule-1" }),
+      },
+      thread: { update: vi.fn().mockResolvedValue({ nextEventSeq: 10 }) },
+      event: {
+        create: vi.fn(async ({ data }: { data: { seq: number; type: string } }) => ({
+          ...event(data.seq),
+          type: data.type,
+        })),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      answerRunInput(
+        prisma,
+        {
+          workspaceId: "workspace-1",
+          threadId: "thread-1",
+          botId: "bot-1",
+          runId: "run-1",
+          messageId: "message-1",
+          answer: "always",
+        },
+        fanout,
+      ),
+    ).resolves.toBe(true);
+
+    expect(tx.task.updateMany).not.toHaveBeenCalled();
+    expect(tx.externalEffect.update).toHaveBeenCalledWith({
+      where: { id: "effect-1" },
+      data: { status: "approved" },
+    });
+    expect(tx.actionApprovalRule.upsert).toHaveBeenCalledWith({
+      where: {
+        workspaceId_effect_matchKind_matchValue: {
+          workspaceId: "workspace-1",
+          effect: "always_allow",
+          matchKind: "tool",
+          matchValue: "destination.write",
+        },
+      },
+      create: {
+        workspaceId: "workspace-1",
+        createdByUserId: "user-1",
+        effect: "always_allow",
+        matchKind: "tool",
+        matchValue: "destination.write",
+      },
+      update: {},
+    });
+  });
+
   it("rejects an already answered prompt without queuing the run", async () => {
     const tx = {
       message: {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   approvalPausedToolResult,
   claimApprovedEffect,
+  claimIntendedEffect,
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
 } from "./approval-effect.js";
@@ -75,6 +76,26 @@ describe("claimApprovedEffect", () => {
     await expect(claimApprovedEffect(store, "effect-1")).resolves.toBe(false);
     expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
       where: { id: "effect-1", status: "approved" },
+      data: { status: "executing" },
+    });
+  });
+});
+
+describe("claimIntendedEffect", () => {
+  it("claims intended effects exactly once", async () => {
+    const store = {
+      externalEffect: {
+        updateMany: vi
+          .fn()
+          .mockResolvedValueOnce({ count: 1 })
+          .mockResolvedValueOnce({ count: 0 }),
+      },
+    };
+
+    await expect(claimIntendedEffect(store, "effect-1")).resolves.toBe(true);
+    await expect(claimIntendedEffect(store, "effect-1")).resolves.toBe(false);
+    expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
+      where: { id: "effect-1", status: "intended" },
       data: { status: "executing" },
     });
   });

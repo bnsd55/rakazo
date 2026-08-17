@@ -101,9 +101,25 @@ model Organization {
   notificationPreferences NotificationPreference[]
   computers   Computer[]
   externalEffects ExternalEffect[]
+  actionApprovalRules ActionApprovalRule[]
 
   @@unique([slug])
   @@map("organization")
+}
+
+model ActionApprovalRule {
+  id              String       @id @default(cuid())
+  workspaceId     String
+  workspace       Organization @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUserId String
+  effect          String
+  matchKind       String
+  matchValue      String
+  createdAt       DateTime     @default(now())
+
+  @@unique([workspaceId, effect, matchKind, matchValue])
+  @@index([workspaceId])
+  @@map("action_approval_rules")
 }
 
 model Member {

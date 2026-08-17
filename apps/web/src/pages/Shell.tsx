@@ -28,6 +28,7 @@ import {
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AskCard } from "../components/AskCard";
+import { ApprovalRulesSettings } from "../components/ApprovalRulesSettings";
 import { authClient } from "../lib/auth";
 import { rpc } from "../lib/rpc";
 import {
@@ -1480,6 +1481,7 @@ function BotSettings({
           Delete bot…
         </button>
       </div>
+      <ApprovalRulesSettings />
     </div>
   );
 }

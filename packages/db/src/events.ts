@@ -130,11 +130,36 @@ export async function answerRunInput(
         orderBy: { createdAt: "desc" },
       });
       if (!effect) return null;
-      const allowed = input.answer === "allow";
+      const allowed = input.answer === "allow" || input.answer === "always";
       await tx.externalEffect.update({
         where: { id: effect.id },
         data: { status: allowed ? "approved" : "denied" },
       });
+      if (input.answer === "always") {
+        const run = await tx.run.findUnique({
+          where: { id: input.runId },
+          select: { userId: true },
+        });
+        if (!run) return null;
+        await tx.actionApprovalRule.upsert({
+          where: {
+            workspaceId_effect_matchKind_matchValue: {
+              workspaceId: input.workspaceId,
+              effect: "always_allow",
+              matchKind: "tool",
+              matchValue: effect.kind,
+            },
+          },
+          create: {
+            workspaceId: input.workspaceId,
+            createdByUserId: run.userId,
+            effect: "always_allow",
+            matchKind: "tool",
+            matchValue: effect.kind,
+          },
+          update: {},
+        });
+      }
     } else {
       const task = await tx.task.updateMany({
         where: { runs: { some: { id: input.runId } } },

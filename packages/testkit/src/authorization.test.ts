@@ -110,6 +110,12 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["connections/begin", connectionInput("Unauthenticated")],
       ["connections/complete", { connectionId: "missing-connection" }],
       ["connections/revoke", { connectionId: "missing-connection" }],
+      ["approvalRules/list"],
+      [
+        "approvalRules/set",
+        { effect: "require_approval", matchKind: "category", matchValue: "email" },
+      ],
+      ["approvalRules/remove", { id: "missing-rule" }],
       ["artifacts/list", { botId: "missing-bot" }],
       ["usage/list"],
       ["usage/summary"],
