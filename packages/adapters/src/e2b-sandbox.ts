@@ -177,7 +177,6 @@ export class E2BSandboxProvider implements SandboxProvider {
           apiKey: this.apiKey,
           timeoutMs: sandboxIdleMs(),
         });
-        if (await configurePortableBrowserProfiles(desktop)) await openDesktopBrowser(desktop);
         this.boxes.set(desktop.sandboxId, desktop);
         this.lastTouchedAt.set(desktop.sandboxId, Date.now());
         return {
@@ -193,7 +192,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       }
     }
     const desktop = await this.sdk.create(e2bCreateOptions(request.botId, this.apiKey));
-    await desktop.files.makeDir(E2B_WORKSPACE).catch(() => undefined);
     this.boxes.set(desktop.sandboxId, desktop);
     this.lastTouchedAt.set(desktop.sandboxId, Date.now());
     return {
@@ -203,6 +201,13 @@ export class E2BSandboxProvider implements SandboxProvider {
       providerRef: desktop.sandboxId,
       fresh: true,
     };
+  }
+
+  async prepare(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    const desktop = await this.box(computer);
+    if (computer.fresh) await desktop.files.makeDir(E2B_WORKSPACE);
+    const profilesChanged = await configurePortableBrowserProfiles(desktop);
+    if (!computer.fresh && profilesChanged) await openDesktopBrowser(desktop);
   }
 
   async *execute(
@@ -399,7 +404,6 @@ export class E2BSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<void> {
     const desktop = await this.box(computer);
-    await desktop.files.makeDir(E2B_WORKSPACE, { signal: context.signal });
     await stopDesktopBrowsers(desktop);
     let batch: PortableFile[] = [];
     let batchBytes = 0;
@@ -420,7 +424,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       batchBytes += file.content.byteLength;
     }
     await flush();
-    await configurePortableBrowserProfiles(desktop);
     await openDesktopBrowser(desktop);
   }
 

@@ -11,7 +11,7 @@ const context = {
   signal: new AbortController().signal,
 };
 
-describe("Docker sandbox command timeout", () => {
+describe("Docker sandbox", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("sends the bounded timeout to the supervisor and preserves its honest result", async () => {
@@ -47,5 +47,47 @@ describe("Docker sandbox command timeout", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       "x-rakazo-screen-id": "bot",
     });
+  });
+
+  it("releases this bot's screen assignment through the supervisor", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
+
+    await provider.releaseScreen(
+      { id: "computer", botId: "home-bot", kind: "docker", providerRef: "computer" },
+      context,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://supervisor.test/computers/computer/screen",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          authorization: "Bearer test-token",
+          "x-rakazo-bot-id": "home-bot",
+          "x-rakazo-screen-id": "bot",
+          "x-rakazo-workspace-id": "workspace",
+        }),
+      }),
+    );
+  });
+
+  it("still releases the screen after the run abort signal has fired", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
+    const abort = new AbortController();
+    abort.abort();
+
+    await expect(
+      provider.releaseScreen(
+        { id: "computer", botId: "home-bot", kind: "docker", providerRef: "computer" },
+        { ...context, signal: abort.signal },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty("signal");
   });
 });

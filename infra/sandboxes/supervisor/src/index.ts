@@ -27,8 +27,10 @@ import {
   nextScreenIndex,
   normalizeWorkspaceRelative,
   parseObservation,
+  releaseAssignedScreen,
   sandboxCommandTimedOut,
   sandboxTimeoutCommand,
+  stopExtraScreenCommand,
   toSandboxInput,
   workspaceTarget,
 } from "./supervisor-logic.js";
@@ -407,6 +409,29 @@ app.post("/computers/:id/input", async (c) => {
   }
 });
 
+app.delete("/computers/:id/screen", async (c) => {
+  try {
+    const { container } = await managedContainer(
+      c.req.param("id"),
+      c.req.header("x-rakazo-bot-id"),
+      c.req.header("x-rakazo-workspace-id"),
+    );
+    const screenId =
+      c.req.header("x-rakazo-screen-id") || c.req.header("x-rakazo-bot-id") || c.req.param("id");
+    const assigned = computerScreens.get(c.req.param("id"));
+    const index = assigned ? releaseAssignedScreen(assigned, screenId) : undefined;
+    if (assigned?.size === 0) computerScreens.delete(c.req.param("id"));
+    const stop = index !== undefined ? stopExtraScreenCommand(index) : "";
+    if (stop) {
+      await runContainerCommand(container, ["bash", "-lc", stop]).catch(() => undefined);
+    }
+    return c.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 404);
+  }
+});
+
 app.post("/computers/:id/stop", async (c) => {
   try {
     const { container } = await managedContainer(
@@ -430,6 +455,7 @@ app.delete("/computers/:id", async (c) => {
       c.req.header("x-rakazo-workspace-id"),
     );
     await container.remove({ force: true }).catch(() => undefined);
+    computerScreens.delete(id);
     return c.json({ ok: true });
   } catch {
     return c.json({ error: "computer not found" }, 404);

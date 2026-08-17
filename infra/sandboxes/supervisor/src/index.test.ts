@@ -10,8 +10,10 @@ import {
   nextScreenIndex,
   normalizeWorkspaceRelative,
   parseObservation,
+  releaseAssignedScreen,
   sandboxCommandTimedOut,
   sandboxTimeoutCommand,
+  stopExtraScreenCommand,
 } from "./supervisor-logic.js";
 
 const token = resolveSupervisorToken(process.env);
@@ -32,6 +34,7 @@ describe("sandbox supervisor HTTP boundary", () => {
       ["POST", "/computers/id/files"],
       ["GET", "/computers/id/screen"],
       ["POST", "/computers/id/screen-mode"],
+      ["DELETE", "/computers/id/screen"],
       ["POST", "/computers/id/input"],
       ["POST", "/computers/id/stop"],
       ["DELETE", "/computers/id"],
@@ -143,6 +146,30 @@ describe("sandbox supervisor input containment", () => {
     expect(() => nextScreenIndex(assigned, "overflow", 1)).toThrow(
       /cannot allocate another screen/,
     );
+  });
+
+  it("frees a released screen slot so a ninth Team bot can reuse it", () => {
+    const assigned = new Map<string, number>();
+    for (let index = 0; index < 8; index += 1) {
+      expect(nextScreenIndex(assigned, `bot-${index}`)).toBe(index);
+    }
+    expect(() => nextScreenIndex(assigned, "bot-8")).toThrow(/cannot allocate another screen/);
+    expect(releaseAssignedScreen(assigned, "bot-3")).toBe(3);
+    expect(assigned.get("bot-0")).toBe(0);
+    expect(assigned.get("bot-3")).toBeUndefined();
+    expect(nextScreenIndex(assigned, "bot-8")).toBe(3);
+    expect(nextScreenIndex(assigned, "bot-0")).toBe(0);
+    expect(releaseAssignedScreen(assigned, "missing")).toBeUndefined();
+    expect(() => nextScreenIndex(assigned, "bot-9")).toThrow(/cannot allocate another screen/);
+  });
+
+  it("stops extra displays without touching the primary desktop", () => {
+    expect(stopExtraScreenCommand(0)).toBe("");
+    expect(stopExtraScreenCommand(1)).toContain("Xvfb :2 -screen");
+    expect(stopExtraScreenCommand(1)).toContain("rfbport 5902");
+    expect(stopExtraScreenCommand(1)).toContain("websockify.*6082");
+    expect(stopExtraScreenCommand(1)).not.toMatch(/Xvfb :1 /);
+    expect(stopExtraScreenCommand(1)).not.toMatch(/6080/);
   });
 
   it("parses a captured frame without trusting optional desktop metadata", () => {

@@ -80,6 +80,7 @@ export async function provisionComputer(
       context,
     );
     provisioned = ref;
+    await deps.sandbox.prepare(ref, context);
     const replacement =
       ref.fresh === true ||
       !existing.providerRef ||
@@ -113,16 +114,35 @@ export async function provisionComputer(
       },
     });
     if (activated.count !== 1) {
-      await deps.sandbox.stop(ref, context).catch(() => deps.sandbox.destroy(ref, context));
       throw new ComputerBusyError();
     }
     return ref;
   } catch (error) {
-    if (provisioned?.fresh) await deps.sandbox.destroy(provisioned, context).catch(() => undefined);
-    await deps.prisma.computer.updateMany({
-      where: { id: computerId, state: "booting" },
-      data: { state: "error" },
-    });
+    const rollbackError = provisioned
+      ? await rollbackProvisionedComputer(deps.sandbox, provisioned, context, error)
+      : undefined;
+    try {
+      await deps.prisma.computer.updateMany({
+        where: { id: computerId, state: "booting" },
+        data: {
+          state: "error",
+          ...(rollbackError && provisioned
+            ? { providerRef: provisioned.providerRef, kind: provisioned.kind }
+            : {}),
+        },
+      });
+    } catch (recordError) {
+      throw new AggregateError(
+        [error, ...(rollbackError ? [rollbackError] : []), recordError],
+        "Computer provisioning failed and its failure could not be recorded",
+      );
+    }
+    if (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "Computer provisioning failed and its sandbox could not be rolled back",
+      );
+    }
     throw error;
   }
 }
@@ -151,6 +171,7 @@ async function reconnectComputer(
     },
     context,
   );
+  await deps.sandbox.prepare(ref, context);
   await ensureComputerWorkspaceLayout(
     deps.sandbox,
     ref,
@@ -176,6 +197,30 @@ async function waitForComputerReady(
     }
   }
   return prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
+}
+
+async function rollbackProvisionedComputer(
+  sandbox: SandboxProvider,
+  computer: ComputerRef,
+  context: AdapterContext,
+  cause: unknown,
+): Promise<unknown | undefined> {
+  try {
+    if (computer.fresh) {
+      await sandbox.destroy(computer, context);
+    } else if (cause instanceof ComputerBusyError) {
+      try {
+        await sandbox.stop(computer, context);
+      } catch {
+        await sandbox.destroy(computer, context);
+      }
+    } else {
+      await sandbox.stop(computer, context);
+    }
+    return undefined;
+  } catch (error) {
+    return error;
+  }
 }
 
 export interface ComputerExecutionLease {

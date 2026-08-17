@@ -89,6 +89,8 @@ export class DockerSandboxProvider implements SandboxProvider {
     };
   }
 
+  async prepare(_computer: ComputerRef, _context: AdapterContext): Promise<void> {}
+
   async *execute(
     computer: ComputerRef,
     request: CommandRequest,
@@ -309,6 +311,17 @@ export class DockerSandboxProvider implements SandboxProvider {
 
   async snapshot(computer: ComputerRef, _context: AdapterContext) {
     return { id: `docker-snap-${computer.id}`, createdAt: new Date().toISOString() };
+  }
+
+  async releaseScreen(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    if (!context.botId) return;
+    const res = await fetch(this.url(`/computers/${computer.id}/screen`), {
+      method: "DELETE",
+      headers: this.headers(context, computer.botId),
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`sandbox screen release failed: ${res.status}`);
+    }
   }
 
   async stop(computer: ComputerRef, context: AdapterContext): Promise<void> {

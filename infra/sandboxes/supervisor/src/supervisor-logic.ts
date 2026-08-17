@@ -85,6 +85,34 @@ export function nextScreenIndex(
   throw new Error(`This Team Computer cannot allocate another screen (limit ${limit}).`);
 }
 
+export function releaseAssignedScreen(
+  assigned: Map<string, number>,
+  screenId: string,
+): number | undefined {
+  const index = assigned.get(screenId);
+  if (index === undefined) return undefined;
+  assigned.delete(screenId);
+  return index;
+}
+
+export function stopExtraScreenCommand(index: number) {
+  if (index <= 0) return "";
+  const layout = screenPorts(index);
+  const fluxHome = `/tmp/fluxbox-home-${layout.displayNumber}`;
+  const profile = `/home/rakazo/.browser-profiles/chromium-screen-${layout.displayNumber}`;
+  const tokenFile = `/tmp/rakazo/control-token-${layout.displayNumber}`;
+  return [
+    `pkill -f 'Xvfb ${layout.display} -screen' || true`,
+    `pkill -f 'HOME=${fluxHome} DISPLAY=${layout.display} fluxbox' || true`,
+    `pkill -f -- '--user-data-dir=${profile}' || true`,
+    `pkill -f '^x11vnc .* -rfbport ${layout.viewVncPort}' || true`,
+    `pkill -f '^x11vnc .* -rfbport ${layout.controlVncPort}' || true`,
+    `pkill -f '^/usr/bin/python3 .*websockify.*${layout.viewPort}' || true`,
+    `pkill -f '^/usr/bin/python3 .*websockify.*${layout.controlPort}' || true`,
+    `rm -f /tmp/.X${layout.displayNumber}-lock /tmp/.X11-unix/X${layout.displayNumber} ${tokenFile}`,
+  ].join("; ");
+}
+
 export function ensureScreenCommand(index: number) {
   const layout = screenPorts(index);
   if (index === 0) {

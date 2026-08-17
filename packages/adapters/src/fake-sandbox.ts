@@ -72,6 +72,8 @@ export class FakeSandboxProvider implements SandboxProvider {
     return ref;
   }
 
+  async prepare(_computer: ComputerRef, _context: AdapterContext): Promise<void> {}
+
   async *execute(
     computer: ComputerRef,
     request: CommandRequest,
