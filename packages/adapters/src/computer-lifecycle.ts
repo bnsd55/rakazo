@@ -259,12 +259,12 @@ export async function acquireComputerExecutionLease(
     select: { fence: true },
   });
   if (reclaimed) {
-    return {
+    return validateAcquiredComputerLease(prisma, {
       computerId: input.computerId,
       botId: input.botId,
       runId: input.runId,
       fence: reclaimed.fence,
-    };
+    });
   }
   try {
     const created = await prisma.computerExecutionLease.create({
@@ -277,16 +277,29 @@ export async function acquireComputerExecutionLease(
       },
       select: { fence: true },
     });
-    return {
+    return validateAcquiredComputerLease(prisma, {
       computerId: input.computerId,
       botId: input.botId,
       runId: input.runId,
       fence: created.fence,
-    };
+    });
   } catch (error) {
     if (isUniqueConstraintError(error)) throw new ComputerBusyError();
     throw error;
   }
+}
+
+async function validateAcquiredComputerLease(
+  prisma: PrismaClient,
+  lease: ComputerExecutionLease,
+): Promise<ComputerExecutionLease> {
+  const computer = await prisma.computer.findUniqueOrThrow({
+    where: { id: lease.computerId },
+    select: { state: true },
+  });
+  if (computer.state !== "suspending") return lease;
+  await releaseComputerExecutionLease(prisma, lease);
+  throw new ComputerBusyError();
 }
 
 export async function renewComputerExecutionLease(

@@ -21,21 +21,6 @@ import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import { sandboxIdleMs } from "./computer-idle.js";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
-  ensureExtraDisplayCommand,
-  extraDisplayActionCommand,
-  extraDisplayControlStartCommand,
-  extraDisplayControlStopCommand,
-  ExtraDisplayAllocator,
-  extraDisplayInputCommand,
-  extraDisplayLayout,
-  observeExtraDisplayCommand,
-  parseExtraDisplayObservation,
-  primaryStreamCleanupCommand,
-  probeExtraDisplayToolsCommand,
-  screenControlKey,
-  stopExtraDisplayCommand,
-} from "./extra-displays.js";
-import {
   boundedComputerActions,
   clampRounded,
   computerObservation,
@@ -48,6 +33,24 @@ import {
   PORTABLE_TRANSFER_BATCH_BYTES,
   shouldSkipPortableWorkspaceFile,
 } from "./computer-workspace.js";
+import {
+  allocateExtraDisplayCommand,
+  ensureExtraDisplayCommand,
+  extraDisplayActionCommand,
+  extraDisplayControlStartCommand,
+  extraDisplayControlStopCommand,
+  extraDisplayInputCommand,
+  extraDisplayLayout,
+  observeExtraDisplayCommand,
+  parseAllocatedExtraDisplay,
+  parseExtraDisplayObservation,
+  parseExtraDisplayViewPassword,
+  parseReleasedExtraDisplay,
+  primaryStreamCleanupCommand,
+  probeExtraDisplayToolsCommand,
+  releaseExtraDisplayCommand,
+  screenControlKey,
+} from "./extra-displays.js";
 
 const E2B_WORKSPACE = "/home/user/rakazo-home";
 const E2B_BROWSER_PROFILES = `${E2B_WORKSPACE}/.browser-profiles`;
@@ -98,8 +101,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   private readonly streamReady = new Set<string>();
   private readonly streamStarts = new Map<string, Promise<void>>();
   private readonly controlStreams = new Map<string, { password: string; controlToken: string }>();
-  private readonly displays = new ExtraDisplayAllocator();
-  private readonly extraDisplaysReady = new Set<string>();
 
   constructor(
     private readonly apiKey: string,
@@ -244,7 +245,10 @@ export class E2BSandboxProvider implements SandboxProvider {
       yield { type: "exit", code: result.exitCode ?? 0 };
     } catch (error) {
       if (error instanceof TimeoutError) {
-        yield { type: "stderr", data: `command timed out after ${timeoutMs} ms\n` };
+        yield {
+          type: "stderr",
+          data: `command timed out after ${timeoutMs} ms\n`,
+        };
         yield { type: "exit", code: 124 };
         return;
       }
@@ -259,7 +263,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   ): Promise<ScreenSession> {
     const desktop = await this.box(computer);
     const screenKey = screenSessionKey(context);
-    const layout = this.resolveLayout(desktop, screenKey);
+    const layout = await this.resolveLayout(desktop, screenKey, context.screenLeaseId);
     if (layout.isPrimary) {
       await this.startStream(desktop);
       if (request.interactive) {
@@ -299,10 +303,15 @@ export class E2BSandboxProvider implements SandboxProvider {
         },
       };
     }
-    await this.ensureExtraDisplay(desktop, layout, context);
+    const viewPassword = await this.ensureExtraDisplay(desktop, layout, context);
     if (request.interactive) {
       if (!request.controlToken) throw new Error("interactive screen requires a control token");
-      const password = await this.startControlStream(desktop, request.controlToken, screenKey, layout);
+      const password = await this.startControlStream(
+        desktop,
+        request.controlToken,
+        screenKey,
+        layout,
+      );
       const url = new URL(`https://${desktop.getHost(layout.controlPort)}/vnc.html`);
       url.searchParams.set("autoconnect", "true");
       url.searchParams.set("resize", "scale");
@@ -317,6 +326,7 @@ export class E2BSandboxProvider implements SandboxProvider {
     url.searchParams.set("autoconnect", "true");
     url.searchParams.set("resize", "scale");
     url.searchParams.set("view_only", "true");
+    url.searchParams.set("password", viewPassword);
     return {
       url: url.toString(),
       mimeType: "text/html",
@@ -332,7 +342,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   ): Promise<void> {
     const desktop = await this.box(computer);
     const screenKey = screenSessionKey(context);
-    const layout = this.resolveLayout(desktop, screenKey);
+    const layout = await this.resolveLayout(desktop, screenKey, context.screenLeaseId);
     if (layout.isPrimary) {
       if (interactive) {
         if (!controlToken) throw new Error("interactive screen requires a control token");
@@ -358,7 +368,11 @@ export class E2BSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<void> {
     const desktop = await this.box(computer);
-    const layout = this.resolveLayout(desktop, screenSessionKey(context));
+    const layout = await this.resolveLayout(
+      desktop,
+      screenSessionKey(context),
+      context.screenLeaseId,
+    );
     if (layout.isPrimary) {
       await applyE2BAction(desktop, input);
       return;
@@ -372,7 +386,11 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
     const desktop = await this.box(computer);
-    const layout = this.resolveLayout(desktop, screenSessionKey(context));
+    const layout = await this.resolveLayout(
+      desktop,
+      screenSessionKey(context),
+      context.screenLeaseId,
+    );
     if (layout.isPrimary) return observeE2BDesktop(desktop, context);
     await this.ensureExtraDisplay(desktop, layout, context);
     const result = await desktop.commands.run(observeExtraDisplayCommand(layout), {
@@ -390,7 +408,11 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const desktop = await this.box(computer);
-    const layout = this.resolveLayout(desktop, screenSessionKey(context));
+    const layout = await this.resolveLayout(
+      desktop,
+      screenSessionKey(context),
+      context.screenLeaseId,
+    );
     const actions = boundedComputerActions(request.actions);
     let completed = 0;
     if (!layout.isPrimary) await this.ensureExtraDisplay(desktop, layout, context);
@@ -445,7 +467,9 @@ export class E2BSandboxProvider implements SandboxProvider {
     const desktop = await this.box(computer);
     const target = workspacePath(E2B_WORKSPACE, filePath);
     if (options?.maxBytes !== undefined) {
-      const info = await desktop.files.getInfo(target, { signal: context.signal });
+      const info = await desktop.files.getInfo(target, {
+        signal: context.signal,
+      });
       if (info.size > options.maxBytes) {
         throw new Error(`computer file exceeds ${options.maxBytes} bytes`);
       }
@@ -519,15 +543,17 @@ export class E2BSandboxProvider implements SandboxProvider {
   async releaseScreen(computer: ComputerRef, context: AdapterContext): Promise<void> {
     const id = computer.providerRef || computer.id;
     const screenKey = screenSessionKey(context);
-    const index = this.displays.release(id, screenKey);
+    const desktop = this.boxes.get(id) ?? (await this.box(computer).catch(() => undefined));
+    if (!desktop) return;
+    const released = await desktop.commands
+      .run(releaseExtraDisplayCommand(screenKey, context.screenLeaseId))
+      .catch(() => undefined);
+    const index = released ? parseReleasedExtraDisplay(released.stdout) : undefined;
+    if (index === undefined) return;
     const controlKey = screenControlKey(id, screenKey);
     this.controlStreams.delete(controlKey);
-    if (index === undefined || index === 0) return;
-    const desktop = this.boxes.get(id);
-    if (!desktop) return;
-    const layout = extraDisplayLayout(index, desktop.display ?? ":0");
-    this.extraDisplaysReady.delete(`${id}:${index}`);
-    await desktop.commands.run(stopExtraDisplayCommand(layout)).catch(() => undefined);
+    if (index === 0) return;
+    // Non-primary teardown runs inside the registry lock before the slot is reusable.
   }
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
@@ -560,14 +586,12 @@ export class E2BSandboxProvider implements SandboxProvider {
     for (const key of [...this.controlStreams.keys()]) {
       if (key.startsWith(`${id}:`)) this.controlStreams.delete(key);
     }
-    this.displays.clear(id);
-    for (const key of [...this.extraDisplaysReady]) {
-      if (key.startsWith(`${id}:`)) this.extraDisplaysReady.delete(key);
-    }
   }
 
-  private resolveLayout(desktop: Sandbox, screenKey: string) {
-    const index = this.displays.resolve(desktop.sandboxId, screenKey);
+  private async resolveLayout(desktop: Sandbox, screenKey: string, leaseId?: string) {
+    const allocation = await desktop.commands.run(allocateExtraDisplayCommand(screenKey, leaseId));
+    if (allocation.exitCode !== 0) throw new ComputerScreenUnavailableError();
+    const index = parseAllocatedExtraDisplay(allocation.stdout);
     return extraDisplayLayout(index, desktop.display ?? ":0");
   }
 
@@ -575,10 +599,8 @@ export class E2BSandboxProvider implements SandboxProvider {
     desktop: Sandbox,
     layout: ReturnType<typeof extraDisplayLayout>,
     context: AdapterContext,
-  ): Promise<void> {
-    if (layout.isPrimary) return;
-    const readyKey = `${desktop.sandboxId}:${layout.index}`;
-    if (this.extraDisplaysReady.has(readyKey)) return;
+  ): Promise<string> {
+    if (layout.isPrimary) throw new Error("primary display does not use an extra view password");
     const probe = await desktop.commands.run(probeExtraDisplayToolsCommand()).catch(() => ({
       exitCode: 1,
       stdout: "",
@@ -586,14 +608,18 @@ export class E2BSandboxProvider implements SandboxProvider {
     }));
     if (probe.exitCode !== 0) throw new ComputerScreenUnavailableError();
     const result = await desktop.commands.run(
-      ensureExtraDisplayCommand(layout, {
-        homeDir: "/home/user",
-        browserProfilesDir: E2B_BROWSER_PROFILES,
-      }),
+      ensureExtraDisplayCommand(
+        layout,
+        {
+          homeDir: "/home/user",
+          browserProfilesDir: E2B_BROWSER_PROFILES,
+        },
+        randomBytes(9).toString("base64url"),
+      ),
       { signal: context.signal },
     );
     if (result.exitCode !== 0) throw new ComputerScreenUnavailableError();
-    this.extraDisplaysReady.add(readyKey);
+    return parseExtraDisplayViewPassword(result.stdout);
   }
 
   private async startControlStream(

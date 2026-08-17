@@ -1,5 +1,5 @@
-import path from "node:path";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   Daytona,
@@ -28,20 +28,6 @@ import type {
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
-  ensureExtraDisplayCommand,
-  extraDisplayActionCommand,
-  extraDisplayControlStartCommand,
-  extraDisplayControlStopCommand,
-  ExtraDisplayAllocator,
-  extraDisplayInputCommand,
-  extraDisplayLayout,
-  observeExtraDisplayCommand,
-  parseExtraDisplayObservation,
-  probeExtraDisplayToolsCommand,
-  screenControlKey,
-  stopExtraDisplayCommand,
-} from "./extra-displays.js";
-import {
   boundedComputerActions,
   clampRounded,
   computerObservation,
@@ -54,8 +40,24 @@ import {
   PORTABLE_TRANSFER_BATCH_BYTES,
   shouldSkipPortableWorkspaceFile,
 } from "./computer-workspace.js";
+import {
+  allocateExtraDisplayCommand,
+  ensureExtraDisplayCommand,
+  extraDisplayActionCommand,
+  extraDisplayControlStartCommand,
+  extraDisplayControlStopCommand,
+  extraDisplayInputCommand,
+  extraDisplayLayout,
+  observeExtraDisplayCommand,
+  parseAllocatedExtraDisplay,
+  parseExtraDisplayObservation,
+  parseExtraDisplayViewPassword,
+  parseReleasedExtraDisplay,
+  probeExtraDisplayToolsCommand,
+  releaseExtraDisplayCommand,
+  screenControlKey,
+} from "./extra-displays.js";
 
-const DAYTONA_VNC_PORT = 6080;
 const DAYTONA_PRIMARY_DISPLAY = ":99";
 const DAYTONA_SCREEN_TTL_SECONDS = 3_600;
 
@@ -78,8 +80,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     string,
     Promise<{ url: string; token: string; expiresAt: number; viewPort: number }>
   >();
-  private readonly displays = new ExtraDisplayAllocator();
-  private readonly extraDisplaysReady = new Set<string>();
   private readonly pointerDown = new Map<
     string,
     { x: number; y: number; button: "left" | "right" }
@@ -176,7 +176,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       yield { type: "exit", code: result.exitCode };
     } catch (error) {
       if (error instanceof DaytonaProcessExecutionTimeoutError) {
-        yield { type: "stderr", data: `command timed out after ${timeoutMs} ms\n` };
+        yield {
+          type: "stderr",
+          data: `command timed out after ${timeoutMs} ms\n`,
+        };
         yield { type: "exit", code: 124 };
         return;
       }
@@ -191,7 +194,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   ): Promise<ScreenSession> {
     const sandbox = await this.box(computer);
     const screenKey = screenSessionKey(context);
-    const layout = this.resolveLayout(sandbox.id, screenKey);
+    const layout = await this.resolveLayout(sandbox, screenKey, context.screenLeaseId);
     if (layout.isPrimary) {
       await this.ensureDesktop(sandbox);
       const preview = await this.screenPreview(sandbox, screenKey, layout.viewPort);
@@ -206,7 +209,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         close: async () => undefined,
       };
     }
-    await this.ensureExtraDisplay(sandbox, layout, context);
+    const viewPassword = await this.ensureExtraDisplay(sandbox, layout);
     if (request.interactive) {
       if (!request.controlToken) throw new Error("interactive screen requires a control token");
       const password = randomBytes(6).toString("base64url");
@@ -232,6 +235,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     url.searchParams.set("autoconnect", "true");
     url.searchParams.set("resize", "scale");
     url.searchParams.set("view_only", "true");
+    url.searchParams.set("password", viewPassword);
     return {
       url: url.toString(),
       mimeType: "text/html",
@@ -247,12 +251,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   ): Promise<void> {
     const sandbox = await this.box(computer);
     const screenKey = screenSessionKey(context);
-    const layout = this.resolveLayout(sandbox.id, screenKey);
+    const layout = await this.resolveLayout(sandbox, screenKey, context.screenLeaseId);
     if (layout.isPrimary) {
       await this.ensureDesktop(sandbox);
       return;
     }
-    await this.ensureExtraDisplay(sandbox, layout, context);
+    await this.ensureExtraDisplay(sandbox, layout);
     if (interactive) {
       if (!controlToken) throw new Error("interactive screen requires a control token");
       const password = randomBytes(6).toString("base64url");
@@ -272,20 +276,28 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<void> {
     const sandbox = await this.box(computer);
-    const layout = this.resolveLayout(sandbox.id, screenSessionKey(context));
+    const layout = await this.resolveLayout(
+      sandbox,
+      screenSessionKey(context),
+      context.screenLeaseId,
+    );
     if (layout.isPrimary) {
       await this.ensureDesktop(sandbox);
       await this.applyAction(sandbox, input);
       return;
     }
-    await this.ensureExtraDisplay(sandbox, layout, context);
+    await this.ensureExtraDisplay(sandbox, layout);
     const result = await sandbox.process.executeCommand(extraDisplayInputCommand(layout, input));
     if (result.exitCode !== 0) throw new Error(result.result || "extra display input failed");
   }
 
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
     const sandbox = await this.box(computer);
-    const layout = this.resolveLayout(sandbox.id, screenSessionKey(context));
+    const layout = await this.resolveLayout(
+      sandbox,
+      screenSessionKey(context),
+      context.screenLeaseId,
+    );
     if (layout.isPrimary) {
       await this.ensureDesktop(sandbox);
       const [screenshot, display, windows, cursor] = await Promise.all([
@@ -308,11 +320,16 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           ? { cursor: { x: cursor.x, y: cursor.y } }
           : {}),
         ...(activeWindow?.id !== undefined
-          ? { activeWindow: { id: String(activeWindow.id), title: activeWindow.title } }
+          ? {
+              activeWindow: {
+                id: String(activeWindow.id),
+                title: activeWindow.title,
+              },
+            }
           : {}),
       });
     }
-    await this.ensureExtraDisplay(sandbox, layout, context);
+    await this.ensureExtraDisplay(sandbox, layout);
     const result = await sandbox.process.executeCommand(observeExtraDisplayCommand(layout));
     if (result.exitCode !== 0) throw new Error(result.result || "extra display observation failed");
     const parsed = parseExtraDisplayObservation(result.result ?? "");
@@ -326,11 +343,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const sandbox = await this.box(computer);
-    const layout = this.resolveLayout(sandbox.id, screenSessionKey(context));
+    const layout = await this.resolveLayout(
+      sandbox,
+      screenSessionKey(context),
+      context.screenLeaseId,
+    );
     const actions = boundedComputerActions(request.actions);
     let completed = 0;
     if (layout.isPrimary) await this.ensureDesktop(sandbox);
-    else await this.ensureExtraDisplay(sandbox, layout, context);
+    else await this.ensureExtraDisplay(sandbox, layout);
     for (const action of actions) {
       if (context.signal.aborted) {
         throw context.signal.reason ?? new Error("computer action aborted");
@@ -455,9 +476,14 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   async releaseScreen(computer: ComputerRef, context: AdapterContext): Promise<void> {
     const id = computer.providerRef || computer.id;
     const screenKey = screenSessionKey(context);
-    const index = this.displays.release(id, screenKey);
+    const sandbox = this.boxes.get(id) ?? (await this.box(computer).catch(() => undefined));
+    if (!sandbox) return;
+    const released = await sandbox.process
+      .executeCommand(releaseExtraDisplayCommand(screenKey, context.screenLeaseId))
+      .catch(() => undefined);
+    const index = released ? parseReleasedExtraDisplay(released.result) : undefined;
+    if (index === undefined) return;
     const previewPrefix = `${screenControlKey(id, screenKey)}:`;
-    const sandbox = this.boxes.get(id);
     for (const key of [...this.screenPreviews.keys()]) {
       if (!key.startsWith(previewPrefix)) continue;
       const preview = this.screenPreviews.get(key);
@@ -465,11 +491,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       this.screenPreviewStarts.delete(key);
       if (preview && sandbox) await this.revokeScreenPreview(sandbox, preview);
     }
-    if (index === undefined || index === 0) return;
-    if (!sandbox) return;
-    const layout = extraDisplayLayout(index, DAYTONA_PRIMARY_DISPLAY);
-    this.extraDisplaysReady.delete(`${id}:${index}`);
-    await sandbox.process.executeCommand(stopExtraDisplayCommand(layout)).catch(() => undefined);
+    if (index === 0) return;
+    // Non-primary teardown runs inside the registry lock before the slot is reusable.
   }
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
@@ -697,7 +720,12 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached;
     const pending = this.screenPreviewStarts.get(previewKey);
     if (pending) return pending;
-    let start!: Promise<{ url: string; token: string; expiresAt: number; viewPort: number }>;
+    let start!: Promise<{
+      url: string;
+      token: string;
+      expiresAt: number;
+      viewPort: number;
+    }>;
     start = sandbox
       .getSignedPreviewUrl(viewPort, DAYTONA_SCREEN_TTL_SECONDS)
       .then(async (preview) => {
@@ -708,9 +736,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           viewPort,
         };
         if (this.screenPreviewStarts.get(previewKey) !== start) {
-          await sandbox
-            .expireSignedPreviewUrl(viewPort, preview.token)
-            .catch(() => undefined);
+          await sandbox.expireSignedPreviewUrl(viewPort, preview.token).catch(() => undefined);
           throw new Error("Daytona screen preview was invalidated during teardown");
         }
         this.screenPreviews.set(previewKey, cachedPreview);
@@ -733,32 +759,37 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     await sandbox.expireSignedPreviewUrl(preview.viewPort, preview.token).catch(() => undefined);
   }
 
-  private resolveLayout(sandboxId: string, screenKey: string) {
-    const index = this.displays.resolve(sandboxId, screenKey);
+  private async resolveLayout(sandbox: Sandbox, screenKey: string, leaseId?: string) {
+    const allocation = await sandbox.process.executeCommand(
+      allocateExtraDisplayCommand(screenKey, leaseId),
+    );
+    if (allocation.exitCode !== 0) throw new ComputerScreenUnavailableError();
+    const index = parseAllocatedExtraDisplay(allocation.result);
     return extraDisplayLayout(index, DAYTONA_PRIMARY_DISPLAY);
   }
 
   private async ensureExtraDisplay(
     sandbox: Sandbox,
     layout: ReturnType<typeof extraDisplayLayout>,
-    context: AdapterContext,
-  ): Promise<void> {
-    if (layout.isPrimary) return;
-    const readyKey = `${sandbox.id}:${layout.index}`;
-    if (this.extraDisplaysReady.has(readyKey)) return;
-    const probe = await sandbox.process.executeCommand(probeExtraDisplayToolsCommand()).catch(
-      () => ({ exitCode: 1, result: "" }),
-    );
+  ): Promise<string> {
+    if (layout.isPrimary) throw new Error("primary display does not use an extra view password");
+    const probe = await sandbox.process
+      .executeCommand(probeExtraDisplayToolsCommand())
+      .catch(() => ({ exitCode: 1, result: "" }));
     if (probe.exitCode !== 0) throw new ComputerScreenUnavailableError();
     const root = await this.workspaceRoot(sandbox);
     const result = await sandbox.process.executeCommand(
-      ensureExtraDisplayCommand(layout, {
-        homeDir: (await sandbox.getUserHomeDir()) ?? "/home/daytona",
-        browserProfilesDir: path.posix.join(root, ".browser-profiles"),
-      }),
+      ensureExtraDisplayCommand(
+        layout,
+        {
+          homeDir: (await sandbox.getUserHomeDir()) ?? "/home/daytona",
+          browserProfilesDir: path.posix.join(root, ".browser-profiles"),
+        },
+        randomBytes(9).toString("base64url"),
+      ),
     );
     if (result.exitCode !== 0) throw new ComputerScreenUnavailableError();
-    this.extraDisplaysReady.add(readyKey);
+    return parseExtraDisplayViewPassword(result.result ?? "");
   }
 
   private forget(id: string): void {
@@ -776,17 +807,17 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       if (key.startsWith(`${id}:`)) this.screenPreviewStarts.delete(key);
     }
     this.pointerDown.delete(id);
-    this.displays.clear(id);
-    for (const key of [...this.extraDisplaysReady]) {
-      if (key.startsWith(`${id}:`)) this.extraDisplaysReady.delete(key);
-    }
   }
 }
 
 export function isUnrecoverableDaytonaError(error: unknown): boolean {
   if (error instanceof DaytonaNotFoundError) return true;
   if (!error || typeof error !== "object") return false;
-  const details = error as { status?: unknown; statusCode?: unknown; code?: unknown };
+  const details = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    code?: unknown;
+  };
   return (
     details.status === 404 ||
     details.statusCode === 404 ||

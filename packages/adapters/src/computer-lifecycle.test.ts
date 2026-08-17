@@ -466,6 +466,29 @@ describe("computer execution leases", () => {
     );
     expect(prisma.create).not.toHaveBeenCalled();
   });
+
+  it("rolls back a lease that races with computer suspension", async () => {
+    const prisma = leasePrisma({ scope: "team" });
+    prisma.findUniqueOrThrow
+      .mockResolvedValueOnce({ scope: "team", state: "running" })
+      .mockResolvedValue({ scope: "team", state: "suspending" });
+
+    await expect(
+      acquireComputerExecutionLease(prisma.client, {
+        computerId: "computer-1",
+        runId: "run-1",
+        botId: "bot-1",
+      }),
+    ).rejects.toThrow("Computer is busy");
+    expect(prisma.deleteMany).toHaveBeenCalledWith({
+      where: {
+        computerId: "computer-1",
+        botId: "bot-1",
+        runId: "run-1",
+        fence: 1,
+      },
+    });
+  });
 });
 
 function leasePrisma(options: {
@@ -485,13 +508,14 @@ function leasePrisma(options: {
     }
     return { fence: 1 };
   });
+  const findUniqueOrThrow = vi.fn().mockResolvedValue({
+    scope: options.scope,
+    state: "running",
+  });
   return {
     client: {
       computer: {
-        findUniqueOrThrow: vi.fn().mockResolvedValue({
-          scope: options.scope,
-          state: "running",
-        }),
+        findUniqueOrThrow,
       },
       computerExecutionLease: {
         updateManyAndReturn,
@@ -504,5 +528,6 @@ function leasePrisma(options: {
     updateManyAndReturn,
     create,
     deleteMany,
+    findUniqueOrThrow,
   };
 }

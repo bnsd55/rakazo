@@ -58,7 +58,11 @@ describe("DaytonaSandboxProvider", () => {
     ]);
     const exported = [];
     for await (const file of provider.exportWorkspace(computer, context)) exported.push(file);
-    expect(exported).toContainEqual({ path: "bin/tool", content: binary, executable: true });
+    expect(exported).toContainEqual({
+      path: "bin/tool",
+      content: binary,
+      executable: true,
+    });
 
     const observation = await provider.observe(computer, context);
     expect(observation).toMatchObject({
@@ -118,7 +122,10 @@ describe("DaytonaSandboxProvider", () => {
       context,
     );
     expect(existing.start).toHaveBeenCalledWith(120);
-    expect(reconnected).toMatchObject({ providerRef: "existing", fresh: false });
+    expect(reconnected).toMatchObject({
+      providerRef: "existing",
+      fresh: false,
+    });
 
     const replacement = daytonaFixture({ id: "replacement" });
     replacement.get.mockRejectedValueOnce({ statusCode: 404 });
@@ -212,14 +219,22 @@ describe("DaytonaSandboxProvider", () => {
     await provider.prepare(computer, context);
     const writer = { ...context, botId: "writer" };
     const researcher = { ...context, botId: "researcher" };
+    const screenRegistry = createScreenRegistryResponder();
 
     fixture.getSignedPreviewUrl.mockImplementation(async (port: number) => ({
       url: `https://${port}-preview.proxy.daytona.test`,
       token: `token-${port}`,
     }));
     fixture.executeCommand.mockImplementation(async (command: string) => {
+      const registryResult = screenRegistry(command);
+      if (registryResult) return registryResult;
       if (command.includes("command -v Xvfb")) return { exitCode: 0, result: "" };
-      if (command.includes("Xvfb :2")) return { exitCode: 0, result: "" };
+      if (command.includes("RAKAZO_SCREEN_PASSWORD=")) {
+        return {
+          exitCode: 0,
+          result: "RAKAZO_SCREEN_PASSWORD=test-view-password\n",
+        };
+      }
       if (command.includes("scrot") || command.includes("import")) {
         return {
           exitCode: 0,
@@ -244,17 +259,21 @@ describe("DaytonaSandboxProvider", () => {
     );
     expect(writerView.url).toContain("6080-preview");
     expect(researcherView.url).toContain("6082-preview");
+    expect(researcherView.url).toContain("password=test-view-password");
     expect(fixture.computerUse.start).toHaveBeenCalledTimes(1);
     expect(fixture.click).not.toHaveBeenCalled();
 
     await provider.act(
       computer,
-      { actions: [{ kind: "pointer", type: "click", x: 4, y: 5 }], observe: false },
+      {
+        actions: [{ kind: "pointer", type: "click", x: 4, y: 5 }],
+        observe: false,
+      },
       researcher,
     );
-    expect(fixture.executeCommand.mock.calls.some(([command]) => command.includes("DISPLAY=:2"))).toBe(
-      true,
-    );
+    expect(
+      fixture.executeCommand.mock.calls.some(([command]) => command.includes("DISPLAY=:2")),
+    ).toBe(true);
     expect(fixture.click).not.toHaveBeenCalled();
 
     await provider.releaseScreen(computer, writer);
@@ -271,7 +290,9 @@ describe("DaytonaSandboxProvider", () => {
     expect(researcherControl.url).toContain("6083-preview");
     expect(researcherControl.url).not.toContain("6082-preview");
     expect(
-      fixture.executeCommand.mock.calls.some(([command]) => String(command).includes("-rfbport 5903")),
+      fixture.executeCommand.mock.calls.some(([command]) =>
+        String(command).includes("-rfbport 5903"),
+      ),
     ).toBe(true);
 
     expect(provider.describe().capabilities.multiScreen).toBe(true);
@@ -282,8 +303,11 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
   const files = new Map<string, Buffer>();
   const modes = new Map<string, string>();
   const id = options.id ?? "daytona-box";
+  const screenRegistry = createScreenRegistryResponder();
   const executeCommand = vi.fn(
     async (command: string, _cwd?: string, _env?: Record<string, string>, _timeout?: number) => {
+      const registryResult = screenRegistry(command);
+      if (registryResult) return registryResult;
       if (command === "'echo' 'hello'") return { exitCode: 0, result: "hello\n" };
       if (options.prepareFails && command.startsWith("mkdir -p -- ")) {
         return { exitCode: 1, result: "could not create Daytona workspace" };
@@ -323,6 +347,10 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
   const press = vi.fn(async () => undefined);
   const type = vi.fn(async () => undefined);
   const scroll = vi.fn(async () => true);
+  const getSignedPreviewUrl = vi.fn(async (_port: number) => ({
+    url: "https://6080-preview.proxy.daytona.test",
+    token: "preview-token",
+  }));
   const sandbox = {
     id,
     state: options.state ?? "started",
@@ -344,8 +372,12 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
         })),
       },
       display: {
-        getInfo: vi.fn(async () => ({ displays: [{ width: 1280, height: 800, isActive: true }] })),
-        getWindows: vi.fn(async () => ({ windows: [{ id: 7, title: "Browser", isActive: true }] })),
+        getInfo: vi.fn(async () => ({
+          displays: [{ width: 1280, height: 800, isActive: true }],
+        })),
+        getWindows: vi.fn(async () => ({
+          windows: [{ id: 7, title: "Browser", isActive: true }],
+        })),
       },
       mouse: {
         getPosition: vi.fn(async () => ({ x: 10, y: 20 })),
@@ -358,10 +390,7 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
     },
     getUserHomeDir: vi.fn(async () => "/home/daytona"),
     getWorkDir: vi.fn(async () => "/home/daytona"),
-    getSignedPreviewUrl: vi.fn(async () => ({
-      url: "https://6080-preview.proxy.daytona.test",
-      token: "preview-token",
-    })),
+    getSignedPreviewUrl,
     expireSignedPreviewUrl,
     refreshActivity: vi.fn(async () => undefined),
     start,
@@ -380,13 +409,39 @@ function daytonaFixture(options: { id?: string; state?: string; prepareFails?: b
     start,
     stop,
     deleteSandbox,
-    getSignedPreviewUrl: sandbox.getSignedPreviewUrl,
+    getSignedPreviewUrl,
     expireSignedPreviewUrl,
     drag,
     click,
     press,
     type,
     scroll,
+  };
+}
+
+function createScreenRegistryResponder() {
+  const slots = new Map<string, number>();
+  return (command: string): { exitCode: number; result: string } | undefined => {
+    const key = command.match(/slot="\$dir\/([a-f0-9]+)\.slot"/)?.[1];
+    if (!key) return undefined;
+    if (command.includes("RAKAZO_SCREEN_INDEX=")) {
+      let index = slots.get(key);
+      if (index === undefined) {
+        index = Array.from({ length: 8 }, (_, candidate) => candidate).find(
+          (candidate) => ![...slots.values()].includes(candidate),
+        );
+        if (index === undefined) return { exitCode: 75, result: "" };
+        slots.set(key, index);
+      }
+      return { exitCode: 0, result: `RAKAZO_SCREEN_INDEX=${index}\n` };
+    }
+    if (command.includes("RAKAZO_SCREEN_RELEASE=")) {
+      const index = slots.get(key);
+      if (index === undefined) return { exitCode: 0, result: "RAKAZO_SCREEN_RELEASE=missing\n" };
+      slots.delete(key);
+      return { exitCode: 0, result: `RAKAZO_SCREEN_RELEASE=${index}\n` };
+    }
+    return undefined;
   };
 }
 

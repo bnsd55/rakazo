@@ -67,6 +67,20 @@ describe("Team Computer parallel screens", () => {
     expect(() => claims.claim("computer-1", researcher)).not.toThrow();
   });
 
+  it("does not let stale cleanup release a replacement claim for the same bot", () => {
+    const claims = new SingleScreenClaimTracker();
+    const oldRun = { ...writer, screenLeaseId: "run-1:1" };
+    const newRun = { ...writer, screenLeaseId: "run-2:2" };
+    claims.claim("computer-1", oldRun);
+    claims.claim("computer-1", newRun);
+
+    claims.release("computer-1", oldRun);
+    expect(() => claims.claim("computer-1", researcher)).toThrow(ComputerScreenUnavailableError);
+
+    claims.release("computer-1", newRun);
+    expect(() => claims.claim("computer-1", researcher)).not.toThrow();
+  });
+
   it("turns a graphical refusal into a tool error object", async () => {
     const claims = new SingleScreenClaimTracker();
     claims.claim("computer-1", writer);

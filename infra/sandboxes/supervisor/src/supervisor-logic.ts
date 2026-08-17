@@ -69,16 +69,23 @@ export function toSandboxInput(input: {
 }
 
 export function nextScreenIndex(
-  assigned: Map<string, number>,
+  assigned: Map<string, ScreenAssignment>,
   screenId: string,
+  leaseId?: string,
   limit = TEAM_SCREEN_LIMIT,
 ): number {
   const existing = assigned.get(screenId);
-  if (existing !== undefined) return existing;
-  const used = new Set(assigned.values());
+  if (existing) {
+    if (existing.releasing) {
+      throw new Error("This Team Computer screen is still being released.");
+    }
+    if (leaseId) existing.leaseId = leaseId;
+    return existing.index;
+  }
+  const used = new Set([...assigned.values()].map((slot) => slot.index));
   for (let index = 0; index < limit; index += 1) {
     if (!used.has(index)) {
-      assigned.set(screenId, index);
+      assigned.set(screenId, { index, leaseId });
       return index;
     }
   }
@@ -86,17 +93,33 @@ export function nextScreenIndex(
 }
 
 export function releaseAssignedScreen(
-  assigned: Map<string, number>,
+  assigned: Map<string, ScreenAssignment>,
   screenId: string,
+  leaseId?: string,
 ): number | undefined {
-  const index = assigned.get(screenId);
-  if (index === undefined) return undefined;
-  assigned.delete(screenId);
-  return index;
+  const slot = assigned.get(screenId);
+  if (!slot || slot.releasing || (leaseId && slot.leaseId !== leaseId)) return undefined;
+  slot.releasing = true;
+  return slot.index;
+}
+
+export function completeReleasedScreen(
+  assigned: Map<string, ScreenAssignment>,
+  screenId: string,
+  index: number,
+): void {
+  const slot = assigned.get(screenId);
+  if (slot?.releasing && slot.index === index) assigned.delete(screenId);
+}
+
+export interface ScreenAssignment {
+  index: number;
+  leaseId?: string;
+  releasing?: boolean;
 }
 
 export function clearComputerScreenRegistry(
-  registry: Map<string, Map<string, number>>,
+  registry: Map<string, Map<string, ScreenAssignment>>,
   containerId: string,
 ) {
   registry.delete(containerId);
@@ -123,7 +146,7 @@ export function stopExtraScreenCommand(index: number) {
 export function ensureScreenCommand(index: number) {
   const layout = screenPorts(index);
   if (index === 0) {
-    return `xdpyinfo -display ${layout.display} >/dev/null 2>&1`;
+    return `for i in $(seq 1 100); do xdpyinfo -display ${layout.display} >/dev/null 2>&1 && exit 0; sleep 0.1; done; exit 1`;
   }
   const fluxHome = `/tmp/fluxbox-home-${layout.displayNumber}`;
   const log = `/tmp/rakazo/screen-${layout.displayNumber}`;

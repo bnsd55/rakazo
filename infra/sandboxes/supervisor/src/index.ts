@@ -20,6 +20,7 @@ import {
 import {
   assertRequestIdentity,
   clearComputerScreenRegistry,
+  completeReleasedScreen,
   computerActionSchema,
   containerActionStep,
   ensureScreenCommand,
@@ -29,6 +30,7 @@ import {
   normalizeWorkspaceRelative,
   parseObservation,
   releaseAssignedScreen,
+  type ScreenAssignment,
   sandboxCommandTimedOut,
   sandboxTimeoutCommand,
   stopExtraScreenCommand,
@@ -47,7 +49,7 @@ const dataDir = path.resolve(repositoryRoot, process.env.DATA_DIR ?? "./data");
 let imageReady: Promise<void> | undefined;
 let supervisorInfo: Docker.ContainerInspectInfo | undefined;
 const supervisorToken = resolveSupervisorToken(process.env);
-const computerScreens = new Map<string, Map<string, number>>();
+const computerScreens = new Map<string, Map<string, ScreenAssignment>>();
 
 const app = new Hono();
 
@@ -155,12 +157,14 @@ app.post("/computers/:id/exec", async (c) => {
     })
     .parse(await c.req.json());
   try {
-    const { container, layout } = await managedScreen(
+    const { container } = await managedContainer(
       id,
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
-      c.req.header("x-rakazo-screen-id"),
     );
+    const screenId = c.req.header("x-rakazo-screen-id") || c.req.header("x-rakazo-bot-id") || id;
+    const screenIndex = computerScreens.get(id)?.get(screenId)?.index ?? 0;
+    const layout = screenPorts(screenIndex);
     const result = await runContainerCommand(
       container,
       body.argv.length ? body.argv : ["/bin/echo", "ready"],
@@ -191,6 +195,7 @@ app.post("/computers/:id/observe", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
       c.req.header("x-rakazo-screen-id"),
+      c.req.header("x-rakazo-screen-lease-id"),
     );
     return c.json(await observeContainer(container, layout.display));
   } catch (error) {
@@ -213,6 +218,7 @@ app.post("/computers/:id/actions", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
       c.req.header("x-rakazo-screen-id"),
+      c.req.header("x-rakazo-screen-lease-id"),
     );
     if (body.actions.length) await applyContainerActions(container, body.actions, layout.display);
     if (body.settleMs) await new Promise((resolve) => setTimeout(resolve, body.settleMs));
@@ -326,6 +332,7 @@ app.get("/computers/:id/screen", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
       c.req.header("x-rakazo-screen-id"),
+      c.req.header("x-rakazo-screen-lease-id"),
     );
     const screenUrl = await publishedScreenUrl(container, info, layout.viewPort);
     return c.redirect(screenUrl);
@@ -354,6 +361,7 @@ app.post("/computers/:id/screen-mode", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
       c.req.header("x-rakazo-screen-id"),
+      c.req.header("x-rakazo-screen-lease-id"),
     );
     if (body.interactive || body.revokeControl !== false) {
       await setInteractiveScreen(container, body.interactive, body.controlToken, layout);
@@ -394,6 +402,7 @@ app.post("/computers/:id/input", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
       c.req.header("x-rakazo-screen-id"),
+      c.req.header("x-rakazo-screen-lease-id"),
     );
     const result = await runContainerCommand(container, [
       "env",
@@ -420,11 +429,17 @@ app.delete("/computers/:id/screen", async (c) => {
     const screenId =
       c.req.header("x-rakazo-screen-id") || c.req.header("x-rakazo-bot-id") || c.req.param("id");
     const assigned = computerScreens.get(c.req.param("id"));
-    const index = assigned ? releaseAssignedScreen(assigned, screenId) : undefined;
-    if (assigned?.size === 0) computerScreens.delete(c.req.param("id"));
+    const index = assigned
+      ? releaseAssignedScreen(assigned, screenId, c.req.header("x-rakazo-screen-lease-id"))
+      : undefined;
     const stop = index !== undefined ? stopExtraScreenCommand(index) : "";
-    if (stop) {
-      await runContainerCommand(container, ["bash", "-lc", stop]).catch(() => undefined);
+    try {
+      if (stop) {
+        await runContainerCommand(container, ["bash", "-lc", stop]).catch(() => undefined);
+      }
+    } finally {
+      if (assigned && index !== undefined) completeReleasedScreen(assigned, screenId, index);
+      if (assigned?.size === 0) computerScreens.delete(c.req.param("id"));
     }
     return c.json({ ok: true });
   } catch (error) {
@@ -542,6 +557,7 @@ async function managedScreen(
   botId: string | undefined,
   workspaceId: string | undefined,
   screenId: string | undefined,
+  screenLeaseId: string | undefined,
 ) {
   const { container, info } = await managedContainer(id, botId, workspaceId);
   let assigned = computerScreens.get(id);
@@ -549,7 +565,7 @@ async function managedScreen(
     assigned = new Map();
     computerScreens.set(id, assigned);
   }
-  const index = nextScreenIndex(assigned, screenId || botId || id);
+  const index = nextScreenIndex(assigned, screenId || botId || id, screenLeaseId);
   const layout = screenPorts(index);
   const ensured = await runContainerCommand(container, ["bash", "-lc", ensureScreenCommand(index)]);
   if (ensured.code !== 0) {

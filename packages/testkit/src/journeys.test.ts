@@ -363,6 +363,37 @@ describeJourneys("required product journeys", () => {
     }
   });
 
+  it("4c: a takeover authorizes input only on the controlled bot screen", async () => {
+    const cookie = await signup(app, `takeover-scope-j-${stamp}@rakazo.test`, "Takeover Scope");
+    const writer = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Writer",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const researcher = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Researcher",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+
+    await rpc(app, cookie, "computer/boot", { botId: writer.id });
+    await rpc(app, cookie, "computer/takeover", { botId: writer.id });
+    expect(
+      (
+        await raw(app, cookie, "computer/input", {
+          botId: researcher.id,
+          kind: "key",
+          payload: { key: "A" },
+        })
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    await rpc(app, cookie, "computer/release", { botId: writer.id });
+  });
+
   it("5: a routine wakes the bot and posts into the existing thread", async () => {
     const cookie = await signup(app, `routine-j-${stamp}@rakazo.test`, "Routine");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {

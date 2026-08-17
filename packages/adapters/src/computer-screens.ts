@@ -15,15 +15,18 @@ export function screenSessionKey(context: AdapterContext): string {
 }
 
 export class SingleScreenClaimTracker {
-  private readonly owners = new Map<string, string>();
+  private readonly owners = new Map<string, { screenKey: string; leaseId?: string }>();
 
   claim(computerId: string, context: AdapterContext): void {
     const key = screenSessionKey(context);
     const owner = this.owners.get(computerId);
-    if (owner && owner !== key) {
+    if (owner && owner.screenKey !== key) {
       throw new ComputerScreenUnavailableError();
     }
-    this.owners.set(computerId, key);
+    this.owners.set(computerId, {
+      screenKey: key,
+      leaseId: context.screenLeaseId ?? owner?.leaseId,
+    });
   }
 
   release(computerId: string, context?: AdapterContext): void {
@@ -31,7 +34,11 @@ export class SingleScreenClaimTracker {
       this.owners.delete(computerId);
       return;
     }
-    if (this.owners.get(computerId) === screenSessionKey(context)) {
+    const owner = this.owners.get(computerId);
+    if (
+      owner?.screenKey === screenSessionKey(context) &&
+      (!context.screenLeaseId || owner.leaseId === context.screenLeaseId)
+    ) {
       this.owners.delete(computerId);
     }
   }

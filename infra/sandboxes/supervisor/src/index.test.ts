@@ -4,6 +4,7 @@ import { supervisorApp } from "./index.js";
 import {
   assertRequestIdentity,
   clearComputerScreenRegistry,
+  completeReleasedScreen,
   containerActionStep,
   ensureScreenCommand,
   hasValidBearerToken,
@@ -12,6 +13,7 @@ import {
   normalizeWorkspaceRelative,
   parseObservation,
   releaseAssignedScreen,
+  type ScreenAssignment,
   sandboxCommandTimedOut,
   sandboxTimeoutCommand,
   stopExtraScreenCommand,
@@ -136,27 +138,32 @@ describe("sandbox supervisor input containment", () => {
   });
 
   it("assigns distinct screen indexes per Team bot and starts extra displays", () => {
-    const assigned = new Map<string, number>();
+    const assigned = new Map<string, ScreenAssignment>();
     expect(nextScreenIndex(assigned, "writer")).toBe(0);
     expect(nextScreenIndex(assigned, "researcher")).toBe(1);
     expect(nextScreenIndex(assigned, "writer")).toBe(0);
     expect(ensureScreenCommand(0)).toContain("-display :1");
+    expect(ensureScreenCommand(0)).toContain("seq 1 100");
     expect(ensureScreenCommand(1)).toContain("Xvfb :2");
     expect(ensureScreenCommand(1)).toContain("rfbport 5902");
     expect(ensureScreenCommand(1)).toContain("0.0.0.0:6082");
-    expect(() => nextScreenIndex(assigned, "overflow", 1)).toThrow(
+    expect(() => nextScreenIndex(assigned, "overflow", undefined, 1)).toThrow(
       /cannot allocate another screen/,
     );
   });
 
   it("frees a released screen slot so a ninth Team bot can reuse it", () => {
-    const assigned = new Map<string, number>();
+    const assigned = new Map<string, ScreenAssignment>();
     for (let index = 0; index < 8; index += 1) {
       expect(nextScreenIndex(assigned, `bot-${index}`)).toBe(index);
     }
     expect(() => nextScreenIndex(assigned, "bot-8")).toThrow(/cannot allocate another screen/);
     expect(releaseAssignedScreen(assigned, "bot-3")).toBe(3);
-    expect(assigned.get("bot-0")).toBe(0);
+    expect(assigned.get("bot-0")?.index).toBe(0);
+    expect(assigned.get("bot-3")?.releasing).toBe(true);
+    expect(() => nextScreenIndex(assigned, "bot-3")).toThrow(/still being released/);
+    expect(() => nextScreenIndex(assigned, "bot-8")).toThrow(/cannot allocate another screen/);
+    completeReleasedScreen(assigned, "bot-3", 3);
     expect(assigned.get("bot-3")).toBeUndefined();
     expect(nextScreenIndex(assigned, "bot-8")).toBe(3);
     expect(nextScreenIndex(assigned, "bot-0")).toBe(0);
@@ -165,9 +172,9 @@ describe("sandbox supervisor input containment", () => {
   });
 
   it("clears all screen assignments when a container stops so slots can be reused", () => {
-    const registry = new Map<string, Map<string, number>>();
+    const registry = new Map<string, Map<string, ScreenAssignment>>();
     const containerId = "container-1";
-    const assigned = new Map<string, number>();
+    const assigned = new Map<string, ScreenAssignment>();
     registry.set(containerId, assigned);
     for (let index = 0; index < 8; index += 1) {
       nextScreenIndex(assigned, `bot-${index}`);
@@ -177,11 +184,21 @@ describe("sandbox supervisor input containment", () => {
     clearComputerScreenRegistry(registry, containerId);
     expect(registry.has(containerId)).toBe(false);
 
-    const fresh = new Map<string, number>();
+    const fresh = new Map<string, ScreenAssignment>();
     registry.set(containerId, fresh);
     for (let index = 0; index < 8; index += 1) {
       expect(nextScreenIndex(fresh, `bot-fresh-${index}`)).toBe(index);
     }
+  });
+
+  it("does not release a screen reclaimed by a newer execution fence", () => {
+    const assigned = new Map<string, ScreenAssignment>();
+    expect(nextScreenIndex(assigned, "writer", "run-1:1")).toBe(0);
+    expect(nextScreenIndex(assigned, "writer", "run-2:2")).toBe(0);
+    expect(releaseAssignedScreen(assigned, "writer", "run-1:1")).toBeUndefined();
+    expect(nextScreenIndex(assigned, "researcher")).toBe(1);
+    expect(releaseAssignedScreen(assigned, "writer", "run-2:2")).toBe(0);
+    completeReleasedScreen(assigned, "writer", 0);
   });
 
   it("stops extra displays without touching the primary desktop", () => {

@@ -25,6 +25,7 @@ export interface FakeBox {
   files: Map<string, { content: Uint8Array; executable: boolean }>;
   running: boolean;
   screens: Map<string, string>;
+  screenLeases: Map<string, string>;
 }
 
 export class FakeSandboxProvider implements SandboxProvider {
@@ -68,6 +69,7 @@ export class FakeSandboxProvider implements SandboxProvider {
       files: new Map(),
       running: true,
       screens: new Map([["default", "ready"]]),
+      screenLeases: new Map(),
     });
     return ref;
   }
@@ -104,7 +106,7 @@ export class FakeSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<ScreenSession> {
     const key = screenSessionKey(context);
-    this.screenSlot(this.requiredBox(computer), key);
+    this.screenSlot(this.requiredBox(computer), key, context.screenLeaseId);
     return {
       url: `fake://screen/${computer.id}/${key}`,
       mimeType: "text/plain",
@@ -119,17 +121,24 @@ export class FakeSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<void> {
     const box = this.boxes.get(computer.id);
-    if (box) applyPlaceholderAction(this.screenSlot(box, screenSessionKey(context)), input);
+    if (box) {
+      applyPlaceholderAction(
+        this.screenSlot(box, screenSessionKey(context), context.screenLeaseId),
+        input,
+      );
+    }
   }
 
   async observe(computer: ComputerRef, context: AdapterContext) {
     const key = screenSessionKey(context);
-    return placeholderObservation(this.screenSlot(this.requiredBox(computer), key).screen);
+    return placeholderObservation(
+      this.screenSlot(this.requiredBox(computer), key, context.screenLeaseId).screen,
+    );
   }
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const box = this.requiredBox(computer);
-    const slot = this.screenSlot(box, screenSessionKey(context));
+    const slot = this.screenSlot(box, screenSessionKey(context), context.screenLeaseId);
     const actions = boundedComputerActions(request.actions);
     for (const action of actions) applyPlaceholderAction(slot, action);
     return {
@@ -217,6 +226,16 @@ export class FakeSandboxProvider implements SandboxProvider {
     return { id: `snap-${computer.id}`, createdAt: new Date().toISOString() };
   }
 
+  async releaseScreen(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    const box = this.boxes.get(computer.id);
+    if (!box) return;
+    const key = screenSessionKey(context);
+    const leaseId = box.screenLeases.get(key);
+    if (context.screenLeaseId && leaseId !== context.screenLeaseId) return;
+    box.screens.delete(key);
+    box.screenLeases.delete(key);
+  }
+
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const box = this.boxes.get(computer.id);
     if (box) box.running = false;
@@ -232,8 +251,9 @@ export class FakeSandboxProvider implements SandboxProvider {
     return box;
   }
 
-  private screenSlot(box: FakeBox, key: string): { screen: string } {
+  private screenSlot(box: FakeBox, key: string, leaseId?: string): { screen: string } {
     if (!box.screens.has(key)) box.screens.set(key, `ready:${key}`);
+    if (leaseId) box.screenLeases.set(key, leaseId);
     return {
       get screen() {
         return box.screens.get(key) ?? `ready:${key}`;

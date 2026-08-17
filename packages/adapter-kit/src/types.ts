@@ -7,6 +7,8 @@ export interface AdapterContext {
   userId: string;
   botId?: string;
   runId?: string;
+  /** Opaque fence for releasing a graphical screen without tearing down its replacement. */
+  screenLeaseId?: string;
   signal: AbortSignal;
   connectedProviders?: string[];
 }

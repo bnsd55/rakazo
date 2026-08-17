@@ -8,6 +8,7 @@ const context = {
   workspaceId: "workspace",
   userId: "user",
   botId: "bot",
+  screenLeaseId: "run-1:1",
   signal: new AbortController().signal,
 };
 
@@ -67,6 +68,7 @@ describe("Docker sandbox", () => {
           authorization: "Bearer test-token",
           "x-rakazo-bot-id": "home-bot",
           "x-rakazo-screen-id": "bot",
+          "x-rakazo-screen-lease-id": "run-1:1",
           "x-rakazo-workspace-id": "workspace",
         }),
       }),
@@ -74,7 +76,10 @@ describe("Docker sandbox", () => {
   });
 
   it("still releases the screen after the run abort signal has fired", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 404 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
     const abort = new AbortController();

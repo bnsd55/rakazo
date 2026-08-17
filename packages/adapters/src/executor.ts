@@ -294,6 +294,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
           userId: run.userId,
           botId: bot.id,
           runId,
+          screenLeaseId: computerLease
+            ? `${computerLease.runId}:${computerLease.fence}`
+            : `${runId}:${fence}`,
           signal: runAbortController.signal,
           connectedProviders: connectedPlugins.map((row) => row.provider),
         };
