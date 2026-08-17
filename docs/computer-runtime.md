@@ -14,7 +14,7 @@ Pi runs in the Rakazo API/worker process. It is not installed in, or executed by
 
 ## Computer contract
 
-Each workspace gets one Team Computer by default, so bots share its browser sessions and installed tools. Each Team bot starts in `bots/<bot-id>/`, while deliberately shared work belongs in `shared/`. These folders organize work but are not security boundaries: every Team bot can access the full Team workspace. A bot can instead use a Private Computer, where the whole workspace is its home. Team Computer runs are serialized with a fenced database lease.
+Each workspace gets one Team Computer by default, so bots share its browser sessions and installed tools. Each Team bot starts in `bots/<bot-id>/`, while deliberately shared work belongs in `shared/`. These folders organize work but are not security boundaries: every Team bot can access the full Team workspace. A bot can instead use a Private Computer, where the whole workspace is its home. Team Computer runs use a fenced per-bot database lease, so two Team bots can work at the same time on distinct screens. One bot still runs only one computer-use task on its own screen. Providers that cannot allocate a second display (`multiScreen: false`) fail that bot's graphical tools with a clear error instead of queueing behind a single computer lock.
 
 `SandboxProvider` is the provider boundary. A backend must implement:
 

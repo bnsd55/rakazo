@@ -1,5 +1,6 @@
 import { type Sandbox, TimeoutError } from "@e2b/desktop";
 import { describe, expect, it, vi } from "vitest";
+import { withComputerScreenAvailability } from "./computer-screens.js";
 import { shouldSkipPortableWorkspaceFile } from "./computer-workspace.js";
 import { E2BSandboxProvider, type E2BSandboxSdk } from "./e2b-sandbox.js";
 
@@ -231,5 +232,90 @@ describe("E2B computer backend", () => {
     await stopping;
     expect(desktop.pause).toHaveBeenCalled();
     expect(streamStop).toHaveBeenCalled();
+  });
+
+  it("fails a second Team bot's graphical tools on the shared E2B display", async () => {
+    const files = new Map<string, Uint8Array>();
+    const desktop = {
+      sandboxId: "e2b-shared",
+      commands: { run: vi.fn(async () => ({ stdout: "shell-ok\n", stderr: "", exitCode: 0 })) },
+      files: {
+        makeDir: vi.fn(async () => undefined),
+        write: vi.fn(async (entries: Array<{ path: string; data: ArrayBuffer }>) => {
+          for (const entry of entries) files.set(entry.path, new Uint8Array(entry.data));
+        }),
+        read: vi.fn(async (filePath: string) => {
+          const content = files.get(filePath);
+          if (!content) throw new Error("missing file");
+          return content;
+        }),
+        list: vi.fn(async (directory: string) => {
+          const prefix = `${directory.replace(/\/$/, "")}/`;
+          return [...files.entries()]
+            .filter(([filePath]) => filePath.startsWith(prefix))
+            .map(([filePath, content]) => ({
+              name: filePath.slice(prefix.length),
+              type: "file" as const,
+              size: content.byteLength,
+              mode: 0o600,
+            }));
+        }),
+      },
+      stream: {
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined),
+        getAuthKey: () => "key",
+        getUrl: () => "https://desktop.test/vnc.html",
+      },
+      screenshot: vi.fn(async () => new Uint8Array([137, 80, 78, 71])),
+      getScreenSize: vi.fn(async () => ({ width: 1280, height: 800 })),
+      getCursorPosition: vi.fn(async () => ({ x: 1, y: 1 })),
+      getCurrentWindowId: vi.fn(async () => "1"),
+      getWindowTitle: vi.fn(async () => "Desk"),
+    };
+    const provider = new E2BSandboxProvider("e2b_test", {
+      create: vi.fn(async () => desktop as never),
+      connect: vi.fn(),
+      pause: vi.fn(),
+    } as unknown as E2BSandboxSdk);
+    const computer = await provider.provision({ botId: "team-home", homePath: "/tmp" }, context);
+    const writer = { ...context, botId: "writer" };
+    const researcher = { ...context, botId: "researcher" };
+    await provider.observe(computer, writer);
+    await expect(provider.connectScreen(computer, { view: "stream" }, researcher)).resolves.toEqual(
+      expect.objectContaining({ url: expect.stringContaining("vnc.html") }),
+    );
+    await expect(provider.observe(computer, writer)).resolves.toMatchObject({
+      activeWindow: { title: "Desk" },
+    });
+    await expect(provider.observe(computer, researcher)).rejects.toThrow(
+      /does not support multiple screens/,
+    );
+    const refused = await withComputerScreenAvailability(() =>
+      provider.observe(computer, researcher),
+    );
+    expect(refused).toEqual({ error: expect.stringMatching(/does not support multiple screens/) });
+    await provider.writeFile(
+      computer,
+      { path: "shared/note.txt", content: new TextEncoder().encode("office") },
+      researcher,
+    );
+    expect(
+      new TextDecoder().decode(await provider.readFile(computer, "shared/note.txt", researcher)),
+    ).toBe("office");
+    const events: Array<{ type: string; data?: string; code?: number }> = [];
+    for await (const event of provider.execute(
+      computer,
+      { argv: ["echo", "shell-ok"] },
+      researcher,
+    )) {
+      events.push(event);
+    }
+    expect(events).toContainEqual({ type: "exit", code: 0 });
+    await provider.releaseScreen(computer, writer);
+    await expect(provider.observe(computer, researcher)).resolves.toMatchObject({
+      activeWindow: { title: "Desk" },
+    });
+    expect(provider.describe().capabilities.multiScreen).toBe(false);
   });
 });

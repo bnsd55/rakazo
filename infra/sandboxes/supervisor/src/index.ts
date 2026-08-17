@@ -13,6 +13,7 @@ import {
   COMPUTER_IMAGE,
   containerCreateOptions,
   containerNameFor,
+  screenPorts,
   screenUrlFor,
   xdotoolCommand,
 } from "./computer-spec.js";
@@ -20,8 +21,10 @@ import {
   assertRequestIdentity,
   computerActionSchema,
   containerActionStep,
+  ensureScreenCommand,
   hasValidBearerToken,
   interactiveScreenCommand,
+  nextScreenIndex,
   normalizeWorkspaceRelative,
   parseObservation,
   sandboxCommandTimedOut,
@@ -41,6 +44,7 @@ const dataDir = path.resolve(repositoryRoot, process.env.DATA_DIR ?? "./data");
 let imageReady: Promise<void> | undefined;
 let supervisorInfo: Docker.ContainerInspectInfo | undefined;
 const supervisorToken = resolveSupervisorToken(process.env);
+const computerScreens = new Map<string, Map<string, number>>();
 
 const app = new Hono();
 
@@ -148,10 +152,11 @@ app.post("/computers/:id/exec", async (c) => {
     })
     .parse(await c.req.json());
   try {
-    const { container } = await managedContainer(
+    const { container, layout } = await managedScreen(
       id,
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
+      c.req.header("x-rakazo-screen-id"),
     );
     const result = await runContainerCommand(
       container,
@@ -159,7 +164,7 @@ app.post("/computers/:id/exec", async (c) => {
       {
         workingDir: body.cwd ?? "/home/rakazo",
         env: [
-          "DISPLAY=:1",
+          `DISPLAY=${layout.display}`,
           "HOME=/home/rakazo",
           "PATH=/home/rakazo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
           "NPM_CONFIG_PREFIX=/home/rakazo/.local",
@@ -178,12 +183,13 @@ app.post("/computers/:id/exec", async (c) => {
 
 app.post("/computers/:id/observe", async (c) => {
   try {
-    const { container } = await managedContainer(
+    const { container, layout } = await managedScreen(
       c.req.param("id"),
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
+      c.req.header("x-rakazo-screen-id"),
     );
-    return c.json(await observeContainer(container));
+    return c.json(await observeContainer(container, layout.display));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return c.json({ error: message }, 500);
@@ -199,16 +205,19 @@ app.post("/computers/:id/actions", async (c) => {
     })
     .parse(await c.req.json());
   try {
-    const { container } = await managedContainer(
+    const { container, layout } = await managedScreen(
       c.req.param("id"),
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
+      c.req.header("x-rakazo-screen-id"),
     );
-    if (body.actions.length) await applyContainerActions(container, body.actions);
+    if (body.actions.length) await applyContainerActions(container, body.actions, layout.display);
     if (body.settleMs) await new Promise((resolve) => setTimeout(resolve, body.settleMs));
     return c.json({
       completed: body.actions.length,
-      ...(body.observe === false ? {} : { observation: await observeContainer(container) }),
+      ...(body.observe === false
+        ? {}
+        : { observation: await observeContainer(container, layout.display) }),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -309,12 +318,13 @@ app.post("/computers/:id/files", async (c) => {
 app.get("/computers/:id/screen", async (c) => {
   const id = c.req.param("id");
   try {
-    const { container, info } = await managedContainer(
+    const { container, info, layout } = await managedScreen(
       id,
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
+      c.req.header("x-rakazo-screen-id"),
     );
-    const screenUrl = await publishedScreenUrl(container, info);
+    const screenUrl = await publishedScreenUrl(container, info, layout.viewPort);
     return c.redirect(screenUrl);
   } catch {
     return c.json({ error: "computer not found" }, 404);
@@ -336,15 +346,20 @@ app.post("/computers/:id/screen-mode", async (c) => {
     })
     .parse(await c.req.json());
   try {
-    const { container, info } = await managedContainer(
+    const { container, info, layout } = await managedScreen(
       c.req.param("id"),
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
+      c.req.header("x-rakazo-screen-id"),
     );
     if (body.interactive || body.revokeControl !== false) {
-      await setInteractiveScreen(container, body.interactive, body.controlToken);
+      await setInteractiveScreen(container, body.interactive, body.controlToken, layout);
     }
-    const screenUrl = await publishedScreenUrl(container, info, body.interactive ? "6081" : "6080");
+    const screenUrl = await publishedScreenUrl(
+      container,
+      info,
+      body.interactive ? layout.controlPort : layout.viewPort,
+    );
     return c.json({ screenUrl });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -371,14 +386,15 @@ app.post("/computers/:id/input", async (c) => {
     .parse(await c.req.json());
   const input = toSandboxInput(body.input);
   try {
-    const { container } = await managedContainer(
+    const { container, layout } = await managedScreen(
       id,
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
+      c.req.header("x-rakazo-screen-id"),
     );
     const result = await runContainerCommand(container, [
       "env",
-      "DISPLAY=:1",
+      `DISPLAY=${layout.display}`,
       ...xdotoolCommand(input),
     ]);
     if (result.code !== 0) {
@@ -492,6 +508,28 @@ async function managedContainer(id: string, botId?: string, workspaceId?: string
   return { container, info };
 }
 
+async function managedScreen(
+  id: string,
+  botId: string | undefined,
+  workspaceId: string | undefined,
+  screenId: string | undefined,
+) {
+  const { container, info } = await managedContainer(id, botId, workspaceId);
+  let assigned = computerScreens.get(id);
+  if (!assigned) {
+    assigned = new Map();
+    computerScreens.set(id, assigned);
+  }
+  const index = nextScreenIndex(assigned, screenId || botId || id);
+  const layout = screenPorts(index);
+  const ensured = await runContainerCommand(container, ["bash", "-lc", ensureScreenCommand(index)]);
+  if (ensured.code !== 0) {
+    assigned.delete(screenId || botId || id);
+    throw new Error(ensured.stderr || `computer screen ${layout.display} failed to start`);
+  }
+  return { container, info, layout };
+}
+
 function isRakazoContainer(info: Docker.ContainerInspectInfo, botId: string, workspaceId: string) {
   const labels = info.Config.Labels ?? {};
   const managed = labels["rakazo.managed"] === "true" || info.Config.Image === COMPUTER_IMAGE;
@@ -547,12 +585,13 @@ async function publishedScreenUrl(
 async function setInteractiveScreen(
   container: Docker.Container,
   interactive: boolean,
-  controlToken?: string,
+  controlToken: string | undefined,
+  layout: ReturnType<typeof screenPorts>,
 ) {
   const result = await runContainerCommand(container, [
     "bash",
     "-lc",
-    interactiveScreenCommand(interactive, controlToken),
+    interactiveScreenCommand(interactive, controlToken, layout),
   ]);
   if (result.code !== 0) throw new Error(result.stderr || "control screen failed to start");
 }
@@ -641,6 +680,7 @@ async function consumeCompletionMarker(container: Docker.Container, marker: stri
 async function applyContainerActions(
   container: Docker.Container,
   actions: Array<z.infer<typeof computerActionSchema>>,
+  display = ":1",
 ) {
   const script = [
     "import json, subprocess, sys, time",
@@ -654,15 +694,15 @@ async function applyContainerActions(
     "python3",
     "-c",
     script,
-    JSON.stringify(actions.map(containerActionStep)),
+    JSON.stringify(actions.map((action) => containerActionStep(action, display))),
   ]);
   if (result.code !== 0) throw new Error(result.stderr || "computer action failed");
 }
 
-async function observeContainer(container: Docker.Container) {
+async function observeContainer(container: Docker.Container, display = ":1") {
   const command = [
     "set -e",
-    "export DISPLAY=:1",
+    `export DISPLAY=${display}`,
     'printf "GEOM %s\\n" "$(xdotool getdisplaygeometry 2>/dev/null || echo 1280 800)"',
     'printf "CURSOR %s\\n" "$(xdotool getmouselocation --shell 2>/dev/null | tr "\\n" " " || true)"',
     'wid="$(xdotool getactivewindow 2>/dev/null || true)"',

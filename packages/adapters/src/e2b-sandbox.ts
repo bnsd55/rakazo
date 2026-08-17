@@ -19,6 +19,7 @@ import type {
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import { sandboxIdleMs } from "./computer-idle.js";
+import { SingleScreenClaimTracker } from "./computer-screens.js";
 import {
   boundedComputerActions,
   clampRounded,
@@ -82,6 +83,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   private readonly streamReady = new Set<string>();
   private readonly streamStarts = new Map<string, Promise<void>>();
   private readonly controlStreams = new Map<string, { password: string; controlToken: string }>();
+  private readonly screenClaims = new SingleScreenClaimTracker();
 
   constructor(
     private readonly apiKey: string,
@@ -99,6 +101,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         snapshots: true,
         takeover: true,
         persistentHome: true,
+        multiScreen: false,
       },
     };
   }
@@ -294,19 +297,22 @@ export class E2BSandboxProvider implements SandboxProvider {
     computer: ComputerRef,
     input: ComputerInput,
     _lease: ControlLeaseRef,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<void> {
     const desktop = await this.box(computer);
+    this.screenClaims.claim(desktop.sandboxId, context);
     await applyE2BAction(desktop, input);
   }
 
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
     const desktop = await this.box(computer);
+    this.screenClaims.claim(desktop.sandboxId, context);
     return observeE2BDesktop(desktop, context);
   }
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const desktop = await this.box(computer);
+    this.screenClaims.claim(desktop.sandboxId, context);
     const actions = boundedComputerActions(request.actions);
     let completed = 0;
     for (const action of actions) {
@@ -429,6 +435,10 @@ export class E2BSandboxProvider implements SandboxProvider {
     this.lastTouchedAt.set(desktop.sandboxId, Date.now());
   }
 
+  async releaseScreen(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    this.screenClaims.release(computer.providerRef || computer.id, context);
+  }
+
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const id = computer.providerRef || computer.id;
     const pending = this.streamStarts.get(id);
@@ -457,6 +467,7 @@ export class E2BSandboxProvider implements SandboxProvider {
     this.streamReady.delete(id);
     this.streamStarts.delete(id);
     this.controlStreams.delete(id);
+    this.screenClaims.release(id);
   }
 
   private async startControlStream(desktop: Sandbox, controlToken: string): Promise<string> {

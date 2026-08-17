@@ -149,6 +149,8 @@ export interface SandboxCapabilities {
   snapshots: boolean;
   takeover: boolean;
   persistentHome: boolean;
+  /** Distinct graphical screens for concurrent Team bots on one computer. */
+  multiScreen?: boolean;
 }
 
 export interface ConnectorTool {

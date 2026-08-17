@@ -12,6 +12,7 @@ import type {
   ScreenRequest,
   ScreenSession,
 } from "@rakazo/adapter-kit";
+import { screenSessionKey } from "./computer-screens.js";
 import {
   applyPlaceholderAction,
   boundedComputerActions,
@@ -23,7 +24,7 @@ export interface FakeBox {
   ref: ComputerRef;
   files: Map<string, { content: Uint8Array; executable: boolean }>;
   running: boolean;
-  screen: string;
+  screens: Map<string, string>;
 }
 
 export class FakeSandboxProvider implements SandboxProvider {
@@ -40,6 +41,7 @@ export class FakeSandboxProvider implements SandboxProvider {
         snapshots: true,
         takeover: true,
         persistentHome: true,
+        multiScreen: true,
       },
     };
   }
@@ -65,7 +67,7 @@ export class FakeSandboxProvider implements SandboxProvider {
       ref,
       files: new Map(),
       running: true,
-      screen: "ready",
+      screens: new Map([["default", "ready"]]),
     });
     return ref;
   }
@@ -97,10 +99,12 @@ export class FakeSandboxProvider implements SandboxProvider {
   async connectScreen(
     computer: ComputerRef,
     _request: ScreenRequest,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<ScreenSession> {
+    const key = screenSessionKey(context);
+    this.screenSlot(this.requiredBox(computer), key);
     return {
-      url: `fake://screen/${computer.id}`,
+      url: `fake://screen/${computer.id}/${key}`,
       mimeType: "text/plain",
       close: async () => undefined,
     };
@@ -110,23 +114,25 @@ export class FakeSandboxProvider implements SandboxProvider {
     computer: ComputerRef,
     input: ComputerInput,
     _lease: ControlLeaseRef,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<void> {
     const box = this.boxes.get(computer.id);
-    if (box) applyPlaceholderAction(box, input);
+    if (box) applyPlaceholderAction(this.screenSlot(box, screenSessionKey(context)), input);
   }
 
-  async observe(computer: ComputerRef, _context: AdapterContext) {
-    return placeholderObservation(this.requiredBox(computer).screen);
+  async observe(computer: ComputerRef, context: AdapterContext) {
+    const key = screenSessionKey(context);
+    return placeholderObservation(this.screenSlot(this.requiredBox(computer), key).screen);
   }
 
-  async act(computer: ComputerRef, request: ComputerActionRequest, _context: AdapterContext) {
+  async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const box = this.requiredBox(computer);
+    const slot = this.screenSlot(box, screenSessionKey(context));
     const actions = boundedComputerActions(request.actions);
-    for (const action of actions) applyPlaceholderAction(box, action);
+    for (const action of actions) applyPlaceholderAction(slot, action);
     return {
       completed: actions.length,
-      ...(request.observe === false ? {} : { observation: await this.observe(computer, _context) }),
+      ...(request.observe === false ? {} : { observation: await this.observe(computer, context) }),
     };
   }
 
@@ -222,5 +228,17 @@ export class FakeSandboxProvider implements SandboxProvider {
     const box = this.boxes.get(computer.id);
     if (!box) throw new Error("computer not found");
     return box;
+  }
+
+  private screenSlot(box: FakeBox, key: string): { screen: string } {
+    if (!box.screens.has(key)) box.screens.set(key, `ready:${key}`);
+    return {
+      get screen() {
+        return box.screens.get(key) ?? `ready:${key}`;
+      },
+      set screen(value: string) {
+        box.screens.set(key, value);
+      },
+    };
   }
 }

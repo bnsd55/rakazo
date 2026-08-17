@@ -292,6 +292,9 @@ export function createRouter(deps: RouterDeps) {
               await checkpointAndRecordComputerWorkspace(deps, bot.computer, ref, ctx);
               await deps.sandbox.stop(ref, ctx);
             }
+            await deps.prisma.computerExecutionLease.deleteMany({
+              where: { computerId: bot.computer.id, botId: bot.id },
+            });
             await deps.prisma.computer.update({
               where: { id: bot.computer.id },
               data: {
@@ -439,7 +442,7 @@ export function createRouter(deps: RouterDeps) {
             botId: bot.id,
             status: { in: [...ACTIVE_RUN_STATUSES] },
           },
-          select: { id: true, status: true },
+          select: { id: true },
         });
         await deps.prisma.run.updateMany({
           where: {
@@ -448,18 +451,22 @@ export function createRouter(deps: RouterDeps) {
           },
           data: { status: "cancelled", completedAt: new Date() },
         });
-        const pausedRunIds = activeRuns
-          .filter((run) => run.status === "waiting_takeover")
-          .map((run) => run.id);
-        if (pausedRunIds.length) {
-          await deps.prisma.computer.updateMany({
-            where: { executionRunId: { in: pausedRunIds } },
-            data: {
-              executionRunId: null,
-              executionBotId: null,
-              executionLeaseExpiresAt: null,
-            },
-          });
+        await deps.prisma.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
+        await deps.prisma.computer.updateMany({
+          where: { executionBotId: bot.id },
+          data: {
+            executionRunId: null,
+            executionBotId: null,
+            executionLeaseExpiresAt: null,
+          },
+        });
+        if (bot.computer?.providerRef) {
+          await deps.sandbox
+            .releaseScreen?.(
+              toComputerRef(bot.computer),
+              computerContext(context.actor, bot.id, "stop"),
+            )
+            .catch(() => undefined);
         }
         await deps.prisma.event.deleteMany({
           where: {
@@ -581,7 +588,31 @@ export function createRouter(deps: RouterDeps) {
       stop: authed.computer.stop.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
         if (!bot.computer) throw new IsolationError();
-        assertComputerAvailableToBot(bot.computer, bot.id);
+        const now = new Date();
+        const otherLease = await deps.prisma.computerExecutionLease.findFirst({
+          where: {
+            computerId: bot.computer.id,
+            botId: { not: bot.id },
+            expiresAt: { gt: now },
+          },
+          select: { id: true },
+        });
+        const otherRun = await deps.prisma.run.findFirst({
+          where: {
+            botId: { not: bot.id },
+            status: { in: [...ACTIVE_RUN_STATUSES] },
+            bot: { computerId: bot.computer.id },
+          },
+          select: { id: true },
+        });
+        if (otherLease || otherRun) {
+          throw new ORPCError("CONFLICT", {
+            message: "Other Team bots are still using this computer",
+          });
+        }
+        await deps.prisma.computerExecutionLease.deleteMany({
+          where: { computerId: bot.computer.id, botId: bot.id },
+        });
         if (bot.computer?.providerRef) {
           const ctx = computerContext(context.actor, bot.id, "stop");
           const ref = toComputerRef(bot.computer);
@@ -606,8 +637,7 @@ export function createRouter(deps: RouterDeps) {
         if (!bot.computer?.providerRef || bot.computer.state !== "running") {
           throw new ORPCError("BAD_REQUEST", { message: "computer must be running" });
         }
-        assertComputerAvailableToBot(bot.computer, bot.id);
-        if (hasActiveComputerControl(bot.computer)) {
+        if (hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id) {
           await scheduleComputerControlExpiry(
             deps.jobs,
             bot.computer.id,
@@ -619,23 +649,24 @@ export function createRouter(deps: RouterDeps) {
             expiresAt: bot.computer.controlLeaseExpiresAt!.toISOString(),
           };
         }
+        if (hasActiveComputerControl(bot.computer) && bot.computer.controlBotId !== bot.id) {
+          throw new ORPCError("CONFLICT", { message: "Another screen is already in control" });
+        }
         if (bot.computer.controlLeaseId) {
           await expireComputerControl(deps, bot.computer.id, bot.computer.controlLeaseId);
           bot = await repos.getBot(context.actor, input.botId);
         }
         if (!bot.computer) throw new IsolationError();
-        assertComputerAvailableToBot(bot.computer, bot.id);
 
-        const executionRunId = bot.computer.executionRunId;
-        const executionFence = bot.computer.executionFence;
+        const executionLease = await deps.prisma.computerExecutionLease.findUnique({
+          where: { computerId_botId: { computerId: bot.computer.id, botId: bot.id } },
+        });
         const executionLeaseActive = Boolean(
-          executionRunId &&
-            (!bot.computer.executionLeaseExpiresAt ||
-              bot.computer.executionLeaseExpiresAt.getTime() > Date.now()),
+          executionLease && executionLease.expiresAt.getTime() > Date.now(),
         );
-        const executionRun = executionRunId
+        const executionRun = executionLease
           ? await deps.prisma.run.findUnique({
-              where: { id: executionRunId },
+              where: { id: executionLease.runId },
               select: { botId: true, status: true },
             })
           : null;
@@ -644,12 +675,14 @@ export function createRouter(deps: RouterDeps) {
         );
         const waitingForTakeover =
           executionRun?.botId === bot.id && executionRun.status === "waiting_takeover";
-        if (executionRunId && !waitingForTakeover && (executionLeaseActive || executionRunActive)) {
+        if (executionLease && !waitingForTakeover && (executionLeaseActive || executionRunActive)) {
           throw new ORPCError("CONFLICT", { message: "Stop the bot first" });
         }
-        const clearStaleExecution = Boolean(
-          executionRunId && !executionLeaseActive && !executionRunActive,
-        );
+        if (executionLease && !executionLeaseActive && !executionRunActive) {
+          await deps.prisma.computerExecutionLease.deleteMany({
+            where: { id: executionLease.id },
+          });
+        }
 
         const leaseId = randomUUID();
         const expiresAt = new Date(Date.now() + takeoverLeaseMs());
@@ -658,8 +691,6 @@ export function createRouter(deps: RouterDeps) {
             id: bot.computer.id,
             controlHolder: { not: "user" },
             controlLeaseId: null,
-            executionRunId,
-            executionFence,
           },
           data: {
             controlHolder: "user",
@@ -667,13 +698,6 @@ export function createRouter(deps: RouterDeps) {
             controlLeaseExpiresAt: expiresAt,
             controlBotId: bot.id,
             state: "running",
-            ...(clearStaleExecution
-              ? {
-                  executionRunId: null,
-                  executionBotId: null,
-                  executionLeaseExpiresAt: null,
-                }
-              : {}),
           },
         });
         if (granted.count !== 1) {
@@ -880,14 +904,21 @@ export function createRouter(deps: RouterDeps) {
           toComputerRef(bot.computer),
           {
             view: "stream",
-            interactive: hasActiveComputerControl(bot.computer),
-            controlToken: bot.computer.controlLeaseId ?? undefined,
+            interactive:
+              hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id,
+            controlToken:
+              bot.computer.controlBotId === bot.id
+                ? (bot.computer.controlLeaseId ?? undefined)
+                : undefined,
           },
           computerContext(context.actor, bot.id, "screen"),
         );
         if (!session.url) return { url: null };
         scheduleComputerSleep(deps.jobs, bot.computer.id);
-        const viewUrl = withViewOnly(session.url, !hasActiveComputerControl(bot.computer));
+        const viewUrl = withViewOnly(
+          session.url,
+          !(hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id),
+        );
         return {
           url: addScreenProxyCapability(viewUrl, deps.env.screenProxySecret, deps.env.webOrigin),
         };
@@ -1514,22 +1545,15 @@ function assertComputerAvailableToBot(
 }
 
 function isComputerBusyForBot(
-  computer: {
+  _computer: {
     scope: string;
     executionBotId: string | null;
     executionLeaseExpiresAt: Date | null;
     controlHolder: string;
   },
-  botId: string,
+  _botId: string,
 ): boolean {
-  return Boolean(
-    computer.scope === "team" &&
-      computer.executionBotId &&
-      computer.executionBotId !== botId &&
-      (computer.controlHolder === "user" ||
-        !computer.executionLeaseExpiresAt ||
-        computer.executionLeaseExpiresAt.getTime() > Date.now()),
-  );
+  return false;
 }
 
 function toComputerStatus(

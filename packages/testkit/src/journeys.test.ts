@@ -169,6 +169,53 @@ describeJourneys("required product journeys", () => {
     expect(bobBot.id).not.toBe(chief.id);
   });
 
+  it("2b: two Team bots send at once on distinct screens", async () => {
+    const cookie = await signup(app, `parallel-j-${stamp}@rakazo.test`, "Parallel");
+    const writer = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Writer",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const researcher = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Researcher",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const [writerSnap, researcherSnap] = await Promise.all([
+      sendAndWait(app, cookie, writer.id, "observe your screen and type writer-desk"),
+      sendAndWait(app, cookie, researcher.id, "observe your screen and type researcher-desk"),
+    ]);
+    expect(writerSnap.run?.status).toBe("completed");
+    expect(researcherSnap.run?.status).toBe("completed");
+    expect(
+      (
+        await rpc<{ busyBotName: string | null }>(app, cookie, "computer/status", {
+          botId: writer.id,
+        })
+      ).busyBotName,
+    ).toBeNull();
+    expect(
+      (
+        await rpc<{ busyBotName: string | null }>(app, cookie, "computer/status", {
+          botId: researcher.id,
+        })
+      ).busyBotName,
+    ).toBeNull();
+    const writerScreen = await rpc<{ url: string | null }>(app, cookie, "computer/screenUrl", {
+      botId: writer.id,
+    });
+    const researcherScreen = await rpc<{ url: string | null }>(app, cookie, "computer/screenUrl", {
+      botId: researcher.id,
+    });
+    expect(writerScreen.url).toContain(writer.id);
+    expect(researcherScreen.url).toContain(researcher.id);
+    expect(writerScreen.url).not.toBe(researcherScreen.url);
+  });
+
   it("3: disconnect and reconnect from a cursor reconstructs the thread", async () => {
     const cookie = await signup(app, `cursor-j-${stamp}@rakazo.test`, "Cursor");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {

@@ -4,8 +4,10 @@ import { supervisorApp } from "./index.js";
 import {
   assertRequestIdentity,
   containerActionStep,
+  ensureScreenCommand,
   hasValidBearerToken,
   interactiveScreenCommand,
+  nextScreenIndex,
   normalizeWorkspaceRelative,
   parseObservation,
   sandboxCommandTimedOut,
@@ -127,6 +129,20 @@ describe("sandbox supervisor input containment", () => {
     expect(interactiveScreenCommand(true, "lease-new")).toMatch(/6081/);
     expect(interactiveScreenCommand(true, "lease-new")).not.toMatch(/-rfbport 5900/);
     expect(interactiveScreenCommand(false, "lease-old")).toContain("!= 'lease-old'");
+  });
+
+  it("assigns distinct screen indexes per Team bot and starts extra displays", () => {
+    const assigned = new Map<string, number>();
+    expect(nextScreenIndex(assigned, "writer")).toBe(0);
+    expect(nextScreenIndex(assigned, "researcher")).toBe(1);
+    expect(nextScreenIndex(assigned, "writer")).toBe(0);
+    expect(ensureScreenCommand(0)).toContain("-display :1");
+    expect(ensureScreenCommand(1)).toContain("Xvfb :2");
+    expect(ensureScreenCommand(1)).toContain("rfbport 5902");
+    expect(ensureScreenCommand(1)).toContain("0.0.0.0:6082");
+    expect(() => nextScreenIndex(assigned, "overflow", 1)).toThrow(
+      /cannot allocate another screen/,
+    );
   });
 
   it("parses a captured frame without trusting optional desktop metadata", () => {

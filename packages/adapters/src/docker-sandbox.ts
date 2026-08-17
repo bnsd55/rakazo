@@ -43,6 +43,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         snapshots: true,
         takeover: true,
         persistentHome: true,
+        multiScreen: true,
       },
     };
   }
@@ -56,6 +57,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       authorization: `Bearer ${this.supervisorToken}`,
       "x-rakazo-workspace-id": context.workspaceId,
       ...(botId ? { "x-rakazo-bot-id": botId } : {}),
+      ...(context.botId ? { "x-rakazo-screen-id": context.botId } : {}),
     };
   }
 
@@ -129,6 +131,10 @@ export class DockerSandboxProvider implements SandboxProvider {
       signal: context.signal,
     });
     if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (/cannot allocate another screen/i.test(detail)) {
+        throw new Error("This Team Computer cannot allocate another screen.");
+      }
       return { url: null, mimeType: "text/html", close: async () => undefined };
     }
     const body = (await res.json()) as { screenUrl?: string };
@@ -178,7 +184,10 @@ export class DockerSandboxProvider implements SandboxProvider {
       headers: this.headers(context, computer.botId),
       signal: context.signal,
     });
-    if (!res.ok) throw new Error(`sandbox observation failed: ${res.status}`);
+    if (!res.ok)
+      throw new Error(
+        `sandbox observation failed: ${res.status} ${await res.text().catch(() => "")}`.trim(),
+      );
     const body = (await res.json()) as {
       image: string;
       mimeType: "image/png" | "image/jpeg";
@@ -208,7 +217,10 @@ export class DockerSandboxProvider implements SandboxProvider {
       }),
       signal: context.signal,
     });
-    if (!res.ok) throw new Error(`sandbox action failed: ${res.status}`);
+    if (!res.ok)
+      throw new Error(
+        `sandbox action failed: ${res.status} ${await res.text().catch(() => "")}`.trim(),
+      );
     const body = (await res.json()) as {
       completed: number;
       observation?: {

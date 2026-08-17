@@ -25,6 +25,7 @@ import type {
   ScreenSession,
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
+import { SingleScreenClaimTracker } from "./computer-screens.js";
 import {
   boundedComputerActions,
   clampRounded,
@@ -65,6 +66,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     string,
     { x: number; y: number; button: "left" | "right" }
   >();
+  private readonly screenClaims = new SingleScreenClaimTracker();
 
   constructor(config: DaytonaConfig & { apiKey: string }, client?: DaytonaSandboxSdk) {
     this.client =
@@ -87,6 +89,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         snapshots: true,
         takeover: true,
         persistentHome: true,
+        multiScreen: false,
       },
     };
   }
@@ -207,15 +210,17 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     computer: ComputerRef,
     input: ComputerInput,
     _lease: ControlLeaseRef,
-    _context: AdapterContext,
+    context: AdapterContext,
   ): Promise<void> {
     const sandbox = await this.box(computer);
+    this.screenClaims.claim(sandbox.id, context);
     await this.ensureDesktop(sandbox);
     await this.applyAction(sandbox, input);
   }
 
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
     const sandbox = await this.box(computer);
+    this.screenClaims.claim(sandbox.id, context);
     await this.ensureDesktop(sandbox);
     const [screenshot, display, windows, cursor] = await Promise.all([
       sandbox.computerUse.screenshot.takeFullScreen(true),
@@ -244,6 +249,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async act(computer: ComputerRef, request: ComputerActionRequest, context: AdapterContext) {
     const sandbox = await this.box(computer);
+    this.screenClaims.claim(sandbox.id, context);
     await this.ensureDesktop(sandbox);
     const actions = boundedComputerActions(request.actions);
     let completed = 0;
@@ -362,6 +368,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async keepAlive(computer: ComputerRef): Promise<void> {
     await (await this.box(computer)).refreshActivity();
+  }
+
+  async releaseScreen(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    this.screenClaims.release(computer.providerRef || computer.id, context);
   }
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
@@ -630,6 +640,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     this.screenPreviews.delete(id);
     this.screenPreviewStarts.delete(id);
     this.pointerDown.delete(id);
+    this.screenClaims.release(id);
   }
 }
 

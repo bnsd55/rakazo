@@ -7,6 +7,7 @@ const context = {
   traceId: "docker-test",
   workspaceId: "workspace",
   userId: "user",
+  botId: "bot",
   signal: new AbortController().signal,
 };
 
@@ -43,5 +44,8 @@ describe("Docker sandbox command timeout", () => {
       { type: "stderr", data: "command timed out after 75 ms\n" },
       { type: "exit", code: 124 },
     ]);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "x-rakazo-screen-id": "bot",
+    });
   });
 });

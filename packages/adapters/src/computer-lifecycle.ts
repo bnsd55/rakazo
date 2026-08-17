@@ -12,6 +12,8 @@ import { ensureComputerWorkspaceLayout, restoreComputerWorkspace } from "./compu
 import { resolveAgentHomePath } from "./home.js";
 
 const EXECUTION_LEASE_MS = 5 * 60_000;
+const BOOT_WAIT_ATTEMPTS = 40;
+const BOOT_WAIT_MS = 250;
 
 export class ComputerBusyError extends Error {
   constructor() {
@@ -45,10 +47,22 @@ export async function provisionComputer(
   }
   const homePath = resolveAgentHomePath(deps.home, existing.homeKey, deps.dataDir ?? "./data");
   await mkdir(homePath, { recursive: true });
+
+  if (existing.state === "running" && existing.providerRef) {
+    return reconnectComputer(deps, existing, homePath, context);
+  }
+  if (existing.state === "booting" || existing.state === "suspending") {
+    const ready = await waitForComputerReady(deps.prisma, computerId, context);
+    if (ready?.state === "running" && ready.providerRef) {
+      return reconnectComputer(deps, ready, homePath, context);
+    }
+    existing = await deps.prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
+  }
+
   const claimed = await deps.prisma.computer.updateMany({
     where: {
       id: computerId,
-      state: { not: "suspending" },
+      state: { in: ["stopped", "suspended", "error"] },
       ...(context.botId ? { bots: { some: { id: context.botId, archivedAt: null } } } : {}),
     },
     data: { state: "booting" },
@@ -113,8 +127,60 @@ export async function provisionComputer(
   }
 }
 
+async function reconnectComputer(
+  deps: {
+    sandbox: SandboxProvider;
+    home: AgentHomeStore;
+    dataDir?: string;
+  },
+  computer: {
+    homeKey: string;
+    providerRef: string | null;
+    kind: string;
+    scope: string;
+  },
+  homePath: string,
+  context: AdapterContext,
+): Promise<ComputerRef> {
+  const ref = await deps.sandbox.provision(
+    {
+      botId: computer.homeKey,
+      homePath,
+      providerRef: computer.providerRef ?? undefined,
+      providerKind: computer.kind as ComputerRef["kind"],
+    },
+    context,
+  );
+  await ensureComputerWorkspaceLayout(
+    deps.sandbox,
+    ref,
+    parseComputerMode(computer.scope),
+    context.botId,
+    context,
+  );
+  return ref;
+}
+
+async function waitForComputerReady(
+  prisma: PrismaClient,
+  computerId: string,
+  context: AdapterContext,
+) {
+  for (let attempt = 0; attempt < BOOT_WAIT_ATTEMPTS; attempt += 1) {
+    const current = await prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
+    if (current.state === "running" && current.providerRef) return current;
+    if (current.state !== "booting" && current.state !== "suspending") return current;
+    await new Promise((resolve) => setTimeout(resolve, BOOT_WAIT_MS));
+    if (context.signal.aborted) {
+      throw context.signal.reason ?? new Error("computer boot aborted");
+    }
+  }
+  return prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
+}
+
 export interface ComputerExecutionLease {
   computerId: string;
+  botId: string;
   runId: string;
   fence: number;
 }
@@ -130,31 +196,51 @@ export async function acquireComputerExecutionLease(
 ): Promise<ComputerExecutionLease | null> {
   const computer = await prisma.computer.findUniqueOrThrow({ where: { id: input.computerId } });
   if (computer.scope !== "team") return null;
+  if (computer.state === "suspending") throw new ComputerBusyError();
   const now = new Date();
-  const [leased] = await prisma.computer.updateManyAndReturn({
+  const expiresAt = new Date(now.getTime() + EXECUTION_LEASE_MS);
+  const [reclaimed] = await prisma.computerExecutionLease.updateManyAndReturn({
     where: {
-      id: input.computerId,
-      state: { not: "suspending" },
-      controlHolder: { not: "user" },
-      OR: [
-        { executionRunId: null },
-        ...(input.resumeHeldLease ? [{ executionRunId: input.runId }] : []),
-        {
-          executionLeaseExpiresAt: { lt: now },
-          controlHolder: { not: "user" },
-        },
-      ],
+      computerId: input.computerId,
+      botId: input.botId,
+      OR: [{ expiresAt: { lt: now } }, ...(input.resumeHeldLease ? [{ runId: input.runId }] : [])],
     },
     data: {
-      executionRunId: input.runId,
-      executionBotId: input.botId,
-      executionLeaseExpiresAt: new Date(now.getTime() + EXECUTION_LEASE_MS),
-      executionFence: { increment: 1 },
+      runId: input.runId,
+      expiresAt,
+      fence: { increment: 1 },
     },
-    select: { executionFence: true },
+    select: { fence: true },
   });
-  if (!leased) throw new ComputerBusyError();
-  return { computerId: input.computerId, runId: input.runId, fence: leased.executionFence };
+  if (reclaimed) {
+    return {
+      computerId: input.computerId,
+      botId: input.botId,
+      runId: input.runId,
+      fence: reclaimed.fence,
+    };
+  }
+  try {
+    const created = await prisma.computerExecutionLease.create({
+      data: {
+        computerId: input.computerId,
+        botId: input.botId,
+        runId: input.runId,
+        fence: 1,
+        expiresAt,
+      },
+      select: { fence: true },
+    });
+    return {
+      computerId: input.computerId,
+      botId: input.botId,
+      runId: input.runId,
+      fence: created.fence,
+    };
+  } catch (error) {
+    if (isUniqueConstraintError(error)) throw new ComputerBusyError();
+    throw error;
+  }
 }
 
 export async function renewComputerExecutionLease(
@@ -162,14 +248,14 @@ export async function renewComputerExecutionLease(
   lease: ComputerExecutionLease | null,
 ): Promise<boolean> {
   if (!lease) return true;
-  const renewed = await prisma.computer.updateMany({
+  const renewed = await prisma.computerExecutionLease.updateMany({
     where: {
-      id: lease.computerId,
-      executionRunId: lease.runId,
-      executionFence: lease.fence,
-      controlHolder: { not: "user" },
+      computerId: lease.computerId,
+      botId: lease.botId,
+      runId: lease.runId,
+      fence: lease.fence,
     },
-    data: { executionLeaseExpiresAt: new Date(Date.now() + EXECUTION_LEASE_MS) },
+    data: { expiresAt: new Date(Date.now() + EXECUTION_LEASE_MS) },
   });
   return renewed.count === 1;
 }
@@ -179,14 +265,14 @@ export async function holdComputerExecutionLeaseForTakeover(
   lease: ComputerExecutionLease | null,
 ): Promise<boolean> {
   if (!lease) return true;
-  const held = await prisma.computer.updateMany({
+  const held = await prisma.computerExecutionLease.updateMany({
     where: {
-      id: lease.computerId,
-      executionRunId: lease.runId,
-      executionFence: lease.fence,
-      controlHolder: { not: "user" },
+      computerId: lease.computerId,
+      botId: lease.botId,
+      runId: lease.runId,
+      fence: lease.fence,
     },
-    data: { executionLeaseExpiresAt: new Date(Date.now() + 24 * 60 * 60_000) },
+    data: { expiresAt: new Date(Date.now() + 24 * 60 * 60_000) },
   });
   return held.count === 1;
 }
@@ -196,16 +282,16 @@ export async function releaseComputerExecutionLease(
   lease: ComputerExecutionLease | null,
 ): Promise<void> {
   if (!lease) return;
-  await prisma.computer.updateMany({
+  await prisma.computerExecutionLease.deleteMany({
     where: {
-      id: lease.computerId,
-      executionRunId: lease.runId,
-      executionFence: lease.fence,
-    },
-    data: {
-      executionRunId: null,
-      executionBotId: null,
-      executionLeaseExpiresAt: null,
+      computerId: lease.computerId,
+      botId: lease.botId,
+      runId: lease.runId,
+      fence: lease.fence,
     },
   });
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2002");
 }
