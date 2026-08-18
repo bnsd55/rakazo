@@ -15,7 +15,7 @@ import {
 import {
   acquireComputerExecutionLease,
   archiveBot,
-  type ComposioConnector,
+  type ComposioProvider,
   ComputerBusyError,
   type ComputerExecutionLease,
   checkpointAndRecordComputerWorkspace,
@@ -101,7 +101,7 @@ export interface RouterDeps {
   home: AgentHomeStore;
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
-  composio?: ComposioConnector;
+  composio?: ComposioProvider;
   artifacts: ArtifactStore;
   dataDir: string;
   env: {

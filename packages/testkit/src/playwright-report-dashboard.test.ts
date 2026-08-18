@@ -97,6 +97,16 @@ describe("renderScreenshotGallery", () => {
     expect(html).toContain('src="images/001-shell.png"');
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("main &lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("repeat(var(--gallery-columns, 1), minmax(0, 1fr))");
+    expect(html).toContain('data-columns="1" aria-label="One column" aria-pressed="true"');
+    expect(html).toContain('data-columns="4" aria-label="Four columns" aria-pressed="false"');
+    expect(html).toContain("initialColumns = localStorage.getItem(storageKey) || initialColumns");
+    expect(html).toContain(`@media (max-width: 900px) {
+      header { align-items: start; flex-direction: column; }
+      .toolbar { align-items: start; flex-direction: column; }
+      .view-options { display: none; }
+      .gallery { grid-template-columns: 1fr; }
+    }`);
   });
 });
 
