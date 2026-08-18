@@ -84,6 +84,19 @@ function ruleMatches(rule: ActionApprovalRule, toolName: string, connectorKind: 
   }
 }
 
+function ruleSpecificity(rule: ActionApprovalRule): number {
+  switch (rule.matchKind) {
+    case "tool":
+      return 3;
+    case "connector":
+      return 2;
+    case "category":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 export function resolveActionApproval(input: {
   toolName: string;
   viaConnector: boolean;
@@ -92,22 +105,17 @@ export function resolveActionApproval(input: {
 }): "ask" | "allow" {
   if (APPROVAL_EXEMPT_TOOLS.has(input.toolName)) return "allow";
   const connectorKind = input.connectorKind ?? connectorKindFromToolName(input.toolName);
-  if (
-    input.rules.some(
-      (rule) =>
-        rule.effect === "require_approval" && ruleMatches(rule, input.toolName, connectorKind),
-    )
-  ) {
-    return "ask";
-  }
-  if (
-    input.rules.some(
-      (rule) => rule.effect === "always_allow" && ruleMatches(rule, input.toolName, connectorKind),
-    )
-  ) {
-    return "allow";
-  }
-  return toolRequiresApproval(input.toolName, input.viaConnector) ? "ask" : "allow";
+  const matchingRules = input.rules.filter((rule) =>
+    ruleMatches(rule, input.toolName, connectorKind),
+  );
+  if (matchingRules.length === 0) return "allow";
+
+  const highestSpecificity = Math.max(...matchingRules.map(ruleSpecificity));
+  return matchingRules.some(
+    (rule) => ruleSpecificity(rule) === highestSpecificity && rule.effect === "require_approval",
+  )
+    ? "ask"
+    : "allow";
 }
 
 export function isApprovalAskBlock(block: {

@@ -10,8 +10,8 @@ function describeRule(rule: ActionApprovalRule) {
         ? `${rule.matchValue} connector`
         : rule.matchValue;
   return rule.effect === "require_approval"
-    ? `Require approval for ${target}`
-    : `Always allow ${target}`;
+    ? `Ask before ${target}`
+    : `Allow ${target} without asking`;
 }
 
 export function ApprovalRulesSettings() {
@@ -60,11 +60,11 @@ export function ApprovalRulesSettings() {
   }
 
   return (
-    <div className="mt-8 border-t border-[#232326] pt-6">
-      <h3 className="text-[15px] font-medium text-[#ECECEE]">Action approvals</h3>
+    <div data-testid="action-confirmation-settings" className="pt-5">
+      <h3 className="text-[15px] font-medium text-[#ECECEE]">Action confirmations</h3>
       <p className="mt-2 text-[13.5px] leading-[1.5] text-[#85858A]">
-        Standing rules apply to your bots in this workspace. Require-approval beats always-allow.
-        These rules do not cover browser or computer control, passwords, or other protected input.
+        Bots act without asking by default. Add an exception only when you want to review a type of
+        action first. These preferences apply across all your bots.
       </p>
       <div className="mt-4 flex flex-col items-start gap-2">
         <button
@@ -72,21 +72,21 @@ export function ApprovalRulesSettings() {
           onClick={() => void setPreset("email")}
           className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14px] text-[#C9C9CE]"
         >
-          Require approval before external email
+          Ask before sending external email
         </button>
         <button
           type="button"
           onClick={() => void setPreset("purchase")}
           className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14px] text-[#C9C9CE]"
         >
-          Require approval before purchases
+          Ask before purchases
         </button>
       </div>
       {error ? <p className="mt-3 text-[13px] text-[#E65707]">{error}</p> : null}
       {loading ? (
         <p className="mt-4 text-[13px] text-[#85858A]">Loading rules…</p>
       ) : rules.length === 0 ? (
-        <p className="mt-4 text-[13px] text-[#85858A]">No standing rules yet.</p>
+        <p className="mt-4 text-[13px] text-[#85858A]">No exceptions. Actions run automatically.</p>
       ) : (
         <ul className="mt-4 space-y-2">
           {rules.map((rule) => (

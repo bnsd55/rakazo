@@ -141,7 +141,7 @@ describe("resolveActionApproval", () => {
     ).toBe("allow");
   });
 
-  it("lets require_approval on a tool beat always-allow on that tool", () => {
+  it("lets require_approval beat always-allow at the same specificity", () => {
     expect(
       resolveActionApproval({
         toolName: "destination.write",
@@ -151,7 +151,7 @@ describe("resolveActionApproval", () => {
     ).toBe("ask");
   });
 
-  it("keeps existing heuristics when no rules match", () => {
+  it("allows actions by default when no rules match", () => {
     expect(
       resolveActionApproval({
         toolName: "list_files",
@@ -165,6 +165,19 @@ describe("resolveActionApproval", () => {
         viaConnector: false,
         rules: [],
       }),
-    ).toBe("ask");
+    ).toBe("allow");
+  });
+
+  it("lets a tool exception override a broader category rule", () => {
+    expect(
+      resolveActionApproval({
+        toolName: "gmail_send_email",
+        viaConnector: true,
+        rules: [
+          ...requireEmail,
+          { effect: "always_allow", matchKind: "tool", matchValue: "gmail_send_email" },
+        ],
+      }),
+    ).toBe("allow");
   });
 });

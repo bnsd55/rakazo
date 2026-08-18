@@ -33,7 +33,6 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ApprovalRulesSettings } from "../components/ApprovalRulesSettings";
 import { AskCard } from "../components/AskCard";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
@@ -52,6 +51,11 @@ import { WindowChrome } from "./WindowChrome";
 
 const BotContextMenu = lazy(() =>
   import("./BotContextMenu").then((module) => ({ default: module.BotContextMenu })),
+);
+const AccountSettingsOverlay = lazy(() =>
+  import("./AccountSettingsOverlay").then((module) => ({
+    default: module.AccountSettingsOverlay,
+  })),
 );
 const ModelSettingsOverlay = lazy(() =>
   import("./ModelSettingsOverlay").then((module) => ({ default: module.ModelSettingsOverlay })),
@@ -80,6 +84,7 @@ export function ShellPage() {
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [botMenu, setBotMenu] = useState<{
     botId: string;
@@ -697,6 +702,18 @@ export function ShellPage() {
             <div className="absolute bottom-14 left-3 right-3 rounded-2xl border border-[#2A2A2F] bg-[#1A1A1D] p-2 shadow-[0_22px_50px_rgba(0,0,0,.55)]">
               <button
                 type="button"
+                aria-label="Settings"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setAccountSettingsOpen(true);
+                }}
+                className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
+              >
+                <span className="text-[#9A9AA0]">⚙</span>
+                <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Settings</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setMenuOpen(false);
                   setModelsOpen(true);
@@ -733,6 +750,7 @@ export function ShellPage() {
           ) : null}
           <button
             type="button"
+            data-testid="user-menu-trigger"
             onClick={() => setMenuOpen((v) => !v)}
             className="flex items-center gap-[11px] px-[18px] py-3.5"
           >
@@ -1162,6 +1180,13 @@ export function ShellPage() {
       </Suspense>
 
       <Suspense fallback={null}>
+        {accountSettingsOpen ? (
+          <AccountSettingsOverlay
+            name={userName}
+            email={session.data?.user.email}
+            onClose={() => setAccountSettingsOpen(false)}
+          />
+        ) : null}
         {modelsOpen ? <ModelSettingsOverlay onClose={() => setModelsOpen(false)} /> : null}
       </Suspense>
 
@@ -1754,7 +1779,6 @@ function BotSettings({
           Export
         </button>
       </div>
-      <ApprovalRulesSettings />
     </div>
   );
 }

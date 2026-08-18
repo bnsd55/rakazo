@@ -145,6 +145,15 @@ describeIntegration("run executor lifecycle", () => {
         request: args,
       },
     });
+    await handles.prisma.actionApprovalRule.create({
+      data: {
+        workspaceId: seeded.me.workspaceId,
+        createdByUserId: seeded.me.userId,
+        effect: "require_approval",
+        matchKind: "tool",
+        matchValue: "destination.write",
+      },
+    });
     const recordsBefore = handles.connector.records.length;
 
     await handles.executor.continueRun(seeded.run.id, "retry-worker");

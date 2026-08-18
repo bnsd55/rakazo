@@ -455,7 +455,7 @@ describeJourneys("required product journeys", () => {
       label: "test",
       modelId: "scripted",
     });
-    await sendApproveAndWait(app, cookie, bot.id, "write this to the destination crm as a note");
+    await sendAndWait(app, cookie, bot.id, "write this to the destination crm as a note");
     expect(connector.records.length).toBeGreaterThan(before);
     const snap = await rpc<Snap>(app, cookie, "threads/get", { botId: bot.id });
     expect(JSON.stringify(snap)).not.toContain(secret);
@@ -478,7 +478,6 @@ describeJourneys("required product journeys", () => {
       botId: bot.id,
       text: "write this to the destination crm as a note",
     });
-    await answerPendingApproval(app, cookie, bot.id, sent.runId, "allow");
     await waitFor(
       app,
       cookie,
@@ -669,17 +668,17 @@ describeJourneys("required product journeys", () => {
       (s) => !s.run || ["completed", "failed", "cancelled"].includes(s.run.status),
     );
 
-    await sendApproveAndWait(app, cookie, parent.id, "delete the bot named Nested");
+    await sendAndWait(app, cookie, parent.id, "delete the bot named Nested");
     expect((await rpc<Bot[]>(app, cookie, "bots/list")).some((bot) => bot.id === nested!.id)).toBe(
       true,
     );
 
-    await sendApproveAndWait(app, cookie, parent.id, "delete the bot named WrongName");
+    await sendAndWait(app, cookie, parent.id, "delete the bot named WrongName");
     expect((await rpc<Bot[]>(app, cookie, "bots/list")).some((bot) => bot.id === scout!.id)).toBe(
       true,
     );
 
-    await sendApproveAndWait(app, cookie, parent.id, "delete the bot named Scout");
+    await sendAndWait(app, cookie, parent.id, "delete the bot named Scout");
     const afterScout = await rpc<Bot[]>(app, cookie, "bots/list");
     expect(afterScout.some((bot) => bot.id === scout!.id)).toBe(false);
     expect(afterScout.some((bot) => bot.id === nested!.id)).toBe(true);
@@ -901,6 +900,11 @@ describeJourneys("required product journeys", () => {
       notifyOnFinish: true,
     });
     const recordsBefore = connector.records.length;
+    await rpc(app, cookie, "approvalRules/set", {
+      effect: "require_approval",
+      matchKind: "tool",
+      matchValue: "destination.write",
+    });
 
     const sent = await rpc<{ runId: string }>(app, cookie, "threads/send", {
       botId: bot.id,
@@ -955,7 +959,7 @@ describeJourneys("required product journeys", () => {
     expect(deniedEffect?.status).toBe("denied");
   });
 
-  it("18: always allow skips later pauses until require-approval wins", async () => {
+  it("18: actions run by default and specific exceptions override broad review rules", async () => {
     const cookie = await signup(app, `always-j-${stamp}@rakazo.test`, "Always");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {
       name: "Chief",
@@ -967,9 +971,18 @@ describeJourneys("required product journeys", () => {
     const prompt = "write this to the destination crm as a note";
     const recordsBefore = connector.records.length;
 
-    const first = await rpc<{ runId: string }>(app, cookie, "threads/send", {
+    await sendAndWait(app, cookie, bot.id, prompt);
+    expect(connector.records.length).toBeGreaterThan(recordsBefore);
+    const recordsAfterDefault = connector.records.length;
+
+    await rpc(app, cookie, "approvalRules/set", {
+      effect: "require_approval",
+      matchKind: "connector",
+      matchValue: "destination.write",
+    });
+    const second = await rpc<{ runId: string }>(app, cookie, "threads/send", {
       botId: bot.id,
-      text: prompt,
+      text: "write this to the destination crm as a note again",
     });
     const waiting = await waitFor(
       app,
@@ -977,36 +990,26 @@ describeJourneys("required product journeys", () => {
       bot.id,
       (snap) => snap.run?.status === "waiting_input",
     );
-    await answerPendingApproval(app, cookie, bot.id, first.runId, "always", waiting);
+    await answerPendingApproval(app, cookie, bot.id, second.runId, "always", waiting);
     await waitFor(
       app,
       cookie,
       bot.id,
       (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
     );
-    expect(connector.records.length).toBeGreaterThan(recordsBefore);
-    const recordsAfterAlways = connector.records.length;
+    expect(connector.records.length).toBe(recordsAfterDefault + 1);
 
-    await rpc(app, cookie, "threads/send", {
-      botId: bot.id,
-      text: "write this to the destination crm as a note again",
-    });
-    await waitFor(
-      app,
-      cookie,
-      bot.id,
-      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
-    );
-    expect(connector.records.length).toBeGreaterThan(recordsAfterAlways);
+    await sendAndWait(app, cookie, bot.id, "write this to the destination crm once more");
+    expect(connector.records.length).toBe(recordsAfterDefault + 2);
 
     await rpc(app, cookie, "approvalRules/set", {
       effect: "require_approval",
       matchKind: "tool",
       matchValue: "destination.write",
     });
-    const third = await rpc<{ runId: string }>(app, cookie, "threads/send", {
+    const fourth = await rpc<{ runId: string }>(app, cookie, "threads/send", {
       botId: bot.id,
-      text: "write this to the destination crm as a note once more",
+      text: "write this to the destination crm one final time",
     });
     const waitingAgain = await waitFor(
       app,
@@ -1015,15 +1018,15 @@ describeJourneys("required product journeys", () => {
       (snap) => snap.run?.status === "waiting_input",
     );
     expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
-    expect(connector.records.length).toBe(recordsAfterAlways + 1);
-    await answerPendingApproval(app, cookie, bot.id, third.runId, "allow", waitingAgain);
+    expect(connector.records.length).toBe(recordsAfterDefault + 2);
+    await answerPendingApproval(app, cookie, bot.id, fourth.runId, "allow", waitingAgain);
     await waitFor(
       app,
       cookie,
       bot.id,
       (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
     );
-    expect(connector.records.length).toBe(recordsAfterAlways + 2);
+    expect(connector.records.length).toBe(recordsAfterDefault + 3);
   });
 
   it("19: routine destination writes pause on the same approval card", async () => {
@@ -1036,6 +1039,11 @@ describeJourneys("required product journeys", () => {
       notifyOnFinish: true,
     });
     const prompt = "write this to the destination crm as a note";
+    await rpc(app, cookie, "approvalRules/set", {
+      effect: "require_approval",
+      matchKind: "tool",
+      matchValue: "destination.write",
+    });
     const routine = await rpc<{ id: string }>(app, cookie, "routines/create", {
       botId: bot.id,
       name: "Send note",
@@ -1146,17 +1154,6 @@ async function rpc<T>(app: App, cookie: string, proc: string, body: unknown = {}
 
 async function sendAndWait(app: App, cookie: string, botId: string, text: string) {
   await rpc(app, cookie, "threads/send", { botId, text });
-  return waitFor(
-    app,
-    cookie,
-    botId,
-    (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
-  );
-}
-
-async function sendApproveAndWait(app: App, cookie: string, botId: string, text: string) {
-  const sent = await rpc<{ runId: string }>(app, cookie, "threads/send", { botId, text });
-  await answerPendingApproval(app, cookie, botId, sent.runId, "allow");
   return waitFor(
     app,
     cookie,
