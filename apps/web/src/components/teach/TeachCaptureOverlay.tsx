@@ -12,11 +12,16 @@ export function TeachCaptureOverlay({
   enabled: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const inputChainRef = useRef(Promise.resolve());
 
   useEffect(() => {
     if (!enabled || !skill || skill.status !== "recording") return;
     const root = rootRef.current;
     if (!root) return;
+
+    function enqueueInput(task: () => Promise<void>) {
+      inputChainRef.current = inputChainRef.current.then(task).catch(() => undefined);
+    }
 
     async function sendPointer(
       type: "move" | "down" | "up" | "click",
@@ -42,14 +47,14 @@ export function TeachCaptureOverlay({
       const rect = target.getBoundingClientRect();
       const x = Math.round(((event.clientX - rect.left) / rect.width) * 1280);
       const y = Math.round(((event.clientY - rect.top) / rect.height) * 800);
-      void sendPointer("click", x, y, event.button === 2 ? "right" : "left");
+      enqueueInput(() => sendPointer("click", x, y, event.button === 2 ? "right" : "left"));
     }
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key.length !== 1) return;
       event.preventDefault();
-      void sendKey(event.key);
+      enqueueInput(() => sendKey(event.key));
     }
 
     root.addEventListener("pointerdown", onPointerDown);

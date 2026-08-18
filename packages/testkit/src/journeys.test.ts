@@ -1040,6 +1040,14 @@ describeJourneys("required product journeys", () => {
     expect(stopped.playbook.steps.join(" ")).toMatch(/Click|120|40|x/i);
     expect(stopped.recording.events.some((event) => event.kind === "pointer")).toBe(true);
     expect(stopped.recording.snapshots.length).toBeGreaterThanOrEqual(2);
+    const computerAfterStop = await rpc<{ controlHolder: string; controlBotId: string | null }>(
+      app,
+      cookie,
+      "computer/status",
+      { botId: bot.id },
+    );
+    expect(computerAfterStop.controlHolder).toBe("bot");
+    expect(computerAfterStop.controlBotId).toBeNull();
     await rpc(app, cookie, "skills/updateDraft", {
       skillId: skill.id,
       name: "Export weekly CRM list",
