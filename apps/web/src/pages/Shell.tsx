@@ -124,6 +124,7 @@ export function ShellPage() {
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
   const [deleteRoutineTarget, setDeleteRoutineTarget] = useState<Routine | null>(null);
   const [savingRoutine, setSavingRoutine] = useState(false);
+  const [runningRoutine, setRunningRoutine] = useState(false);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
   const [computerOpen, setComputerOpen] = useState(false);
   const [usage, setUsage] = useState<{
@@ -133,6 +134,7 @@ export function ShellPage() {
   } | null>(null);
   const autoBooted = useRef<string | null>(null);
   const routineSavePending = useRef(false);
+  const routineRunPending = useRef(false);
   const bootstrappedThread = useRef<ThreadSnapshot | null>(null);
   const expandedHistoryThread = useRef<string | null>(null);
   const initiallyScrolledThread = useRef<string | null>(null);
@@ -1119,13 +1121,13 @@ export function ShellPage() {
                   <span className="text-[13.5px] text-[#85858A]">
                     {computer?.busyBotName
                       ? `${computer.busyBotName} is using it`
-                      : computer?.controlHolder === "user"
+                      : computer?.controlHolder === "user" && computer.controlBotId === active.id
                         ? "You have control"
                         : computer?.state === "suspended"
                           ? "Asleep"
                           : computerLabel(computer?.mode, active.name)}
                   </span>
-                  {computer?.controlHolder === "user" ? (
+                  {computer?.controlHolder === "user" && computer.controlBotId === active.id ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -1168,23 +1170,6 @@ export function ShellPage() {
                     <span className="text-[13px] text-[#6C6C70]">{formatCron(routine.cron)}</span>
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const first = activeRoutines[0];
-                    if (first) {
-                      await rpc.routines.testRun({ routineId: first.id });
-                      await refreshThread(active.id);
-                    } else {
-                      setRoutineDraft({ name: "", prompt: "", schedule: defaultCronPreset() });
-                      setEditingRoutine(null);
-                      setPanel("routine");
-                    }
-                  }}
-                  className="mt-1 flex items-center gap-2.5 px-2.5 py-2.5 text-[14.5px] text-[#7A7A80]"
-                >
-                  Run now
-                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -1276,7 +1261,7 @@ export function ShellPage() {
                 <div className="mt-5 flex items-center gap-3">
                   <button
                     type="button"
-                    disabled={savingRoutine}
+                    disabled={savingRoutine || runningRoutine}
                     onClick={async () => {
                       if (routineSavePending.current) return;
                       const targetBotId = active.id;
@@ -1316,14 +1301,37 @@ export function ShellPage() {
                     {savingRoutine ? "Saving…" : "Save"}
                   </button>
                   {editingRoutine?.botId === active.id ? (
-                    <button
-                      type="button"
-                      disabled={savingRoutine}
-                      onClick={() => setDeleteRoutineTarget(editingRoutine)}
-                      className="rounded-[11px] px-4 py-2 text-[14px] text-[#FF5364]"
-                    >
-                      Delete routine
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={savingRoutine || runningRoutine}
+                        onClick={async () => {
+                          if (routineRunPending.current) return;
+                          const targetBotId = active.id;
+                          const targetRoutine = editingRoutine;
+                          routineRunPending.current = true;
+                          setRunningRoutine(true);
+                          try {
+                            await rpc.routines.testRun({ routineId: targetRoutine.id });
+                            await refreshThread(targetBotId);
+                          } finally {
+                            routineRunPending.current = false;
+                            setRunningRoutine(false);
+                          }
+                        }}
+                        className="rounded-[11px] border border-[#26262A] px-4 py-2 text-[14px] text-[#ECECEE] disabled:opacity-40"
+                      >
+                        {runningRoutine ? "Running…" : "Run now"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingRoutine || runningRoutine}
+                        onClick={() => setDeleteRoutineTarget(editingRoutine)}
+                        className="rounded-[11px] px-4 py-2 text-[14px] text-[#FF5364] disabled:opacity-40"
+                      >
+                        Delete routine
+                      </button>
+                    </>
                   ) : null}
                 </div>
               </div>
@@ -1426,14 +1434,14 @@ export function ShellPage() {
               <span className="truncate text-[15.5px] font-medium text-[#ECECEE]">
                 {computerLabel(computer?.mode, active.name)}
               </span>
-              {computer?.controlHolder === "user" ? (
+              {computer?.controlHolder === "user" && computer.controlBotId === active.id ? (
                 <span className="rounded-full bg-[rgba(48,162,75,.14)] px-[11px] py-1 text-[13px] text-[#4ECB71]">
                   You have control
                 </span>
               ) : null}
             </div>
             <div className="flex items-center gap-3">
-              {computer?.controlHolder === "user" ? (
+              {computer?.controlHolder === "user" && computer.controlBotId === active.id ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -1475,7 +1483,12 @@ export function ShellPage() {
                 sandbox={screenIframeSandbox(embeddedScreenUrl)}
                 className="h-full w-full border-0 bg-black"
                 allow="clipboard-read; clipboard-write; fullscreen"
-                style={{ pointerEvents: computer?.controlHolder === "user" ? "auto" : "none" }}
+                style={{
+                  pointerEvents:
+                    computer?.controlHolder === "user" && computer.controlBotId === active.id
+                      ? "auto"
+                      : "none",
+                }}
               />
             ) : (
               <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
