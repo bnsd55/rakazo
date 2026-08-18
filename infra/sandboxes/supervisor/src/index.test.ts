@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { resolveSupervisorToken } from "@rakazo/core";
 import { describe, expect, it } from "vitest";
 import { supervisorApp } from "./index.js";
@@ -150,6 +151,12 @@ describe("sandbox supervisor input containment", () => {
     expect(() => nextScreenIndex(assigned, "overflow", undefined, 1)).toThrow(
       /cannot allocate another screen/,
     );
+  });
+
+  it("generates syntactically valid shell to start an extra display", () => {
+    const result = spawnSync("bash", ["-n"], { input: ensureScreenCommand(1) });
+    expect(result.status).toBe(0);
+    expect(result.stderr.toString()).toBe("");
   });
 
   it("frees a released screen slot so a ninth Team bot can reuse it", () => {

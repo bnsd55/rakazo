@@ -258,7 +258,7 @@ export class FakeSandboxProvider implements SandboxProvider {
     if (leaseId && current && leaseId !== current && !canTakeScreenLease(current, leaseId)) {
       throw new ComputerScreenUnavailableError();
     }
-    if (canTakeScreenLease(current, leaseId)) box.screenLeases.set(key, leaseId);
+    if (leaseId && canTakeScreenLease(current, leaseId)) box.screenLeases.set(key, leaseId);
     return {
       get screen() {
         return box.screens.get(key) ?? `ready:${key}`;

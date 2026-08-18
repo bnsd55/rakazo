@@ -44,7 +44,7 @@ import {
   renewComputerExecutionLease,
   screenLeaseIdForRun,
 } from "./computer-lifecycle.js";
-import { isComputerScreenUnavailable } from "./computer-screens.js";
+import { withComputerScreenAvailability } from "./computer-screens.js";
 import {
   displayBotWorkspacePath,
   resolveBotWorkspaceCwd,
@@ -1058,14 +1058,8 @@ async function computerScreenToolResult(
   work: () => Promise<unknown>,
   finish?: (result: unknown) => Promise<unknown>,
 ) {
-  try {
-    const value = await work();
-    return finish ? finish(value) : value;
-  } catch (error) {
-    if (!isComputerScreenUnavailable(error)) throw error;
-    const result = { error: error.message };
-    return finish ? finish(result) : result;
-  }
+  const result = await withComputerScreenAvailability(work);
+  return finish ? finish(result) : result;
 }
 
 async function notifyRun(

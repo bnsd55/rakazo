@@ -34,6 +34,28 @@ describeJourneys("required product journeys", () => {
   const stamp = Date.now();
   const dataDir = mkdtempSync(path.join(tmpdir(), "rakazo-journey-"));
 
+  async function sendAndWait(app: App, cookie: string, botId: string, text: string) {
+    const { runId } = await rpc<{ runId: string }>(app, cookie, "threads/send", { botId, text });
+    let terminal: { status: string; error: string | null } | null = null;
+    await waitForDatabase(async () => {
+      terminal = await prisma.run.findUnique({
+        where: { id: runId },
+        select: { status: true, error: true },
+      });
+      return Boolean(terminal && ["completed", "failed", "cancelled"].includes(terminal.status));
+    });
+    if (!terminal) throw new Error(`run ${runId} was not found after completion`);
+    if (terminal.status !== "completed") {
+      throw new Error(
+        `run ${runId} ended ${terminal.status}: ${terminal.error ?? "unknown error"}`,
+      );
+    }
+    return {
+      ...(await rpc<Snap>(app, cookie, "threads/get", { botId })),
+      run: { status: terminal.status },
+    };
+  }
+
   beforeAll(async () => {
     const { createApp } = await import("../../../apps/api/src/app.ts");
     const handles = await createApp({
@@ -1028,16 +1050,6 @@ async function rpc<T>(app: App, cookie: string, proc: string, body: unknown = {}
     throw new Error(`${proc} ${res.status}: ${parsed.error?.message ?? text}`);
   }
   return parsed.json as T;
-}
-
-async function sendAndWait(app: App, cookie: string, botId: string, text: string) {
-  await rpc(app, cookie, "threads/send", { botId, text });
-  return waitFor(
-    app,
-    cookie,
-    botId,
-    (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
-  );
 }
 
 async function waitFor(app: App, cookie: string, botId: string, pred: (snap: Snap) => boolean) {

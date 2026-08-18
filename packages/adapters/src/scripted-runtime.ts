@@ -162,7 +162,7 @@ export function inferScript(
           {
             name: "computer_act",
             args: {
-              actions: [{ kind: "clipboard", text: typed }],
+              actions: [{ kind: "type", text: typed }],
               observe: true,
             },
           },

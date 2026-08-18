@@ -830,7 +830,6 @@ export function createRouter(deps: RouterDeps) {
       release: authed.computer.release.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
         if (!bot.computer) throw new IsolationError();
-        assertComputerAvailableToBot(bot.computer, bot.id);
         const controlBotId = bot.computer.controlBotId ?? bot.id;
         const storedControlBot =
           controlBotId === bot.id
@@ -888,7 +887,6 @@ export function createRouter(deps: RouterDeps) {
       input: authed.computer.input.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
         const computer = bot.computer;
-        if (computer) assertComputerAvailableToBot(computer, bot.id);
         if (!computer || !hasActiveComputerControl(computer) || computer.controlBotId !== bot.id) {
           await expireStaleComputerControl(deps, computer);
           throw new ORPCError("FORBIDDEN");
@@ -1517,7 +1515,7 @@ export function createRouter(deps: RouterDeps) {
 async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<ThreadSnapshot> {
   const bot = await createRepos(deps.prisma).getBot(actor, botId);
   if (!bot.thread) throw new IsolationError();
-  const [messagePage, run, last, busyBot] = await Promise.all([
+  const [messagePage, run, last] = await Promise.all([
     loadMessagePage(deps.prisma, bot.thread.id, undefined, THREAD_MESSAGE_PAGE_SIZE),
     deps.prisma.run.findFirst({
       where: {
@@ -1531,12 +1529,6 @@ async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<
       orderBy: { seq: "desc" },
       select: { seq: true },
     }),
-    bot.computer && isComputerBusyForBot(bot.computer, botId)
-      ? deps.prisma.bot.findUnique({
-          where: { id: bot.computer.executionBotId! },
-          select: { name: true },
-        })
-      : null,
   ]);
   const liveEvents = run
     ? await deps.prisma.event.findMany({
@@ -1581,7 +1573,7 @@ async function snapshot(deps: RouterDeps, actor: Actor, botId: string): Promise<
           completedAt: run.completedAt?.toISOString() ?? null,
         }
       : null,
-    computer: toComputerStatus(botId, bot.computer, busyBot?.name ?? null),
+    computer: toComputerStatus(botId, bot.computer),
   };
 }
 
@@ -1618,14 +1610,7 @@ async function computerStatus(
   if (await expireStaleComputerControl(deps, bot.computer)) {
     bot = await repos.getBot(actor, botId);
   }
-  const busyBot =
-    bot.computer && isComputerBusyForBot(bot.computer, botId)
-      ? await deps.prisma.bot.findUnique({
-          where: { id: bot.computer.executionBotId! },
-          select: { name: true },
-        })
-      : null;
-  return toComputerStatus(botId, bot.computer, busyBot?.name ?? null);
+  return toComputerStatus(botId, bot.computer);
 }
 
 async function expireStaleComputerControl(
@@ -1657,32 +1642,6 @@ async function computerScreenContext(
   return { ...context, screenLeaseId: screenLeaseIdForRun(lease, lease.runId) };
 }
 
-function assertComputerAvailableToBot(
-  computer: {
-    scope: string;
-    executionBotId: string | null;
-    executionLeaseExpiresAt: Date | null;
-    controlHolder: string;
-  },
-  botId: string,
-): void {
-  if (isComputerBusyForBot(computer, botId)) {
-    throw new ORPCError("CONFLICT", { message: "Computer is busy" });
-  }
-}
-
-function isComputerBusyForBot(
-  _computer: {
-    scope: string;
-    executionBotId: string | null;
-    executionLeaseExpiresAt: Date | null;
-    controlHolder: string;
-  },
-  _botId: string,
-): boolean {
-  return false;
-}
-
 function toComputerStatus(
   botId: string,
   computer: {
@@ -1692,10 +1651,7 @@ function toComputerStatus(
     controlHolder: string;
     controlBotId?: string | null;
     homeRevision: string;
-    executionBotId: string | null;
-    executionLeaseExpiresAt: Date | null;
   } | null,
-  busyBotName: string | null,
 ): ComputerStatus {
   const state =
     computer?.state === "suspending"
@@ -1716,7 +1672,7 @@ function toComputerStatus(
     controlBotId: computer?.controlBotId ?? null,
     screenAvailable: state === "running" || state === "booting",
     homeRevision: computer?.homeRevision ?? null,
-    busyBotName: computer && isComputerBusyForBot(computer, botId) ? busyBotName : null,
+    busyBotName: null,
   };
 }
 

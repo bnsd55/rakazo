@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { ComputerAction, ComputerInput } from "@rakazo/adapter-kit";
-import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
 import { ComputerScreenUnavailableError } from "./computer-screens.js";
 import { clampRounded, shellQuote } from "./computer-support.js";
 
@@ -20,53 +19,6 @@ export interface ExtraDisplayLayout {
 export interface ExtraDisplayEnvironment {
   homeDir: string;
   browserProfilesDir: string;
-}
-
-export class ExtraDisplayAllocator {
-  private readonly assigned = new Map<string, Map<string, { index: number; leaseId?: string }>>();
-
-  resolve(sandboxId: string, screenKey: string, leaseId?: string): number {
-    let slots = this.assigned.get(sandboxId);
-    if (!slots) {
-      slots = new Map();
-      this.assigned.set(sandboxId, slots);
-    }
-    const existing = slots.get(screenKey);
-    if (existing) {
-      if (
-        leaseId &&
-        existing.leaseId &&
-        leaseId !== existing.leaseId &&
-        !canTakeScreenLease(existing.leaseId, leaseId)
-      ) {
-        throw new ComputerScreenUnavailableError();
-      }
-      if (canTakeScreenLease(existing.leaseId, leaseId)) existing.leaseId = leaseId;
-      return existing.index;
-    }
-    const used = new Set([...slots.values()].map((slot) => slot.index));
-    for (let index = 0; index < TEAM_EXTRA_DISPLAY_LIMIT; index += 1) {
-      if (!used.has(index)) {
-        slots.set(screenKey, { index, leaseId });
-        return index;
-      }
-    }
-    throw new ComputerScreenUnavailableError();
-  }
-
-  release(sandboxId: string, screenKey: string, leaseId?: string): number | undefined {
-    const slots = this.assigned.get(sandboxId);
-    if (!slots) return undefined;
-    const slot = slots.get(screenKey);
-    if (!slot || (leaseId && !canReleaseScreenLease(slot.leaseId, leaseId))) return undefined;
-    slots.delete(screenKey);
-    if (slots.size === 0) this.assigned.delete(sandboxId);
-    return slot.index;
-  }
-
-  clear(sandboxId: string): void {
-    this.assigned.delete(sandboxId);
-  }
 }
 
 const SCREEN_REGISTRY = "/tmp/rakazo/screen-assignments";
@@ -173,16 +125,6 @@ export function extraDisplayLayout(index: number, primaryDisplay: string): Extra
   };
 }
 
-export function probeExtraDisplayToolsCommand(): string {
-  return [
-    "command -v Xvfb >/dev/null",
-    "command -v x11vnc >/dev/null",
-    "command -v xdotool >/dev/null",
-    "command -v scrot >/dev/null || command -v import >/dev/null",
-    "command -v flock >/dev/null",
-  ].join(" && ");
-}
-
 export function ensureExtraDisplayCommand(
   layout: ExtraDisplayLayout,
   env: ExtraDisplayEnvironment,
@@ -240,22 +182,6 @@ export function parseExtraDisplayViewPassword(output: string): string {
   const password = output.match(/RAKAZO_SCREEN_PASSWORD=([A-Za-z0-9_-]+)/)?.[1];
   if (!password) throw new ComputerScreenUnavailableError();
   return password;
-}
-
-export function stopExtraDisplayCommand(layout: ExtraDisplayLayout): string {
-  if (layout.isPrimary) return "";
-  const fluxHome = `/tmp/fluxbox-home-${layout.displayNumber}`;
-  const profile = `${layout.display.replace(":", "")}`;
-  return [
-    `pkill -f 'Xvfb ${layout.display} -screen' || true`,
-    `pkill -f 'HOME=${fluxHome} DISPLAY=${layout.display} fluxbox' || true`,
-    `pkill -f -- 'chromium-screen-${layout.displayNumber}' || true`,
-    `pkill -f '^x11vnc .* -rfbport ${layout.viewVncPort}' || true`,
-    `pkill -f '^x11vnc .* -rfbport ${layout.controlVncPort}' || true`,
-    `pkill -f '^/usr/bin/python3 .*websockify.*${layout.viewPort}' || true`,
-    `pkill -f 'novnc_proxy.*--listen ${layout.viewPort}' || true`,
-    `rm -f /tmp/.X${layout.displayNumber}-lock /tmp/.X11-unix/X${profile} /tmp/rakazo/control-token-${layout.displayNumber} /tmp/rakazo/view-password-${layout.displayNumber} /tmp/rakazo-view-${layout.displayNumber}.vncpass /tmp/rakazo/screen-${layout.displayNumber}.lock`,
-  ].join("; ");
 }
 
 export function extraDisplayControlStartCommand(
@@ -365,8 +291,7 @@ export function extraDisplayActionCommand(
     return `DISPLAY=${layout.display} xdotool mousemove ${action.x} ${action.y} click ${button}`;
   }
   if (action.kind === "open") {
-    const target = /^https?:\/\//i.test(action.path) ? action.path : action.path;
-    return `DISPLAY=${layout.display} xdg-open ${shellQuote(target)}`;
+    return `DISPLAY=${layout.display} xdg-open ${shellQuote(action.path)}`;
   }
   return `DISPLAY=${layout.display} ${shellQuote(action.application)}${action.uri ? ` ${shellQuote(action.uri)}` : ""}`;
 }

@@ -469,12 +469,7 @@ describe("computer execution leases", () => {
   });
 
   it("keeps the screen lease on the run id and fence", () => {
-    expect(
-      screenLeaseIdForRun(
-        { computerId: "computer-1", botId: "bot-1", runId: "run-1", fence: 8 },
-        "run-1",
-      ),
-    ).toBe("run-1:8");
+    expect(screenLeaseIdForRun({ runId: "run-1", fence: 8 }, "run-1")).toBe("run-1:8");
     expect(screenLeaseIdForRun(null, "run-1", 0)).toBe("run-1:0");
   });
 

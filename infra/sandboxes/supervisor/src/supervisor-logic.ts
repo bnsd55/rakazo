@@ -180,7 +180,7 @@ export function ensureScreenCommand(index: number) {
     `websockify --web=/usr/share/novnc 0.0.0.0:${layout.viewPort} 127.0.0.1:${layout.viewVncPort} >${log}-novnc.log 2>&1 &`,
     `for i in $(seq 1 50); do (echo >/dev/tcp/127.0.0.1/${layout.viewPort}) >/dev/null 2>&1 && exit 0; sleep 0.1; done`,
     "exit 1",
-  ].join("; ");
+  ].join("\n");
 }
 
 export function containerActionStep(

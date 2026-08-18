@@ -99,7 +99,9 @@ describe("scripted runtime", () => {
               (action) =>
                 action &&
                 typeof action === "object" &&
+                "kind" in action &&
                 "text" in action &&
+                action.kind === "type" &&
                 action.text === "writer-desk",
             ),
         ),

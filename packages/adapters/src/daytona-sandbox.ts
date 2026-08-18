@@ -53,7 +53,6 @@ import {
   parseExtraDisplayObservation,
   parseExtraDisplayViewPassword,
   parseReleasedExtraDisplay,
-  probeExtraDisplayToolsCommand,
   releaseExtraDisplayCommand,
   screenControlKey,
 } from "./extra-displays.js";
@@ -484,13 +483,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     const index = released ? parseReleasedExtraDisplay(released.result) : undefined;
     if (index === undefined) return;
     const previewPrefix = `${screenControlKey(id, screenKey)}:`;
+    const previews = [];
     for (const key of [...this.screenPreviews.keys()]) {
       if (!key.startsWith(previewPrefix)) continue;
       const preview = this.screenPreviews.get(key);
       this.screenPreviews.delete(key);
       this.screenPreviewStarts.delete(key);
-      if (preview && sandbox) await this.revokeScreenPreview(sandbox, preview);
+      previews.push(preview);
     }
+    await Promise.all(previews.map((preview) => this.revokeScreenPreview(sandbox, preview)));
     if (index === 0) return;
     // Non-primary teardown runs inside the registry lock before the slot is reusable.
   }
@@ -503,9 +504,11 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return;
     }
     const previewKeys = [...this.screenPreviews.keys()].filter((key) => key.startsWith(`${id}:`));
-    for (const previewKey of previewKeys) {
-      await this.revokeScreenPreview(sandbox, this.screenPreviews.get(previewKey));
-    }
+    await Promise.all(
+      previewKeys.map((previewKey) =>
+        this.revokeScreenPreview(sandbox, this.screenPreviews.get(previewKey)),
+      ),
+    );
     this.forget(id);
     await sandbox.computerUse.stop().catch(() => undefined);
     await sandbox.stop(120);
@@ -519,9 +522,11 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       return;
     }
     const previewKeys = [...this.screenPreviews.keys()].filter((key) => key.startsWith(`${id}:`));
-    for (const previewKey of previewKeys) {
-      await this.revokeScreenPreview(sandbox, this.screenPreviews.get(previewKey));
-    }
+    await Promise.all(
+      previewKeys.map((previewKey) =>
+        this.revokeScreenPreview(sandbox, this.screenPreviews.get(previewKey)),
+      ),
+    );
     this.forget(id);
     await sandbox.delete(120, true);
   }
@@ -773,10 +778,6 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     layout: ReturnType<typeof extraDisplayLayout>,
   ): Promise<string> {
     if (layout.isPrimary) throw new Error("primary display does not use an extra view password");
-    const probe = await sandbox.process
-      .executeCommand(probeExtraDisplayToolsCommand())
-      .catch(() => ({ exitCode: 1, result: "" }));
-    if (probe.exitCode !== 0) throw new ComputerScreenUnavailableError();
     const root = await this.workspaceRoot(sandbox);
     const result = await sandbox.process.executeCommand(
       ensureExtraDisplayCommand(

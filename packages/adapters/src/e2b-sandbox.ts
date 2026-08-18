@@ -47,7 +47,6 @@ import {
   parseExtraDisplayViewPassword,
   parseReleasedExtraDisplay,
   primaryStreamCleanupCommand,
-  probeExtraDisplayToolsCommand,
   releaseExtraDisplayCommand,
   screenControlKey,
 } from "./extra-displays.js";
@@ -601,12 +600,6 @@ export class E2BSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<string> {
     if (layout.isPrimary) throw new Error("primary display does not use an extra view password");
-    const probe = await desktop.commands.run(probeExtraDisplayToolsCommand()).catch(() => ({
-      exitCode: 1,
-      stdout: "",
-      stderr: "",
-    }));
-    if (probe.exitCode !== 0) throw new ComputerScreenUnavailableError();
     const result = await desktop.commands.run(
       ensureExtraDisplayCommand(
         layout,
