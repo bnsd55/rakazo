@@ -46,28 +46,46 @@ function redactSensitiveText(text: string): string {
   return trimmed;
 }
 
+function isTypedCharacter(key: string): boolean {
+  return key.length === 1;
+}
+
 export function buildPlaybookFromRecording(
   goal: string,
   events: TeachRecordingEvent[],
   snapshots: TeachSnapshot[] = [],
 ): SkillPlaybook {
   const steps: string[] = [];
+  let typed = "";
+
+  function flushTyped() {
+    if (!typed) return;
+    steps.push(`Type ${JSON.stringify(typed)}.`);
+    typed = "";
+  }
+
   for (const event of events) {
+    if (event.kind === "key") {
+      const key = event.key?.trim();
+      if (!key) continue;
+      if (isTypedCharacter(key)) {
+        typed += key;
+        continue;
+      }
+      flushTyped();
+      steps.push(`Press key: ${key}.`);
+      continue;
+    }
+    flushTyped();
     if (event.kind === "pointer") {
       steps.push(describePointer(event));
-    } else if (event.kind === "key") {
-      const key = event.key?.trim();
-      if (key) steps.push(`Press key: ${key}.`);
     } else if (event.kind === "clipboard") {
       const text = event.text ? redactSensitiveText(event.text) : "";
       if (text) steps.push(`Paste or type: ${text}.`);
-    } else if (event.kind === "snapshot" && event.summary) {
-      steps.push(`Verify screen: ${event.summary}.`);
     }
   }
-  for (const snapshot of snapshots) {
-    if (snapshot.summary) steps.push(`Confirm screen state: ${snapshot.summary}.`);
-  }
+  flushTyped();
+
   if (steps.length === 0) {
     steps.push("Repeat the demonstrated workflow using the same navigation pattern.");
   }

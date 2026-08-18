@@ -42,7 +42,7 @@ export function SkillDraftCard({
     setName(block.name);
     setPlaybook(block.playbook);
     setSaved(block.status === "saved");
-  }, [block]);
+  }, [block.skillId, block.status]);
 
   async function saveDraft() {
     setBusy(true);
@@ -98,7 +98,7 @@ export function SkillDraftCard({
         onChange={(event) =>
           setPlaybook({
             ...playbook,
-            inputs: event.target.value.split("\n").filter(Boolean),
+            inputs: event.target.value.split("\n"),
           })
         }
         rows={2}
@@ -111,7 +111,7 @@ export function SkillDraftCard({
         onChange={(event) =>
           setPlaybook({
             ...playbook,
-            steps: event.target.value.split("\n").filter(Boolean),
+            steps: event.target.value.split("\n"),
           })
         }
         rows={5}
@@ -152,7 +152,7 @@ export function SkillDraftCard({
       <div className="mt-4 flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={busy || saved}
+          disabled={busy}
           onClick={() => void saveDraft()}
           className="rounded-[11px] bg-[#F1F1EF] px-4 py-2 text-[14px] text-[#17171A] disabled:opacity-40"
         >

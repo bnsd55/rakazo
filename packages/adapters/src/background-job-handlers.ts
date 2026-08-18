@@ -8,6 +8,7 @@ import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { expireComputerControl } from "./computer-control.js";
 import { scheduleComputerSleep, sleepComputerIfIdle } from "./computer-idle.js";
 import type { createRunExecutor } from "./executor.js";
+import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 export function createBackgroundJobHandlers(deps: {
   executor: ReturnType<typeof createRunExecutor>;
@@ -17,6 +18,7 @@ export function createBackgroundJobHandlers(deps: {
   jobs: JobPublisher;
   events: ThreadEvents;
   workerId: string;
+  dataDir: string;
   onSkillTeachingExpire?: (skillId: string) => Promise<void>;
 }): BackgroundJobHandlers {
   return {
@@ -35,7 +37,11 @@ export function createBackgroundJobHandlers(deps: {
       }
     },
     "skill.teaching-expire": async (payload) => {
-      await deps.onSkillTeachingExpire?.(payload.skillId);
+      if (deps.onSkillTeachingExpire) {
+        await deps.onSkillTeachingExpire(payload.skillId);
+        return;
+      }
+      await expireTaughtSkillTeaching(deps, payload.skillId);
     },
   };
 }

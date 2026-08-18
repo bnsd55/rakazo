@@ -14,6 +14,8 @@ describe("buildPlaybookFromRecording", () => {
 
     expect(playbook.steps.some((step) => step.includes("Click"))).toBe(true);
     expect(playbook.steps.some((step) => step.includes("weekly-export.csv"))).toBe(true);
+    expect(playbook.steps.some((step) => step.includes("Export dialog open"))).toBe(false);
+    expect(playbook.howToCheck).toContain("Export dialog open");
     expect(playbook.whenToUse).toContain("Export weekly CRM list");
     expect(playbook.approvalBoundaries.length).toBeGreaterThan(0);
     expect(playbook.failureHandling.length).toBeGreaterThan(0);
@@ -31,5 +33,16 @@ describe("buildPlaybookFromRecording", () => {
       { at: "2026-01-01T00:00:00.000Z", kind: "clipboard", text: "my-password" },
     ]);
     expect(playbook.steps.join(" ")).toContain("[redacted input]");
+  });
+
+  it("coalesces consecutive typed characters and keeps repeated keys", () => {
+    const playbook = buildPlaybookFromRecording("Search", [
+      { at: "2026-01-01T00:00:00.000Z", kind: "key", key: "b" },
+      { at: "2026-01-01T00:00:00.100Z", kind: "key", key: "o" },
+      { at: "2026-01-01T00:00:00.200Z", kind: "key", key: "o" },
+      { at: "2026-01-01T00:00:00.300Z", kind: "key", key: "k" },
+      { at: "2026-01-01T00:00:00.400Z", kind: "key", key: "Enter" },
+    ]);
+    expect(playbook.steps).toEqual(['Type "book".', "Press key: Enter."]);
   });
 });

@@ -409,6 +409,8 @@ model TaughtSkill {
 
   @@index([workspaceId, botId])
   @@index([workspaceId, botId, status])
+  // Partial unique index taught_skills_botId_recording_key is created in SQL:
+  // one recording session per bot.
   @@map("taught_skills")
 }
 

@@ -34,8 +34,7 @@ export function TeachComputerSection({
     () => skills.filter((skill) => skill.status === "saved" || skill.status === "draft"),
     [skills],
   );
-  const teachAvailable =
-    computer && computer.kind !== "desktop" && computer.screenAvailable !== false;
+  const teachAvailable = Boolean(computer && computer.kind !== "desktop");
 
   async function startTeaching() {
     if (!goal.trim() || busy) return;

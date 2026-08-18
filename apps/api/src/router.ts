@@ -916,13 +916,13 @@ export function createRouter(deps: RouterDeps) {
                   type:
                     (input.payload.type as "move" | "down" | "up" | "click" | undefined) ?? "click",
                 };
+        await taughtSkills.recordInput(context.actor, bot.id, mapped);
         await deps.sandbox.sendInput(
           toComputerRef(computer),
           mapped,
           { leaseId: computer.controlLeaseId ?? "lease", holder: "user", fence: 0 },
           computerContext(context.actor, bot.id, "input"),
         );
-        await taughtSkills.recordInput(context.actor, bot.id, mapped);
         await deps.prisma.computer.updateMany({
           where: { id: computer.id, state: "running" },
           data: { updatedAt: new Date() },

@@ -1,4 +1,5 @@
 import type { TaughtSkill } from "@rakazo/contracts";
+import { teachCaptureKey } from "@rakazo/core";
 import { useEffect, useRef } from "react";
 import { rpc } from "../../lib/rpc";
 
@@ -51,10 +52,10 @@ export function TeachCaptureOverlay({
     }
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key.length !== 1) return;
+      const key = teachCaptureKey(event.key, event);
+      if (!key) return;
       event.preventDefault();
-      enqueueInput(() => sendKey(event.key));
+      enqueueInput(() => sendKey(key));
     }
 
     root.addEventListener("pointerdown", onPointerDown);

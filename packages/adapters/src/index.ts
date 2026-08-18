@@ -33,4 +33,5 @@ export * from "./realtime.js";
 export * from "./sandbox-factory.js";
 export * from "./scripted-runtime.js";
 export * from "./secrets.js";
+export * from "./teaching-session.js";
 export * from "./wakeup.js";
