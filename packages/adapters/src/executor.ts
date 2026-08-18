@@ -266,33 +266,42 @@ export function createRunExecutor(deps: ExecutorDeps) {
 
       const runSecrets = [...deps.secrets];
       try {
-        const [bot, thread, messages, task, connectedPlugins, credential, settings, savedSkills, teachingSession] =
-          await Promise.all([
-            deps.prisma.bot.findUniqueOrThrow({
-              where: { id: run.botId },
-              include: { computer: true },
-            }),
-            deps.prisma.thread.findUniqueOrThrow({ where: { id: run.threadId } }),
-            deps.prisma.message.findMany({
-              where: { threadId: run.threadId },
-              orderBy: { seq: "desc" },
-              take: MAX_AGENT_HISTORY_MESSAGES,
-              select: { role: true, blocks: true },
-            }),
-            deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
-            deps.prisma.connection.findMany({
-              where: { userId: run.userId, workspaceId: run.workspaceId, status: "connected" },
-              select: { provider: true, displayName: true },
-            }),
-            findDefaultModelCredential(deps.prisma, run),
-            deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
-            deps.prisma.taughtSkill.findMany({
-              where: { botId: run.botId, workspaceId: run.workspaceId, status: "saved" },
-            }),
-            deps.prisma.taughtSkill.findFirst({
-              where: { botId: run.botId, workspaceId: run.workspaceId, status: "recording" },
-            }),
-          ]);
+        const [
+          bot,
+          thread,
+          messages,
+          task,
+          connectedPlugins,
+          credential,
+          settings,
+          savedSkills,
+          teachingSession,
+        ] = await Promise.all([
+          deps.prisma.bot.findUniqueOrThrow({
+            where: { id: run.botId },
+            include: { computer: true },
+          }),
+          deps.prisma.thread.findUniqueOrThrow({ where: { id: run.threadId } }),
+          deps.prisma.message.findMany({
+            where: { threadId: run.threadId },
+            orderBy: { seq: "desc" },
+            take: MAX_AGENT_HISTORY_MESSAGES,
+            select: { role: true, blocks: true },
+          }),
+          deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
+          deps.prisma.connection.findMany({
+            where: { userId: run.userId, workspaceId: run.workspaceId, status: "connected" },
+            select: { provider: true, displayName: true },
+          }),
+          findDefaultModelCredential(deps.prisma, run),
+          deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
+          deps.prisma.taughtSkill.findMany({
+            where: { botId: run.botId, workspaceId: run.workspaceId, status: "saved" },
+          }),
+          deps.prisma.taughtSkill.findFirst({
+            where: { botId: run.botId, workspaceId: run.workspaceId, status: "recording" },
+          }),
+        ]);
         runAbortController = new AbortController();
         if (!leaseValid) runAbortController.abort();
         const context = {
@@ -699,17 +708,22 @@ export function createRunExecutor(deps: ExecutorDeps) {
                     approvalBoundaries?: string;
                     failureHandling?: string;
                   };
-                  return `- ${skill.name || skill.goal}: ${formatSkillRunPrompt(skill.name || skill.goal, {
-                    whenToUse: playbook.whenToUse ?? skill.goal,
-                    inputs: playbook.inputs ?? [],
-                    steps: playbook.steps ?? [],
-                    howToCheck: playbook.howToCheck ?? "",
-                    whatToReturn: playbook.whatToReturn ?? "",
-                    approvalBoundaries: playbook.approvalBoundaries ?? "",
-                    failureHandling: playbook.failureHandling ?? "",
-                  })}`;
+                  return `- ${skill.name || skill.goal}: ${formatSkillRunPrompt(
+                    skill.name || skill.goal,
+                    {
+                      whenToUse: playbook.whenToUse ?? skill.goal,
+                      inputs: playbook.inputs ?? [],
+                      steps: playbook.steps ?? [],
+                      howToCheck: playbook.howToCheck ?? "",
+                      whatToReturn: playbook.whatToReturn ?? "",
+                      approvalBoundaries: playbook.approvalBoundaries ?? "",
+                      failureHandling: playbook.failureHandling ?? "",
+                    },
+                  )}`;
                 })
-                .join("\n\n")}\nWhen the user asks to run a taught skill by name, follow that playbook exactly.`
+                .join(
+                  "\n\n",
+                )}\nWhen the user asks to run a taught skill by name, follow that playbook exactly.`
             : undefined;
 
         try {

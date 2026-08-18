@@ -24,28 +24,15 @@ export function TeachCaptureOverlay({
       y: number,
       button: "left" | "right" = "left",
     ) {
-      const activeSkill = skill;
-      if (!activeSkill) return;
-      const payload = { x, y, button, type };
-      await rpc.computer.input({ botId, kind: "pointer", payload });
-      await rpc.skills
-        .appendEvent({
-          skillId: activeSkill.id,
-          event: { at: new Date().toISOString(), kind: "pointer", ...payload },
-        })
-        .catch(() => undefined);
+      await rpc.computer.input({
+        botId,
+        kind: "pointer",
+        payload: { x, y, button, type },
+      });
     }
 
     async function sendKey(key: string) {
-      const activeSkill = skill;
-      if (!activeSkill) return;
       await rpc.computer.input({ botId, kind: "key", payload: { key } });
-      await rpc.skills
-        .appendEvent({
-          skillId: activeSkill.id,
-          event: { at: new Date().toISOString(), kind: "key", key },
-        })
-        .catch(() => undefined);
     }
 
     function onPointerDown(event: PointerEvent) {

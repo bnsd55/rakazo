@@ -1,35 +1,31 @@
 import type { ComputerStatus, TaughtSkill } from "@rakazo/contracts";
-import { Button } from "@rakazo/ui-web";
 import { useMemo, useState } from "react";
 import { rpc } from "../../lib/rpc";
-
-function formatRemaining(expiresAt: string | null): string {
-  if (!expiresAt) return "10:00";
-  const ms = Math.max(0, new Date(expiresAt).getTime() - Date.now());
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
+import { TeachRecordingChrome } from "./TeachRecordingChrome";
 
 export function TeachComputerSection({
   botId,
   computer,
   skills,
+  busy: busyProp,
   onRefresh,
   onOpenComputer,
+  onStopTeaching,
   onAddRoutine,
 }: {
   botId: string;
   computer: ComputerStatus | null;
   skills: TaughtSkill[];
+  busy?: boolean;
   onRefresh: () => Promise<void>;
   onOpenComputer: () => Promise<void>;
+  onStopTeaching?: () => Promise<void>;
   onAddRoutine: (skill: TaughtSkill) => void;
 }) {
   const [goalOpen, setGoalOpen] = useState(false);
   const [goal, setGoal] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [localBusy, setLocalBusy] = useState(false);
+  const busy = busyProp ?? localBusy;
   const recording = useMemo(
     () => skills.find((skill) => skill.status === "recording") ?? null,
     [skills],
@@ -43,7 +39,7 @@ export function TeachComputerSection({
 
   async function startTeaching() {
     if (!goal.trim() || busy) return;
-    setBusy(true);
+    setLocalBusy(true);
     try {
       await rpc.computer.boot({ botId });
       await rpc.skills.start({ botId, goal: goal.trim() });
@@ -52,18 +48,22 @@ export function TeachComputerSection({
       await onOpenComputer();
       await onRefresh();
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   }
 
   async function stopTeaching() {
     if (!recording || busy) return;
-    setBusy(true);
+    if (onStopTeaching) {
+      await onStopTeaching();
+      return;
+    }
+    setLocalBusy(true);
     try {
       await rpc.skills.stop({ skillId: recording.id });
       await onRefresh();
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   }
 
@@ -77,28 +77,12 @@ export function TeachComputerSection({
             : "Open the computer view on web or desktop to teach a task."}
         </div>
       ) : recording ? (
-        <div
-          data-testid="teach-recording"
-          className="rounded-[11px] border border-[#232326] bg-[#121214] px-3 py-3"
-        >
-          <div className="text-[14px] text-[#ECECEE]">Recording: {recording.goal}</div>
-          <div className="mt-1 text-[13px] text-[#85858A]">
-            {formatRemaining(recording.expiresAt)} left · bot is watching, not acting
-          </div>
-          <div className="mt-2 text-[13px] text-[#E65707]">
-            Do not type passwords into the demo. Use Take control for credentials.
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            disabled={busy}
-            onClick={() => void stopTeaching()}
-          >
-            Stop teaching
-          </Button>
-        </div>
+        <TeachRecordingChrome
+          recording={recording}
+          busy={busy}
+          onStop={stopTeaching}
+          variant="panel"
+        />
       ) : goalOpen ? (
         <div className="rounded-[11px] border border-[#232326] bg-[#121214] px-3 py-3">
           <label htmlFor="teach-goal-input" className="text-[13px] text-[#85858A]">
@@ -153,12 +137,12 @@ export function TeachComputerSection({
                   type="button"
                   disabled={busy}
                   onClick={async () => {
-                    setBusy(true);
+                    setLocalBusy(true);
                     try {
                       await rpc.skills.testRun({ skillId: skill.id });
                       await onRefresh();
                     } finally {
-                      setBusy(false);
+                      setLocalBusy(false);
                     }
                   }}
                   className="rounded-[11px] border border-[#26262A] px-3 py-1.5 text-[13px] text-[#ECECEE]"
@@ -176,12 +160,12 @@ export function TeachComputerSection({
                   type="button"
                   disabled={busy || skill.status !== "draft"}
                   onClick={async () => {
-                    setBusy(true);
+                    setLocalBusy(true);
                     try {
                       await rpc.skills.save({ skillId: skill.id });
                       await onRefresh();
                     } finally {
-                      setBusy(false);
+                      setLocalBusy(false);
                     }
                   }}
                   className="rounded-[11px] bg-[#F1F1EF] px-3 py-1.5 text-[13px] text-[#17171A] disabled:opacity-40"

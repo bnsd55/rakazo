@@ -173,7 +173,9 @@ export async function createApp(
         sandbox,
         home,
         dataDir: env.dataDir,
-      }).expireTeachingSessionIfNeeded(skillId).then(() => undefined),
+      })
+        .expireTeachingSessionIfNeeded(skillId)
+        .then(() => undefined),
   });
   if (inMemoryJobs) {
     await inMemoryJobs.start(jobHandlers);

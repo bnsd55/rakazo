@@ -37,6 +37,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { SkillDraftCard } from "../components/teach/SkillDraftCard";
 import { TeachCaptureOverlay } from "../components/teach/TeachCaptureOverlay";
 import { TeachComputerSection } from "../components/teach/TeachComputerSection";
+import { TeachRecordingChrome, TeachStopButton } from "../components/teach/TeachRecordingChrome";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
 import { markAfterPaint, markOnce } from "../lib/performance";
@@ -81,6 +82,7 @@ export function ShellPage() {
   const [routinesBotId, setRoutinesBotId] = useState<string | null>(null);
   const [taughtSkills, setTaughtSkills] = useState<TaughtSkill[]>([]);
   const [taughtSkillsBotId, setTaughtSkillsBotId] = useState<string | null>(null);
+  const [teachBusy, setTeachBusy] = useState(false);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -447,6 +449,22 @@ export function ShellPage() {
     await rpc.threads.stop({ botId: id });
     await refreshThreadRef.current(id);
   }, []);
+  const stopTeaching = useCallback(async () => {
+    const id = activeBotId.current;
+    if (!id || teachBusy) return;
+    const recording = taughtSkills.find(
+      (skill) => skill.status === "recording" && taughtSkillsBotId === id,
+    );
+    if (!recording) return;
+    setTeachBusy(true);
+    try {
+      await rpc.skills.stop({ skillId: recording.id });
+      await refreshThreadRef.current(id);
+      setComputerOpen(false);
+    } finally {
+      setTeachBusy(false);
+    }
+  }, [teachBusy, taughtSkills, taughtSkillsBotId]);
 
   async function createBot(input: {
     name: string;
@@ -958,10 +976,12 @@ export function ShellPage() {
                     botId={active.id}
                     computer={computer}
                     skills={activeTaughtSkills}
+                    busy={teachBusy}
                     onRefresh={async () => {
                       if (active) await refreshThread(active.id);
                     }}
                     onOpenComputer={openComputer}
+                    onStopTeaching={stopTeaching}
                     onAddRoutine={(skill) => {
                       setRoutineDraft({
                         name: skill.name || skill.goal.slice(0, 80),
@@ -1221,19 +1241,32 @@ export function ShellPage() {
       ) : computerOpen && active ? (
         <div className="absolute inset-0 z-30 flex flex-col bg-[#050506]">
           <div className="flex items-center justify-between gap-4 border-b border-[#171719] px-[18px] py-3.5">
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <BotAvatar color={active.color} size={28} />
-              <span className="truncate text-[15.5px] font-medium text-[#ECECEE]">
-                {computerLabel(computer?.mode, active.name)}
-              </span>
-              {computer?.controlHolder === "user" && computer.controlBotId === active.id ? (
+              {recordingSkill ? (
+                <TeachRecordingChrome
+                  recording={recordingSkill}
+                  busy={teachBusy}
+                  onStop={stopTeaching}
+                  variant="overlay"
+                />
+              ) : (
+                <span className="truncate text-[15.5px] font-medium text-[#ECECEE]">
+                  {computerLabel(computer?.mode, active.name)}
+                </span>
+              )}
+              {!recordingSkill &&
+              computer?.controlHolder === "user" &&
+              computer.controlBotId === active.id ? (
                 <span className="rounded-full bg-[rgba(48,162,75,.14)] px-[11px] py-1 text-[13px] text-[#4ECB71]">
                   You have control
                 </span>
               ) : null}
             </div>
             <div className="flex items-center gap-3">
-              {computer?.controlHolder === "user" && computer.controlBotId === active.id ? (
+              {recordingSkill ? (
+                <TeachStopButton busy={teachBusy} onStop={stopTeaching} />
+              ) : computer?.controlHolder === "user" && computer.controlBotId === active.id ? (
                 <Button
                   type="button"
                   variant="outline"

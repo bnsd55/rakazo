@@ -141,7 +141,11 @@ export async function assertTeachingSendAllowed(
   }
 }
 
-async function cancelActiveRuns(deps: TaughtSkillsDeps, _actor: Actor, botId: string): Promise<void> {
+async function cancelActiveRuns(
+  deps: TaughtSkillsDeps,
+  _actor: Actor,
+  botId: string,
+): Promise<void> {
   const activeRuns = await deps.prisma.run.findMany({
     where: { botId, status: { in: [...ACTIVE_RUN_STATUSES] } },
     select: { id: true },
@@ -243,19 +247,19 @@ async function grantTakeover(
   return bot;
 }
 
+function recordingEventKey(event: TeachRecordingEvent): string {
+  const { at: _at, ...rest } = event;
+  return JSON.stringify(rest);
+}
+
 async function appendRecordingEvent(
   deps: TaughtSkillsDeps,
   skill: TaughtSkillRow,
   event: TeachRecordingEvent,
 ): Promise<TaughtSkillRow> {
   const recording = parseRecording(skill.recording);
-  const last = recording.events.at(-1);
-  if (
-    last &&
-    last.at === event.at &&
-    last.kind === event.kind &&
-    JSON.stringify(last) === JSON.stringify(event)
-  ) {
+  const key = recordingEventKey(event);
+  if (recording.events.some((existing) => recordingEventKey(existing) === key)) {
     return skill;
   }
   recording.events.push(event);
@@ -263,6 +267,62 @@ async function appendRecordingEvent(
     where: { id: skill.id },
     data: { recording: recording as never },
   });
+}
+
+async function updateSkillDraftMessage(
+  deps: TaughtSkillsDeps,
+  actor: Actor,
+  skill: TaughtSkillRow,
+  input: {
+    name?: string;
+    playbook?: SkillPlaybook;
+    status?: "draft" | "saved";
+  },
+): Promise<void> {
+  const bot = await deps.prisma.bot.findUnique({
+    where: { id: skill.botId },
+    include: { thread: true },
+  });
+  if (!bot?.thread) return;
+
+  const messages = await deps.prisma.message.findMany({
+    where: { threadId: bot.thread.id, role: "bot" },
+    orderBy: { seq: "desc" },
+    take: 100,
+  });
+
+  for (const message of messages) {
+    const parsed = message.blocks as MessageBlock[];
+    if (!Array.isArray(parsed)) continue;
+    const index = parsed.findIndex(
+      (block) => block.kind === "skill_draft" && block.skillId === skill.id,
+    );
+    if (index === -1) continue;
+    const existing = parsed[index];
+    if (existing?.kind !== "skill_draft") continue;
+    const playbook = input.playbook ?? parsePlaybook(skill.playbook);
+    const nextBlocks: MessageBlock[] = [...parsed];
+    nextBlocks[index] = {
+      kind: "skill_draft",
+      skillId: skill.id,
+      name: input.name ?? existing.name,
+      goal: skill.goal,
+      playbook,
+      status: input.status ?? existing.status,
+    };
+    await deps.prisma.message.update({
+      where: { id: message.id },
+      data: { blocks: nextBlocks as never },
+    });
+    await deps.events.append({
+      workspaceId: actor.workspaceId,
+      threadId: bot.thread.id,
+      botId: bot.id,
+      type: "thread.message.updated",
+      payload: { messageId: message.id, role: "bot", blocks: nextBlocks },
+    });
+    return;
+  }
 }
 
 export async function recordTeachingInputEvent(
@@ -401,11 +461,15 @@ export async function expireTeachingSessionIfNeeded(
   });
   if (!bot) return skill;
   const actor = { workspaceId: skill.workspaceId, userId: skill.userId } as Actor;
+  let skillRow: TaughtSkillRow = skill;
+  if (bot.computer?.providerRef) {
+    skillRow = await captureSnapshot(deps, actor, bot, skill);
+  }
   await deps.prisma.taughtSkill.update({
     where: { id: skill.id },
     data: { status: "drafting" },
   });
-  const finalized = await finalizeDraft(deps, actor, skill, bot);
+  const finalized = await finalizeDraft(deps, actor, skillRow, bot);
   if (bot.thread) {
     await deps.events.append({
       workspaceId: skill.workspaceId,
@@ -441,11 +505,15 @@ export async function stopTeachingSession(
     include: { thread: true, computer: true },
   });
   if (!bot) throw new IsolationError();
+  let skillRow: TaughtSkillRow = current;
+  if (bot.computer?.providerRef && skillRow.status === "recording") {
+    skillRow = await captureSnapshot(deps, actor, bot, skillRow);
+  }
   await deps.prisma.taughtSkill.update({
-    where: { id: current.id },
+    where: { id: skillRow.id },
     data: { status: "drafting" },
   });
-  const finalized = await finalizeDraft(deps, actor, current, bot);
+  const finalized = await finalizeDraft(deps, actor, skillRow, bot);
   if (bot.thread) {
     await deps.events.append({
       workspaceId: actor.workspaceId,
@@ -579,6 +647,11 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
           status: skill.status === "saved" ? "saved" : "draft",
         },
       });
+      await updateSkillDraftMessage(deps, actor, row, {
+        name: row.name,
+        playbook: parsePlaybook(row.playbook),
+        status: row.status === "saved" ? "saved" : "draft",
+      });
       return mapTaughtSkill(row);
     },
 
@@ -600,6 +673,11 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
       const bot = await deps.prisma.bot.findUnique({
         where: { id: row.botId },
         include: { thread: true },
+      });
+      await updateSkillDraftMessage(deps, actor, row, {
+        name: row.name,
+        playbook: parsePlaybook(row.playbook),
+        status: "saved",
       });
       if (bot?.thread) {
         await deps.events.append({

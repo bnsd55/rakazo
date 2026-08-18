@@ -1001,7 +1001,11 @@ describeJourneys("required product journeys", () => {
     });
     await rpc(app, cookie, "computer/boot", { botId: bot.id });
     await rpc(app, cookie, "computer/takeover", { botId: bot.id });
-    await sendAndWait(app, cookie, bot.id, "keep working until I stop you");
+    void rpc(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "keep working until I stop you",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const skill = await rpc<{
       id: string;
       status: string;
@@ -1035,7 +1039,7 @@ describeJourneys("required product journeys", () => {
     expect(stopped.status).toBe("draft");
     expect(stopped.playbook.steps.join(" ")).toMatch(/Click|120|40|x/i);
     expect(stopped.recording.events.some((event) => event.kind === "pointer")).toBe(true);
-    expect(stopped.recording.snapshots.length).toBeGreaterThan(0);
+    expect(stopped.recording.snapshots.length).toBeGreaterThanOrEqual(2);
     await rpc(app, cookie, "skills/updateDraft", {
       skillId: skill.id,
       name: "Export weekly CRM list",
