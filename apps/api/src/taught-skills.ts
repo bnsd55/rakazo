@@ -322,11 +322,13 @@ async function finalizeTeachingRecording(
   deps: TaughtSkillsDeps,
   skillId: string,
   stopSnapshot?: TeachSnapshot,
-): Promise<TaughtSkillRow> {
+): Promise<{ skill: TaughtSkillRow; didFinalize: boolean }> {
   return deps.prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skillId} FOR UPDATE`;
     const skill = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skillId } });
-    if (skill.status === "draft" || skill.status === "saved") return skill;
+    if (skill.status === "draft" || skill.status === "saved") {
+      return { skill, didFinalize: false };
+    }
     if (skill.status !== "recording" && skill.status !== "drafting") {
       throw new ORPCError("BAD_REQUEST", { message: "Teaching session is not active" });
     }
@@ -340,7 +342,7 @@ async function finalizeTeachingRecording(
       });
     }
     const playbook = buildPlaybookFromRecording(skill.goal, recording.events, recording.snapshots);
-    return tx.taughtSkill.update({
+    const updated = await tx.taughtSkill.update({
       where: { id: skillId },
       data: {
         status: "draft",
@@ -349,6 +351,7 @@ async function finalizeTeachingRecording(
         stoppedAt: new Date(),
       },
     });
+    return { skill: updated, didFinalize: true };
   });
 }
 
@@ -579,14 +582,17 @@ async function completeTeachingSession(
   reason: "stopped" | "expired",
   stopSnapshot?: TeachSnapshot,
 ): Promise<TaughtSkillRow> {
-  const before = await deps.prisma.taughtSkill.findUniqueOrThrow({ where: { id: skillId } });
-  const finalized = await finalizeTeachingRecording(deps, skillId, stopSnapshot);
+  const { skill: finalized, didFinalize } = await finalizeTeachingRecording(
+    deps,
+    skillId,
+    stopSnapshot,
+  );
   const bot = await deps.prisma.bot.findUnique({
     where: { id: finalized.botId },
     include: { thread: true, computer: true },
   });
   if (!bot) throw new IsolationError();
-  if (before.status !== "draft" && before.status !== "saved" && finalized.status === "draft") {
+  if (didFinalize) {
     await emitSkillDraftMessages(deps, actor, finalized, bot);
     if (bot.thread) {
       await deps.events.append({
