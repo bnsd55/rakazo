@@ -30,6 +30,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { type AppEnv, loadEnv } from "./env.js";
 import { createRouter } from "./router.js";
+import { createTaughtSkillsService } from "./taught-skills.js";
 
 export interface AppHandles {
   app: Hono;
@@ -164,6 +165,15 @@ export async function createApp(
     jobs,
     events,
     workerId: "api",
+    onSkillTeachingExpire: (skillId) =>
+      createTaughtSkillsService({
+        prisma,
+        events,
+        jobs,
+        sandbox,
+        home,
+        dataDir: env.dataDir,
+      }).expireTeachingSessionIfNeeded(skillId).then(() => undefined),
   });
   if (inMemoryJobs) {
     await inMemoryJobs.start(jobHandlers);

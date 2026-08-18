@@ -91,6 +91,7 @@ model Organization {
   tasks       Task[]
   runs        Run[]
   routines    Routine[]
+  taughtSkills TaughtSkill[]
   connections Connection[]
   capabilities CapabilityInstall[]
   memoryDocuments MemoryDocument[]
@@ -193,6 +194,7 @@ model Bot {
   computer       Computer? @relation(fields: [computerId], references: [id], onDelete: SetNull)
   computerSwitching Boolean @default(false)
   routines       Routine[]
+  taughtSkills   TaughtSkill[]
   memoryDocuments MemoryDocument[]
   agentHome      AgentHome?
   browserProfile BrowserProfile?
@@ -385,6 +387,29 @@ model Routine {
   @@index([active, nextRunAt])
   @@index([workspaceId, botId])
   @@map("routines")
+}
+
+model TaughtSkill {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Organization @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String    @default("")
+  goal        String
+  status      String
+  playbook    Json      @default("{}")
+  recording   Json      @default("{\"events\":[],\"snapshots\":[]}")
+  startedAt   DateTime?
+  expiresAt   DateTime?
+  stoppedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([workspaceId, botId])
+  @@index([workspaceId, botId, status])
+  @@map("taught_skills")
 }
 
 model Connection {

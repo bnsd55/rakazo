@@ -74,6 +74,62 @@ export const CreateRoutineInput = z.object({
   active: z.boolean().default(false),
 });
 
+export const TaughtSkillStatusSchema = z.enum(["recording", "drafting", "draft", "saved"]);
+export type TaughtSkillStatus = z.infer<typeof TaughtSkillStatusSchema>;
+
+export const SkillPlaybookSchema = z.object({
+  whenToUse: z.string(),
+  inputs: z.array(z.string()),
+  steps: z.array(z.string()),
+  howToCheck: z.string(),
+  whatToReturn: z.string(),
+  approvalBoundaries: z.string(),
+  failureHandling: z.string(),
+});
+export type SkillPlaybook = z.infer<typeof SkillPlaybookSchema>;
+
+export const TeachRecordingEventSchema = z.object({
+  at: z.string(),
+  kind: z.enum(["pointer", "key", "clipboard", "snapshot"]),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  button: z.string().optional(),
+  type: z.string().optional(),
+  key: z.string().optional(),
+  text: z.string().optional(),
+  summary: z.string().optional(),
+});
+export type TeachRecordingEvent = z.infer<typeof TeachRecordingEventSchema>;
+
+export const TeachSnapshotSchema = z.object({
+  at: z.string(),
+  summary: z.string(),
+  hash: z.string().optional(),
+});
+export type TeachSnapshot = z.infer<typeof TeachSnapshotSchema>;
+
+export const TeachRecordingSchema = z.object({
+  events: z.array(TeachRecordingEventSchema),
+  snapshots: z.array(TeachSnapshotSchema),
+});
+export type TeachRecording = z.infer<typeof TeachRecordingSchema>;
+
+export const TaughtSkillSchema = z.object({
+  id: Id,
+  botId: Id,
+  name: z.string(),
+  goal: z.string(),
+  status: TaughtSkillStatusSchema,
+  playbook: SkillPlaybookSchema,
+  recording: TeachRecordingSchema,
+  startedAt: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+  stoppedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type TaughtSkill = z.infer<typeof TaughtSkillSchema>;
+
 export const MemoryDocumentSchema = z.object({
   id: Id,
   scope: MemoryScope,
@@ -156,7 +212,7 @@ export const RunSchema = z.object({
   threadId: Id,
   taskId: Id,
   status: RunStatus,
-  trigger: z.enum(["user", "routine", "resume", "follow_up", "spawn"]),
+  trigger: z.enum(["user", "routine", "resume", "follow_up", "spawn", "skill"]),
   modelProvider: z.string().nullable(),
   modelId: z.string().nullable(),
   error: z.string().nullable(),

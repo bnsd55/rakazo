@@ -18,6 +18,9 @@ import {
   ModelCatalogEntrySchema,
   ModelCredentialSchema,
   RoutineSchema,
+  SkillPlaybookSchema,
+  TaughtSkillSchema,
+  TeachRecordingEventSchema,
   ThreadMessagePageSchema,
   ThreadSnapshotSchema,
   UpdateBotInput,
@@ -184,6 +187,34 @@ export const appContract = {
       .output(RoutineSchema),
     remove: oc.input(z.object({ routineId: Id })).output(z.object({ ok: z.literal(true) })),
     testRun: oc.input(z.object({ routineId: Id })).output(z.object({ runId: Id })),
+  },
+  skills: {
+    list: oc.input(botId).output(z.array(TaughtSkillSchema)),
+    get: oc.input(z.object({ skillId: Id })).output(TaughtSkillSchema),
+    start: oc
+      .input(z.object({ botId: Id, goal: z.string().min(1).max(4000) }))
+      .output(TaughtSkillSchema),
+    appendEvent: oc
+      .input(z.object({ skillId: Id, event: TeachRecordingEventSchema }))
+      .output(TaughtSkillSchema),
+    snapshot: oc.input(z.object({ skillId: Id })).output(TaughtSkillSchema),
+    stop: oc.input(z.object({ skillId: Id })).output(TaughtSkillSchema),
+    updateDraft: oc
+      .input(
+        z.object({
+          skillId: Id,
+          name: z.string().optional(),
+          playbook: SkillPlaybookSchema,
+        }),
+      )
+      .output(TaughtSkillSchema),
+    save: oc
+      .input(z.object({ skillId: Id, name: z.string().optional() }))
+      .output(TaughtSkillSchema),
+    testRun: oc
+      .input(z.object({ skillId: Id, prompt: z.string().optional() }))
+      .output(z.object({ runId: Id })),
+    remove: oc.input(z.object({ skillId: Id })).output(z.object({ ok: z.literal(true) })),
   },
   capabilities: {
     list: oc.output(z.array(CapabilityInstallSchema)),

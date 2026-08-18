@@ -6,6 +6,7 @@ import type {
   Me,
   ProductEvent,
   Routine,
+  TaughtSkill,
   ThreadMessage,
   ThreadSnapshot,
 } from "@rakazo/contracts";
@@ -33,6 +34,9 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { SkillDraftCard } from "../components/teach/SkillDraftCard";
+import { TeachCaptureOverlay } from "../components/teach/TeachCaptureOverlay";
+import { TeachComputerSection } from "../components/teach/TeachComputerSection";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
 import { markAfterPaint, markOnce } from "../lib/performance";
@@ -75,6 +79,8 @@ export function ShellPage() {
   const [panel, setPanel] = useState<Panel>(null);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [routinesBotId, setRoutinesBotId] = useState<string | null>(null);
+  const [taughtSkills, setTaughtSkills] = useState<TaughtSkill[]>([]);
+  const [taughtSkillsBotId, setTaughtSkillsBotId] = useState<string | null>(null);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -117,6 +123,8 @@ export function ShellPage() {
 
   const active = bots.find((b) => b.id === botId) ?? bots[0];
   const activeRoutines = routinesBotId === active?.id ? routines : [];
+  const activeTaughtSkills = taughtSkillsBotId === active?.id ? taughtSkills : [];
+  const recordingSkill = activeTaughtSkills.find((skill) => skill.status === "recording") ?? null;
   const routeBotId = useRef<string | undefined>(botId);
   routeBotId.current = botId;
   const activeBotId = useRef<string | undefined>(active?.id);
@@ -192,9 +200,10 @@ export function ShellPage() {
       !scrollElement ||
       scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80;
     markOnce("rk:renderer:thread-request-start");
-    const [snap, routines] = await Promise.all([
+    const [snap, routines, skills] = await Promise.all([
       rpc.threads.get({ botId: id }),
       rpc.routines.list({ botId: id }),
+      rpc.skills.list({ botId: id }),
       refreshComputerScreen(id),
     ]);
     markOnce("rk:renderer:thread-response");
@@ -205,6 +214,8 @@ export function ShellPage() {
     setComputer(snap.computer);
     setRoutines(routines);
     setRoutinesBotId(id);
+    setTaughtSkills(skills);
+    setTaughtSkillsBotId(id);
     if (stickToEnd) {
       window.requestAnimationFrame(() => {
         const element = messageScroll.current;
@@ -789,10 +800,25 @@ export function ShellPage() {
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
           onAnswer={answerMessage}
+          onRefresh={async () => {
+            if (!active) return;
+            await refreshThread(active.id);
+          }}
+          onAddRoutine={(name, prompt) => {
+            setRoutineDraft({ name, prompt, schedule: defaultCronPreset() });
+            setEditingRoutine(null);
+            setPanel("routine");
+          }}
         />
+        {recordingSkill ? (
+          <div className="px-6 pb-2 text-center text-[13px] text-[#E65707]">
+            Teaching in progress — stop teaching before sending a new message.
+          </div>
+        ) : null}
         <Composer
           activeName={active?.name}
           running={Boolean(snapshot?.run && isActive(snapshot.run.status))}
+          disabled={Boolean(recordingSkill)}
           onSend={sendMessage}
           onStop={stopRun}
         />
@@ -927,6 +953,26 @@ export function ShellPage() {
                 >
                   + New routine
                 </button>
+                {active ? (
+                  <TeachComputerSection
+                    botId={active.id}
+                    computer={computer}
+                    skills={activeTaughtSkills}
+                    onRefresh={async () => {
+                      if (active) await refreshThread(active.id);
+                    }}
+                    onOpenComputer={openComputer}
+                    onAddRoutine={(skill) => {
+                      setRoutineDraft({
+                        name: skill.name || skill.goal.slice(0, 80),
+                        prompt: `Run taught skill: ${skill.name || skill.goal}\n${skill.playbook.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}`,
+                        schedule: defaultCronPreset(),
+                      });
+                      setEditingRoutine(null);
+                      setPanel("routine");
+                    }}
+                  />
+                ) : null}
               </div>
             ) : null}
             {panel === "create" ? (
@@ -1216,26 +1262,36 @@ export function ShellPage() {
               </button>
             </div>
           </div>
-          <div className="min-h-0 flex-1 bg-[#0E0E10]">
+          <div className="relative min-h-0 flex-1 bg-[#0E0E10]">
             {computer?.kind === "desktop" ? (
               <div className="grid h-full place-items-center px-8 text-center text-sm text-[#6C6C70]">
                 This bot runs on this computer. There is no separate Linux desktop. Ask it to use
                 the shell; working directories under your home folder are allowed.
               </div>
             ) : computer?.state === "running" && embeddedScreenUrl ? (
-              <iframe
-                title="Bot screen"
-                src={embeddedScreenUrl}
-                sandbox={screenIframeSandbox(embeddedScreenUrl)}
-                className="h-full w-full border-0 bg-black"
-                allow="clipboard-read; clipboard-write; fullscreen"
-                style={{
-                  pointerEvents:
-                    computer?.controlHolder === "user" && computer.controlBotId === active.id
-                      ? "auto"
-                      : "none",
-                }}
-              />
+              <>
+                <iframe
+                  title="Bot screen"
+                  src={embeddedScreenUrl}
+                  sandbox={screenIframeSandbox(embeddedScreenUrl)}
+                  className="h-full w-full border-0 bg-black"
+                  allow="clipboard-read; clipboard-write; fullscreen"
+                  style={{
+                    pointerEvents:
+                      recordingSkill ||
+                      !(computer?.controlHolder === "user" && computer.controlBotId === active.id)
+                        ? "none"
+                        : "auto",
+                  }}
+                />
+                {active ? (
+                  <TeachCaptureOverlay
+                    botId={active.id}
+                    skill={recordingSkill}
+                    enabled={Boolean(recordingSkill)}
+                  />
+                ) : null}
+              </>
             ) : (
               <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
                 {computer?.state === "suspended"
@@ -1260,6 +1316,8 @@ const Transcript = memo(function Transcript({
   onLoadOlder,
   onOpenBot,
   onAnswer,
+  onRefresh,
+  onAddRoutine,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   messages: ThreadMessage[];
@@ -1270,6 +1328,8 @@ const Transcript = memo(function Transcript({
   onLoadOlder: () => void | Promise<void>;
   onOpenBot: (botId: string) => void;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onAddRoutine: (name: string, prompt: string) => void;
 }) {
   return (
     <div
@@ -1294,6 +1354,8 @@ const Transcript = memo(function Transcript({
           canAnswer={message.id === answerableAskMessageId}
           onOpenBot={onOpenBot}
           onAnswer={onAnswer}
+          onRefresh={onRefresh}
+          onAddRoutine={onAddRoutine}
         />
       ))}
       {running ? (
@@ -1313,18 +1375,20 @@ const Transcript = memo(function Transcript({
 const Composer = memo(function Composer({
   activeName,
   running,
+  disabled,
   onSend,
   onStop,
 }: {
   activeName?: string;
   running: boolean;
+  disabled?: boolean;
   onSend: (text: string) => Promise<void>;
   onStop: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
 
   function send() {
-    if (!draft.trim()) return;
+    if (!draft.trim() || disabled) return;
     const text = draft;
     setDraft("");
     void onSend(text);
@@ -1345,8 +1409,9 @@ const Composer = memo(function Composer({
               send();
             }
           }}
+          disabled={disabled}
           placeholder={activeName ? `Message ${activeName}` : "Message…"}
-          className="flex-1 bg-transparent text-[15.5px] text-[#E9E9EA] outline-none"
+          className="flex-1 bg-transparent text-[15.5px] text-[#E9E9EA] outline-none disabled:opacity-40"
         />
         {running ? (
           <button
@@ -1362,7 +1427,8 @@ const Composer = memo(function Composer({
             type="button"
             aria-label="Send"
             onClick={send}
-            className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A]"
+            disabled={disabled}
+            className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A] disabled:opacity-40"
           >
             ↑
           </button>
@@ -1408,11 +1474,15 @@ const MessageView = memo(function MessageView({
   message,
   onAnswer,
   onOpenBot,
+  onRefresh,
+  onAddRoutine,
 }: {
   canAnswer: boolean;
   message: ThreadMessage;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
+  onRefresh: () => Promise<void>;
+  onAddRoutine: (name: string, prompt: string) => void;
 }) {
   return (
     <>
@@ -1551,6 +1621,13 @@ const MessageView = memo(function MessageView({
               canAnswer={canAnswer}
               onAnswer={(text) => onAnswer(message, text)}
             />
+          );
+        }
+        if (block.kind === "skill_draft") {
+          return (
+            <div key={i} className="flex justify-start">
+              <SkillDraftCard block={block} onRefresh={onRefresh} onAddRoutine={onAddRoutine} />
+            </div>
           );
         }
         if (block.kind === "computer") {

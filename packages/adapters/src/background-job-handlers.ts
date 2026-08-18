@@ -17,6 +17,7 @@ export function createBackgroundJobHandlers(deps: {
   jobs: JobPublisher;
   events: ThreadEvents;
   workerId: string;
+  onSkillTeachingExpire?: (skillId: string) => Promise<void>;
 }): BackgroundJobHandlers {
   return {
     "run.continue": async (payload) => {
@@ -32,6 +33,9 @@ export function createBackgroundJobHandlers(deps: {
       if (await expireComputerControl(deps, payload.computerId, payload.leaseId)) {
         scheduleComputerSleep(deps.jobs, payload.computerId);
       }
+    },
+    "skill.teaching-expire": async (payload) => {
+      await deps.onSkillTeachingExpire?.(payload.skillId);
     },
   };
 }

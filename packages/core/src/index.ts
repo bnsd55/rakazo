@@ -8,3 +8,5 @@ export * from "./sandbox-command.js";
 export * from "./screen-lease.js";
 export * from "./secrets-guard.js";
 export * from "./signup-policy.js";
+export * from "./teach-playbook.js";
+export * from "./teach-recording.js";

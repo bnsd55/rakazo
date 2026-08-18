@@ -17,6 +17,7 @@ import {
   assertTransition,
   containsSecret,
   createStreamingRedactor,
+  formatSkillRunPrompt,
   isTerminal,
   nextCronDate,
   nextFence,
@@ -265,7 +266,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
 
       const runSecrets = [...deps.secrets];
       try {
-        const [bot, thread, messages, task, connectedPlugins, credential, settings] =
+        const [bot, thread, messages, task, connectedPlugins, credential, settings, savedSkills, teachingSession] =
           await Promise.all([
             deps.prisma.bot.findUniqueOrThrow({
               where: { id: run.botId },
@@ -285,6 +286,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
             }),
             findDefaultModelCredential(deps.prisma, run),
             deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
+            deps.prisma.taughtSkill.findMany({
+              where: { botId: run.botId, workspaceId: run.workspaceId, status: "saved" },
+            }),
+            deps.prisma.taughtSkill.findFirst({
+              where: { botId: run.botId, workspaceId: run.workspaceId, status: "recording" },
+            }),
           ]);
         runAbortController = new AbortController();
         if (!leaseValid) runAbortController.abort();
@@ -391,11 +398,17 @@ export function createRunExecutor(deps: ExecutorDeps) {
             return result;
           };
           if (name === "computer_observe") {
+            if (teachingSession) {
+              return { error: "Teaching is in progress. Stop teaching before using the computer." };
+            }
             return computerScreenToolResult(async () =>
               formatObservation(await deps.sandbox.observe(computer, context)),
             );
           }
           if (name === "computer_act") {
+            if (teachingSession) {
+              return { error: "Teaching is in progress. Stop teaching before using the computer." };
+            }
             return computerScreenToolResult(async () => {
               const result = await deps.sandbox.act(
                 computer,
@@ -673,6 +686,31 @@ export function createRunExecutor(deps: ExecutorDeps) {
           connectedPlugins.length > 0
             ? `Connected plugins: ${connectedPlugins.map((row) => `${row.displayName} (${row.provider})`).join(", ")}. Use those plugin tools when the user asks about those apps.`
             : "No plugins are connected yet.";
+        const taughtSkillsLine =
+          savedSkills.length > 0
+            ? `Saved taught skills:\n${savedSkills
+                .map((skill) => {
+                  const playbook = skill.playbook as {
+                    whenToUse?: string;
+                    inputs?: string[];
+                    steps?: string[];
+                    howToCheck?: string;
+                    whatToReturn?: string;
+                    approvalBoundaries?: string;
+                    failureHandling?: string;
+                  };
+                  return `- ${skill.name || skill.goal}: ${formatSkillRunPrompt(skill.name || skill.goal, {
+                    whenToUse: playbook.whenToUse ?? skill.goal,
+                    inputs: playbook.inputs ?? [],
+                    steps: playbook.steps ?? [],
+                    howToCheck: playbook.howToCheck ?? "",
+                    whatToReturn: playbook.whatToReturn ?? "",
+                    approvalBoundaries: playbook.approvalBoundaries ?? "",
+                    failureHandling: playbook.failureHandling ?? "",
+                  })}`;
+                })
+                .join("\n\n")}\nWhen the user asks to run a taught skill by name, follow that playbook exactly.`
+            : undefined;
 
         try {
           for await (const event of deps.runtime.run(
@@ -691,6 +729,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 "run_subagent is a short helper inside this turn only. It is not a bot, has no thread, and does not show in the list. Use it for parallel work you will summarize here.",
                 "archive_bot safely archives a bot this bot created, and only that bot. Use it when the user asks to remove that bot or when it is finished and unused. The user can restore it or permanently delete it later. confirm_name must exactly match its name.",
                 pluginLine,
+                taughtSkillsLine,
                 "Never print API keys, access tokens, or secret values. Prefer tools over claiming you already did the work.",
               ]
                 .filter((instruction): instruction is string => Boolean(instruction))

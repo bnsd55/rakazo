@@ -61,6 +61,7 @@ import {
 } from "@rakazo/db";
 import { addScreenProxyCapability } from "./screen-proxy.js";
 import { withSerializableRetry } from "./serializable-retry.js";
+import { assertTeachingSendAllowed, createTaughtSkillsService } from "./taught-skills.js";
 import { loadAllMessages, loadMessagePage } from "./thread-message-pages.js";
 
 const MAX_COMPUTER_TEXT_FILE_BYTES = 2 * 1024 * 1024;
@@ -103,6 +104,14 @@ export interface RouterDeps {
 export function createRouter(deps: RouterDeps) {
   const os = implement(appContract).$context<{ actor: Actor | null; signal?: AbortSignal }>();
   const repos = createRepos(deps.prisma);
+  const taughtSkills = createTaughtSkillsService({
+    prisma: deps.prisma,
+    events: deps.events,
+    jobs: deps.jobs,
+    sandbox: deps.sandbox,
+    home: deps.home,
+    dataDir: deps.dataDir,
+  });
 
   const authed = os.use(async ({ context, next }) => {
     if (!context.actor) throw new ORPCError("UNAUTHORIZED");
@@ -424,6 +433,7 @@ export function createRouter(deps: RouterDeps) {
       send: authed.threads.send.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
         if (!bot.thread) throw new IsolationError();
+        await assertTeachingSendAllowed(deps.prisma, context.actor.workspaceId, bot.id);
         if (input.clientNonce) {
           const dup = await deps.prisma.run.findFirst({
             where: { workspaceId: context.actor.workspaceId, clientNonce: input.clientNonce },
@@ -523,6 +533,7 @@ export function createRouter(deps: RouterDeps) {
       followUp: authed.threads.followUp.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId);
         if (!bot.thread) throw new IsolationError();
+        await assertTeachingSendAllowed(deps.prisma, context.actor.workspaceId, bot.id);
         const message = await createThreadMessage(deps.prisma, {
           threadId: bot.thread.id,
           role: "user",
@@ -911,6 +922,7 @@ export function createRouter(deps: RouterDeps) {
           { leaseId: computer.controlLeaseId ?? "lease", holder: "user", fence: 0 },
           computerContext(context.actor, bot.id, "input"),
         );
+        await taughtSkills.recordInput(context.actor, bot.id, mapped);
         await deps.prisma.computer.updateMany({
           where: { id: computer.id, state: "running" },
           data: { updatedAt: new Date() },
@@ -1228,6 +1240,43 @@ export function createRouter(deps: RouterDeps) {
         await deps.jobs.enqueue(runContinueJob(run.id));
         return { runId: run.id };
       }),
+    },
+    skills: {
+      list: authed.skills.list.handler(async ({ context, input }) => {
+        await repos.getBot(context.actor, input.botId);
+        return taughtSkills.list(context.actor, input.botId);
+      }),
+      get: authed.skills.get.handler(async ({ context, input }) =>
+        taughtSkills.get(context.actor, input.skillId),
+      ),
+      start: authed.skills.start.handler(async ({ context, input }) => {
+        await repos.getBot(context.actor, input.botId);
+        return taughtSkills.start(context.actor, input.botId, input.goal);
+      }),
+      appendEvent: authed.skills.appendEvent.handler(async ({ context, input }) =>
+        taughtSkills.appendEvent(context.actor, input.skillId, input.event),
+      ),
+      snapshot: authed.skills.snapshot.handler(async ({ context, input }) =>
+        taughtSkills.snapshot(context.actor, input.skillId),
+      ),
+      stop: authed.skills.stop.handler(async ({ context, input }) =>
+        taughtSkills.stop(context.actor, input.skillId),
+      ),
+      updateDraft: authed.skills.updateDraft.handler(async ({ context, input }) =>
+        taughtSkills.updateDraft(context.actor, input.skillId, {
+          name: input.name,
+          playbook: input.playbook,
+        }),
+      ),
+      save: authed.skills.save.handler(async ({ context, input }) =>
+        taughtSkills.save(context.actor, input.skillId, input.name),
+      ),
+      testRun: authed.skills.testRun.handler(async ({ context, input }) =>
+        taughtSkills.testRun(context.actor, input.skillId, input.prompt),
+      ),
+      remove: authed.skills.remove.handler(async ({ context, input }) =>
+        taughtSkills.remove(context.actor, input.skillId),
+      ),
     },
     capabilities: {
       list: authed.capabilities.list.handler(async ({ context }) => {
