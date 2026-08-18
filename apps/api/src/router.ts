@@ -916,7 +916,8 @@ export function createRouter(deps: RouterDeps) {
                   type:
                     (input.payload.type as "move" | "down" | "up" | "click" | undefined) ?? "click",
                 };
-        await taughtSkills.recordInput(context.actor, bot.id, mapped);
+        const recorded = await taughtSkills.recordInput(context.actor, bot.id, mapped);
+        if (!recorded) return { ok: true as const };
         await deps.sandbox.sendInput(
           toComputerRef(computer),
           mapped,

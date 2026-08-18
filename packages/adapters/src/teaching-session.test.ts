@@ -3,6 +3,7 @@ import {
   appendRecordingEvent,
   emptyRecording,
   expireTaughtSkillTeaching,
+  recordTeachingInputEvent,
 } from "./teaching-session.js";
 
 function skillRow(
@@ -49,6 +50,7 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
         $transaction: vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
         taughtSkill: {
           findUnique: vi.fn(async () => current),
+          findFirst: vi.fn(async () => (current.status === "recording" ? current : null)),
         },
         bot: {
           findUnique: vi.fn(),
@@ -123,5 +125,21 @@ describe("expireTaughtSkillTeaching", () => {
     });
     await expireTaughtSkillTeaching(deps as never, "skill-1");
     expect(deps.jobs.cancel).toHaveBeenCalled();
+  });
+});
+
+describe("recordTeachingInputEvent", () => {
+  it("does not claim a click that landed after the session was finalized", async () => {
+    const { deps } = recordingDeps(skillRow({ status: "draft" }));
+    deps.prisma.taughtSkill.findFirst = vi
+      .fn()
+      .mockResolvedValue(skillRow({ status: "recording" }));
+    const recorded = await recordTeachingInputEvent(
+      deps as never,
+      { workspaceId: "workspace-1", userId: "user-1" } as never,
+      "bot-1",
+      { kind: "key", key: "x" },
+    );
+    expect(recorded).toBe(false);
   });
 });

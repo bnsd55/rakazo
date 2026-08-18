@@ -40,7 +40,9 @@ import { IsolationError, type PrismaClient, type ThreadEvents } from "@rakazo/db
 
 type TaughtSkillRow = {
   id: string;
+  workspaceId: string;
   botId: string;
+  userId: string;
   name: string;
   goal: string;
   status: string;
@@ -528,8 +530,8 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
             button: "left" | "right";
             type: "move" | "down" | "up" | "click";
           },
-    ): Promise<void> {
-      await recordTeachingInputEvent(deps, actor, botId, mapped);
+    ): Promise<boolean> {
+      return recordTeachingInputEvent(deps, actor, botId, mapped);
     },
   };
 }
