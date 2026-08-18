@@ -1252,16 +1252,6 @@ async function rpc<T>(app: App, cookie: string, proc: string, body: unknown = {}
   return parsed.json as T;
 }
 
-async function sendAndWait(app: App, cookie: string, botId: string, text: string) {
-  await rpc(app, cookie, "threads/send", { botId, text });
-  return waitFor(
-    app,
-    cookie,
-    botId,
-    (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
-  );
-}
-
 async function answerPendingApproval(
   app: App,
   cookie: string,
