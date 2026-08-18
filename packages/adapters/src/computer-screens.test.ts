@@ -83,18 +83,23 @@ describe("Team Computer parallel screens", () => {
 
   it("releases a claim retained across a same-run takeover resume", () => {
     const claims = new SingleScreenClaimTracker();
-    const paused = { ...writer, screenLeaseId: "run-1" };
-    const resumed = { ...writer, screenLeaseId: "run-1" };
+    const paused = { ...writer, screenLeaseId: "run-1:1" };
+    const resumed = { ...writer, screenLeaseId: "run-1:8" };
     claims.claim("computer-1", paused);
     claims.release("computer-1", resumed);
     expect(() => claims.claim("computer-1", researcher)).not.toThrow();
   });
 
-  it("does not let a fence-only screen lease id release a retained takeover", () => {
+  it("rejects a delayed claim after a newer run reclaimed the screen", () => {
     const claims = new SingleScreenClaimTracker();
-    claims.claim("computer-1", { ...writer, screenLeaseId: "run-1:1" });
-    claims.release("computer-1", { ...writer, screenLeaseId: "run-1:8" });
+    claims.claim("computer-1", { ...writer, screenLeaseId: "run-2:2" });
+    expect(() => claims.claim("computer-1", { ...writer, screenLeaseId: "run-1:1" })).toThrow(
+      ComputerScreenUnavailableError,
+    );
+    claims.release("computer-1", { ...writer, screenLeaseId: "run-1:1" });
     expect(() => claims.claim("computer-1", researcher)).toThrow(ComputerScreenUnavailableError);
+    claims.release("computer-1", { ...writer, screenLeaseId: "run-2:2" });
+    expect(() => claims.claim("computer-1", researcher)).not.toThrow();
   });
 
   it("turns a graphical refusal into a tool error object", async () => {

@@ -1,4 +1,5 @@
 import type { AdapterContext } from "@rakazo/adapter-kit";
+import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
 
 export const MULTI_SCREEN_UNAVAILABLE =
   "This computer provider does not support multiple screens. Desktop tools are already in use on the shared display. File and shell tools still work.";
@@ -23,9 +24,16 @@ export class SingleScreenClaimTracker {
     if (owner && owner.screenKey !== key) {
       throw new ComputerScreenUnavailableError();
     }
+    if (owner && !canTakeScreenLease(owner.leaseId, context.screenLeaseId)) {
+      if (context.screenLeaseId && owner.leaseId && context.screenLeaseId !== owner.leaseId) {
+        throw new ComputerScreenUnavailableError();
+      }
+    }
     this.owners.set(computerId, {
       screenKey: key,
-      leaseId: context.screenLeaseId ?? owner?.leaseId,
+      leaseId: canTakeScreenLease(owner?.leaseId, context.screenLeaseId)
+        ? context.screenLeaseId
+        : (owner?.leaseId ?? context.screenLeaseId),
     });
   }
 
@@ -37,7 +45,7 @@ export class SingleScreenClaimTracker {
     const owner = this.owners.get(computerId);
     if (
       owner?.screenKey === screenSessionKey(context) &&
-      (!context.screenLeaseId || owner.leaseId === context.screenLeaseId)
+      canReleaseScreenLease(owner.leaseId, context.screenLeaseId)
     ) {
       this.owners.delete(computerId);
     }

@@ -295,7 +295,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           userId: run.userId,
           botId: bot.id,
           runId,
-          screenLeaseId: screenLeaseIdForRun(computerLease, runId),
+          screenLeaseId: screenLeaseIdForRun(computerLease, runId, fence),
           signal: runAbortController.signal,
           connectedProviders: connectedPlugins.map((row) => row.provider),
         };

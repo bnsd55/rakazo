@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
+import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
 import { z } from "zod";
 import {
   type SandboxInput,
@@ -79,7 +80,16 @@ export function nextScreenIndex(
     if (existing.releasing) {
       throw new Error("This Team Computer screen is still being released.");
     }
-    if (leaseId) existing.leaseId = leaseId;
+    if (leaseId) {
+      if (
+        existing.leaseId &&
+        existing.leaseId !== leaseId &&
+        !canTakeScreenLease(existing.leaseId, leaseId)
+      ) {
+        throw new Error("This Team Computer screen is owned by a newer execution.");
+      }
+      if (canTakeScreenLease(existing.leaseId, leaseId)) existing.leaseId = leaseId;
+    }
     return existing.index;
   }
   const used = new Set([...assigned.values()].map((slot) => slot.index));
@@ -98,7 +108,9 @@ export function releaseAssignedScreen(
   leaseId?: string,
 ): number | undefined {
   const slot = assigned.get(screenId);
-  if (!slot || slot.releasing || (leaseId && slot.leaseId !== leaseId)) return undefined;
+  if (!slot || slot.releasing || (leaseId && !canReleaseScreenLease(slot.leaseId, leaseId))) {
+    return undefined;
+  }
   slot.releasing = true;
   return slot.index;
 }

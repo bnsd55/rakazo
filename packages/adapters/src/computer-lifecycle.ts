@@ -6,6 +6,7 @@ import type {
   JobPublisher,
   SandboxProvider,
 } from "@rakazo/adapter-kit";
+import { screenLeaseId } from "@rakazo/core";
 import { type PrismaClient, parseComputerMode, type ThreadEvents } from "@rakazo/db";
 import { expireComputerControl, hasActiveComputerControl } from "./computer-control.js";
 import { ensureComputerWorkspaceLayout, restoreComputerWorkspace } from "./computer-workspace.js";
@@ -232,10 +233,11 @@ export interface ComputerExecutionLease {
 }
 
 export function screenLeaseIdForRun(
-  lease: Pick<ComputerExecutionLease, "runId"> | null,
+  lease: Pick<ComputerExecutionLease, "runId" | "fence"> | null,
   runId: string,
+  fence = 0,
 ): string {
-  return lease?.runId ?? runId;
+  return screenLeaseId(lease?.runId ?? runId, lease?.fence ?? fence);
 }
 
 export async function acquireComputerExecutionLease(

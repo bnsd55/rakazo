@@ -12,7 +12,8 @@ import type {
   ScreenRequest,
   ScreenSession,
 } from "@rakazo/adapter-kit";
-import { screenSessionKey } from "./computer-screens.js";
+import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
+import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
   applyPlaceholderAction,
   boundedComputerActions,
@@ -231,7 +232,7 @@ export class FakeSandboxProvider implements SandboxProvider {
     if (!box) return;
     const key = screenSessionKey(context);
     const leaseId = box.screenLeases.get(key);
-    if (context.screenLeaseId && leaseId !== context.screenLeaseId) return;
+    if (context.screenLeaseId && !canReleaseScreenLease(leaseId, context.screenLeaseId)) return;
     box.screens.delete(key);
     box.screenLeases.delete(key);
   }
@@ -253,7 +254,11 @@ export class FakeSandboxProvider implements SandboxProvider {
 
   private screenSlot(box: FakeBox, key: string, leaseId?: string): { screen: string } {
     if (!box.screens.has(key)) box.screens.set(key, `ready:${key}`);
-    if (leaseId) box.screenLeases.set(key, leaseId);
+    const current = box.screenLeases.get(key);
+    if (leaseId && current && leaseId !== current && !canTakeScreenLease(current, leaseId)) {
+      throw new ComputerScreenUnavailableError();
+    }
+    if (canTakeScreenLease(current, leaseId)) box.screenLeases.set(key, leaseId);
     return {
       get screen() {
         return box.screens.get(key) ?? `ready:${key}`;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ComputerAction, ComputerInput } from "@rakazo/adapter-kit";
+import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
 import { ComputerScreenUnavailableError } from "./computer-screens.js";
 import { clampRounded, shellQuote } from "./computer-support.js";
 
@@ -32,7 +33,15 @@ export class ExtraDisplayAllocator {
     }
     const existing = slots.get(screenKey);
     if (existing) {
-      if (leaseId) existing.leaseId = leaseId;
+      if (
+        leaseId &&
+        existing.leaseId &&
+        leaseId !== existing.leaseId &&
+        !canTakeScreenLease(existing.leaseId, leaseId)
+      ) {
+        throw new ComputerScreenUnavailableError();
+      }
+      if (canTakeScreenLease(existing.leaseId, leaseId)) existing.leaseId = leaseId;
       return existing.index;
     }
     const used = new Set([...slots.values()].map((slot) => slot.index));
@@ -49,7 +58,7 @@ export class ExtraDisplayAllocator {
     const slots = this.assigned.get(sandboxId);
     if (!slots) return undefined;
     const slot = slots.get(screenKey);
-    if (!slot || (leaseId && slot.leaseId !== leaseId)) return undefined;
+    if (!slot || (leaseId && !canReleaseScreenLease(slot.leaseId, leaseId))) return undefined;
     slots.delete(screenKey);
     if (slots.size === 0) this.assigned.delete(sandboxId);
     return slot.index;
@@ -72,9 +81,15 @@ export function allocateExtraDisplayCommand(screenKey: string, leaseId?: string)
     'exec 9>"$dir/.lock"',
     "flock 9",
     `slot="$dir/${key}.slot"`,
-    `if [ -f "$slot" ]; then index=$(sed -n '1p' "$slot"); else index=""; for candidate in $(seq 0 ${TEAM_EXTRA_DISPLAY_LIMIT - 1}); do if ! grep -h -x -- "$candidate" "$dir"/*.slot >/dev/null 2>&1; then index=$candidate; break; fi; done; [ -n "$index" ] || exit 75; fi`,
+    `if [ -f "$slot" ]; then index=$(sed -n '1p' "$slot"); current=$(sed -n '2p' "$slot"); else index=""; current=""; for candidate in $(seq 0 ${TEAM_EXTRA_DISPLAY_LIMIT - 1}); do if ! grep -h -x -- "$candidate" "$dir"/*.slot >/dev/null 2>&1; then index=$candidate; break; fi; done; [ -n "$index" ] || exit 75; fi`,
     `owner=${shellQuote(owner)}`,
-    'if [ -z "$owner" ] && [ -f "$slot" ]; then owner=$(sed -n \'2p\' "$slot"); fi',
+    'if [ -z "$owner" ]; then owner="$current"; fi',
+    'incoming_fence=0; current_fence=0; incoming_owner="$owner"; current_owner="$current"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: POSIX parameter expansion in the remote shell script
+    'case "$owner" in *:*) rest=${owner##*:}; case "$rest" in \'\'|*[!0-9]*) ;; *) incoming_fence=$rest; incoming_owner=${owner%:*}; esac ;; esac',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: POSIX parameter expansion in the remote shell script
+    'case "$current" in *:*) rest=${current##*:}; case "$rest" in \'\'|*[!0-9]*) ;; *) current_fence=$rest; current_owner=${current%:*}; esac ;; esac',
+    'if [ -n "$owner" ] && [ -n "$current" ] && [ "$owner" != "$current" ] && [ "$incoming_fence" -le "$current_fence" ]; then printf \'RAKAZO_SCREEN_INDEX=stale\\n\'; exit 75; fi',
     'tmp="$slot.$$"',
     'printf \'%s\\n%s\\n\' "$index" "$owner" >"$tmp"',
     'mv "$tmp" "$slot"',
@@ -96,7 +111,12 @@ export function releaseExtraDisplayCommand(screenKey: string, leaseId?: string):
     "index=$(sed -n '1p' \"$slot\")",
     "current=$(sed -n '2p' \"$slot\")",
     `owner=${shellQuote(owner)}`,
-    '[ -z "$owner" ] || [ "$current" = "$owner" ] || { printf \'RAKAZO_SCREEN_RELEASE=stale\\n\'; exit 0; }',
+    'incoming_fence=0; current_fence=0; incoming_owner="$owner"; current_owner="$current"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: POSIX parameter expansion in the remote shell script
+    'case "$owner" in *:*) rest=${owner##*:}; case "$rest" in \'\'|*[!0-9]*) ;; *) incoming_fence=$rest; incoming_owner=${owner%:*}; esac ;; esac',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: POSIX parameter expansion in the remote shell script
+    'case "$current" in *:*) rest=${current##*:}; case "$rest" in \'\'|*[!0-9]*) ;; *) current_fence=$rest; current_owner=${current%:*}; esac ;; esac',
+    '[ -z "$owner" ] || [ "$current" = "$owner" ] || { [ "$incoming_owner" = "$current_owner" ] && [ "$incoming_fence" -ge "$current_fence" ]; } || { printf \'RAKAZO_SCREEN_RELEASE=stale\\n\'; exit 0; }',
     'if [ "$index" -ne 0 ]; then display_number=$((index + 1)); view_port=$((6080 + index * 2)); control_port=$((6081 + index * 2)); view_vnc_port=$((5900 + index * 2)); control_vnc_port=$((5901 + index * 2)); pkill -f "Xvfb :$display_number -screen" || true; pkill -f "HOME=/tmp/fluxbox-home-$display_number DISPLAY=:$display_number fluxbox" || true; pkill -f -- "chromium-screen-$display_number" || true; pkill -f "^x11vnc .* -rfbport $view_vnc_port" || true; pkill -f "^x11vnc .* -rfbport $control_vnc_port" || true; pkill -f "^/usr/bin/python3 .*websockify.*$view_port" || true; pkill -f "novnc_proxy.*--listen $view_port" || true; pkill -f "^/usr/bin/python3 .*websockify.*$control_port" || true; pkill -f "novnc_proxy.*--listen $control_port" || true; rm -f "/tmp/.X$display_number-lock" "/tmp/.X11-unix/X$display_number" "/tmp/rakazo/control-token-$display_number" "/tmp/rakazo/view-password-$display_number" "/tmp/rakazo-view-$display_number.vncpass" "/tmp/rakazo-control-$display_number.vncpass" "/tmp/rakazo/screen-$display_number.lock"; fi',
     'rm -f "$slot"',
     "printf 'RAKAZO_SCREEN_RELEASE=%s\\n' \"$index\"",
