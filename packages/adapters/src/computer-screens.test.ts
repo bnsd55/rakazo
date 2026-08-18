@@ -81,6 +81,22 @@ describe("Team Computer parallel screens", () => {
     expect(() => claims.claim("computer-1", researcher)).not.toThrow();
   });
 
+  it("releases a claim retained across a same-run takeover resume", () => {
+    const claims = new SingleScreenClaimTracker();
+    const paused = { ...writer, screenLeaseId: "run-1" };
+    const resumed = { ...writer, screenLeaseId: "run-1" };
+    claims.claim("computer-1", paused);
+    claims.release("computer-1", resumed);
+    expect(() => claims.claim("computer-1", researcher)).not.toThrow();
+  });
+
+  it("does not let a fence-only screen lease id release a retained takeover", () => {
+    const claims = new SingleScreenClaimTracker();
+    claims.claim("computer-1", { ...writer, screenLeaseId: "run-1:1" });
+    claims.release("computer-1", { ...writer, screenLeaseId: "run-1:8" });
+    expect(() => claims.claim("computer-1", researcher)).toThrow(ComputerScreenUnavailableError);
+  });
+
   it("turns a graphical refusal into a tool error object", async () => {
     const claims = new SingleScreenClaimTracker();
     claims.claim("computer-1", writer);

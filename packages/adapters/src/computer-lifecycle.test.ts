@@ -14,6 +14,7 @@ import {
   provisionComputer,
   releaseComputerExecutionLease,
   renewComputerExecutionLease,
+  screenLeaseIdForRun,
 } from "./computer-lifecycle.js";
 
 const context = {
@@ -465,6 +466,16 @@ describe("computer execution leases", () => {
       }),
     );
     expect(prisma.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps the screen lease on the run id when a takeover resume bumps the fence", () => {
+    expect(
+      screenLeaseIdForRun(
+        { computerId: "computer-1", botId: "bot-1", runId: "run-1", fence: 8 },
+        "run-1",
+      ),
+    ).toBe("run-1");
+    expect(screenLeaseIdForRun(null, "run-1")).toBe("run-1");
   });
 
   it("rolls back a lease that races with computer suspension", async () => {

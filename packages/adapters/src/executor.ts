@@ -42,6 +42,7 @@ import {
   provisionComputer,
   releaseComputerExecutionLease,
   renewComputerExecutionLease,
+  screenLeaseIdForRun,
 } from "./computer-lifecycle.js";
 import { isComputerScreenUnavailable } from "./computer-screens.js";
 import {
@@ -294,9 +295,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           userId: run.userId,
           botId: bot.id,
           runId,
-          screenLeaseId: computerLease
-            ? `${computerLease.runId}:${computerLease.fence}`
-            : `${runId}:${fence}`,
+          screenLeaseId: screenLeaseIdForRun(computerLease, runId),
           signal: runAbortController.signal,
           connectedProviders: connectedPlugins.map((row) => row.provider),
         };

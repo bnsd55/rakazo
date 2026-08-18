@@ -32,6 +32,7 @@ import {
   savePushToken,
   scheduleComputerControlExpiry,
   scheduleComputerSleep,
+  screenLeaseIdForRun,
   scriptedCatalogEntry,
   serializeModelSecret,
   takeoverLeaseMs,
@@ -623,7 +624,7 @@ export function createRouter(deps: RouterDeps) {
         try {
           await provisionComputer(deps, bot.computer.id, {
             ...ctx,
-            screenLeaseId: lease ? `${lease.runId}:${lease.fence}` : manualRunId,
+            screenLeaseId: screenLeaseIdForRun(lease, manualRunId),
           });
           scheduleComputerSleep(deps.jobs, bot.computer.id);
         } finally {
@@ -1653,7 +1654,7 @@ async function computerScreenContext(
     select: { runId: true, fence: true, expiresAt: true },
   });
   if (!lease || lease.expiresAt.getTime() <= Date.now()) return context;
-  return { ...context, screenLeaseId: `${lease.runId}:${lease.fence}` };
+  return { ...context, screenLeaseId: screenLeaseIdForRun(lease, lease.runId) };
 }
 
 function assertComputerAvailableToBot(

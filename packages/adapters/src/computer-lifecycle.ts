@@ -231,6 +231,13 @@ export interface ComputerExecutionLease {
   fence: number;
 }
 
+export function screenLeaseIdForRun(
+  lease: Pick<ComputerExecutionLease, "runId"> | null,
+  runId: string,
+): string {
+  return lease?.runId ?? runId;
+}
+
 export async function acquireComputerExecutionLease(
   prisma: PrismaClient,
   input: {

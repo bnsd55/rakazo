@@ -201,6 +201,14 @@ describe("sandbox supervisor input containment", () => {
     completeReleasedScreen(assigned, "writer", 0);
   });
 
+  it("releases a retained screen after the same run resumes", () => {
+    const assigned = new Map<string, ScreenAssignment>();
+    expect(nextScreenIndex(assigned, "writer", "run-1")).toBe(0);
+    expect(releaseAssignedScreen(assigned, "writer", "run-1")).toBe(0);
+    completeReleasedScreen(assigned, "writer", 0);
+    expect(nextScreenIndex(assigned, "researcher")).toBe(0);
+  });
+
   it("stops extra displays without touching the primary desktop", () => {
     expect(stopExtraScreenCommand(0)).toBe("");
     expect(stopExtraScreenCommand(1)).toContain("Xvfb :2 -screen");

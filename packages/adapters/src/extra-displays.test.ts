@@ -50,6 +50,13 @@ describe("extra display ports", () => {
     expect(allocator.release("sandbox-1", "writer", "run-2:2")).toBe(0);
   });
 
+  it("releases a retained screen when the same run resumes without another graphical op", () => {
+    const allocator = new ExtraDisplayAllocator();
+    expect(allocator.resolve("sandbox-1", "writer", "run-1")).toBe(0);
+    expect(allocator.release("sandbox-1", "writer", "run-1")).toBe(0);
+    expect(allocator.resolve("sandbox-1", "researcher")).toBe(0);
+  });
+
   it("uses a locked sandbox registry for cross-process screen assignment", () => {
     const allocate = allocateExtraDisplayCommand("writer", "run-2:2");
     const release = releaseExtraDisplayCommand("writer", "run-2:2");
