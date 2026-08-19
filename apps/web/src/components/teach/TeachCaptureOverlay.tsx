@@ -1,5 +1,5 @@
 import type { TaughtSkill } from "@rakazo/contracts";
-import { teachCaptureKey } from "@rakazo/core";
+import { DEFAULT_COMPUTER_SCREEN, mapTeachPointer, teachCaptureKey } from "@rakazo/core";
 import { useEffect, useRef } from "react";
 import { rpc } from "../../lib/rpc";
 
@@ -7,13 +7,19 @@ export function TeachCaptureOverlay({
   botId,
   skill,
   enabled,
+  screenWidth,
+  screenHeight,
 }: {
   botId: string;
   skill: TaughtSkill | null;
   enabled: boolean;
+  screenWidth?: number;
+  screenHeight?: number;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputChainRef = useRef(Promise.resolve());
+  const width = screenWidth ?? DEFAULT_COMPUTER_SCREEN.width;
+  const height = screenHeight ?? DEFAULT_COMPUTER_SCREEN.height;
 
   useEffect(() => {
     if (!enabled || !skill || skill.status !== "recording") return;
@@ -45,9 +51,12 @@ export function TeachCaptureOverlay({
       event.preventDefault();
       const target = root;
       if (!target) return;
-      const rect = target.getBoundingClientRect();
-      const x = Math.round(((event.clientX - rect.left) / rect.width) * 1280);
-      const y = Math.round(((event.clientY - rect.top) / rect.height) * 800);
+      const { x, y } = mapTeachPointer(
+        event.clientX,
+        event.clientY,
+        target.getBoundingClientRect(),
+        { width, height },
+      );
       enqueueInput(() => sendPointer("click", x, y, event.button === 2 ? "right" : "left"));
     }
 
@@ -64,7 +73,7 @@ export function TeachCaptureOverlay({
       root.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [botId, enabled, skill]);
+  }, [botId, enabled, height, skill, width]);
 
   if (!enabled || !skill || skill.status !== "recording") return null;
 

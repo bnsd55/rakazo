@@ -14,8 +14,8 @@ import {
   completeTeachingSession,
   emptyRecording,
   expireTaughtSkillTeaching,
+  extendActiveComputerControl,
   getActiveTeachingSession,
-  hasActiveComputerControl,
   mapTaughtSkill,
   observeStopSnapshot,
   parsePlaybook,
@@ -25,7 +25,7 @@ import {
   releaseTeachingComputerControlForBot,
   scheduleComputerControlExpiry,
   screenLeaseIdForRun,
-  takeoverLeaseMs,
+  teachingControlLeaseExpiresAt,
 } from "@rakazo/adapters";
 import type { Actor, MessageBlock, TaughtSkill } from "@rakazo/contracts";
 import {
@@ -170,13 +170,14 @@ async function grantTakeover(
   deps: TaughtSkillsDeps,
   actor: Actor,
   bot: Awaited<ReturnType<ReturnType<typeof import("@rakazo/db").createRepos>["getBot"]>>,
+  until: Date,
 ) {
   if (!bot.computer) throw new IsolationError();
-  if (hasActiveComputerControl(bot.computer) && bot.computer.controlBotId === bot.id) {
+  if (await extendActiveComputerControl(deps.prisma, deps.jobs, bot.computer, bot.id, until)) {
     return bot;
   }
   const leaseId = randomUUID();
-  const expiresAt = new Date(Date.now() + takeoverLeaseMs());
+  const expiresAt = teachingControlLeaseExpiresAt(until);
   const granted = await deps.prisma.computer.updateMany({
     where: {
       id: bot.computer.id,
@@ -320,9 +321,9 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
       if (!bot) throw new IsolationError();
       await cancelActiveRuns(deps, actor, botId);
       bot = await ensureGraphicalComputer(deps, actor, bot);
-      await grantTakeover(deps, actor, bot);
       const startedAt = new Date();
       const expiresAt = new Date(startedAt.getTime() + teachRecordingTtlMs());
+      await grantTakeover(deps, actor, bot, expiresAt);
       let row: TaughtSkillRow;
       try {
         row = await deps.prisma.$transaction(async (tx) => {

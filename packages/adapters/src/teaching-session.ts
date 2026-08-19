@@ -290,24 +290,40 @@ async function releaseTeachingComputerControl(
   await scheduleComputerSleep(deps.jobs, computer.id);
 }
 
-async function hasSkillDraftMessage(
+function skillDraftBlocks(skill: TaughtSkillRow): MessageBlock[] {
+  return [
+    {
+      kind: "skill_draft",
+      skillId: skill.id,
+      name: skill.name || skill.goal.slice(0, 80),
+      goal: skill.goal,
+      playbook: parsePlaybook(skill.playbook),
+      status: "draft",
+    },
+  ];
+}
+
+async function findSkillDraftMessage(
   prisma: { message: { findMany: PrismaClient["message"]["findMany"] } },
   threadId: string,
   skillId: string,
-): Promise<boolean> {
+): Promise<{ id: string; blocks: MessageBlock[] } | null> {
   const messages = await prisma.message.findMany({
     where: { threadId, role: "bot" },
     orderBy: { seq: "desc" },
     take: 100,
-    select: { blocks: true },
+    select: { id: true, blocks: true },
   });
-  return messages.some((message) => {
+  for (const message of messages) {
     const blocks = message.blocks as MessageBlock[];
-    return (
+    if (
       Array.isArray(blocks) &&
       blocks.some((block) => block.kind === "skill_draft" && block.skillId === skillId)
-    );
-  });
+    ) {
+      return { id: message.id, blocks };
+    }
+  }
+  return null;
 }
 
 async function emitSkillDraftMessages(
@@ -320,32 +336,22 @@ async function emitSkillDraftMessages(
   const threadId = bot.thread.id;
   const created = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
-    if (await hasSkillDraftMessage(tx, threadId, skill.id)) return null;
-    const playbook = parsePlaybook(skill.playbook);
-    const blocks: MessageBlock[] = [
-      {
-        kind: "skill_draft",
-        skillId: skill.id,
-        name: skill.name || skill.goal.slice(0, 80),
-        goal: skill.goal,
-        playbook,
-        status: "draft",
-      },
-    ];
+    const existing = await findSkillDraftMessage(tx, threadId, skill.id);
+    if (existing) return existing;
+    const blocks = skillDraftBlocks(skill);
     const message = await createThreadMessageInTransaction(tx, {
       threadId,
       role: "bot",
       blocks,
     });
-    return { message, blocks };
+    return { id: message.id, blocks };
   });
-  if (!created) return;
   await deps.events.append({
     workspaceId: actor.workspaceId,
     threadId,
     botId: bot.id,
     type: "thread.message.created",
-    payload: { messageId: created.message.id, role: "bot", blocks: created.blocks },
+    payload: { messageId: created.id, role: "bot", blocks: created.blocks },
   });
   await deps.events.append({
     workspaceId: actor.workspaceId,

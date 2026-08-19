@@ -27,3 +27,27 @@ export function teachCaptureKey(
   if (key.length === 1) return key;
   return SPECIAL_TEACH_KEYS.has(key) ? key : null;
 }
+
+export const DEFAULT_COMPUTER_SCREEN = { width: 1280, height: 800 } as const;
+export const BOX_COMPUTER_SCREEN = { width: 1920, height: 1080 } as const;
+
+export function computerScreenSize(kind: string | null | undefined): {
+  width: number;
+  height: number;
+} {
+  return kind === "box" ? BOX_COMPUTER_SCREEN : DEFAULT_COMPUTER_SCREEN;
+}
+
+export function mapTeachPointer(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  screen: { width: number; height: number },
+): { x: number; y: number } {
+  const width = rect.width || 1;
+  const height = rect.height || 1;
+  return {
+    x: Math.round(((clientX - rect.left) / width) * screen.width),
+    y: Math.round(((clientY - rect.top) / height) * screen.height),
+  };
+}

@@ -206,6 +206,8 @@ export const ComputerStatusSchema = z.object({
   controlHolder: z.enum(["bot", "user", "none"]),
   controlBotId: Id.nullable(),
   screenAvailable: z.boolean(),
+  screenWidth: z.number().int().positive(),
+  screenHeight: z.number().int().positive(),
   homeRevision: z.string().nullable(),
   busyBotName: z.string().nullable(),
 });

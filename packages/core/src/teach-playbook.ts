@@ -60,13 +60,14 @@ export function buildPlaybookFromRecording(
 
   function flushTyped() {
     if (!typed) return;
-    steps.push(`Type ${JSON.stringify(typed)}.`);
+    const text = redactSensitiveText(typed);
+    if (text) steps.push(`Type ${JSON.stringify(text)}.`);
     typed = "";
   }
 
   for (const event of events) {
     if (event.kind === "key") {
-      const key = event.key?.trim();
+      const key = event.key;
       if (!key) continue;
       if (isTypedCharacter(key)) {
         typed += key;

@@ -278,6 +278,8 @@ function computer(overrides: Partial<ComputerStatus> = {}): ComputerStatus {
     controlHolder: "none",
     controlBotId: null,
     screenAvailable: false,
+    screenWidth: 1280,
+    screenHeight: 800,
     homeRevision: null,
     busyBotName: null,
     ...overrides,

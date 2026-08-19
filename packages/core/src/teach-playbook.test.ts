@@ -45,4 +45,33 @@ describe("buildPlaybookFromRecording", () => {
     ]);
     expect(playbook.steps).toEqual(['Type "book".', "Press key: Enter."]);
   });
+
+  it("keeps spaces typed during a demo", () => {
+    const playbook = buildPlaybookFromRecording("Search", [
+      { at: "2026-01-01T00:00:00.000Z", kind: "key", key: "h" },
+      { at: "2026-01-01T00:00:00.100Z", kind: "key", key: "i" },
+      { at: "2026-01-01T00:00:00.200Z", kind: "key", key: " " },
+      { at: "2026-01-01T00:00:00.300Z", kind: "key", key: "t" },
+      { at: "2026-01-01T00:00:00.400Z", kind: "key", key: "h" },
+      { at: "2026-01-01T00:00:00.500Z", kind: "key", key: "e" },
+      { at: "2026-01-01T00:00:00.600Z", kind: "key", key: "r" },
+      { at: "2026-01-01T00:00:00.700Z", kind: "key", key: "e" },
+    ]);
+    expect(playbook.steps).toEqual(['Type "hi there".']);
+  });
+
+  it("redacts typed credentials the same way as clipboard input", () => {
+    const playbook = buildPlaybookFromRecording("Sign in", [
+      { at: "2026-01-01T00:00:00.000Z", kind: "key", key: "p" },
+      { at: "2026-01-01T00:00:00.100Z", kind: "key", key: "a" },
+      { at: "2026-01-01T00:00:00.200Z", kind: "key", key: "s" },
+      { at: "2026-01-01T00:00:00.300Z", kind: "key", key: "s" },
+      { at: "2026-01-01T00:00:00.400Z", kind: "key", key: "w" },
+      { at: "2026-01-01T00:00:00.500Z", kind: "key", key: "o" },
+      { at: "2026-01-01T00:00:00.600Z", kind: "key", key: "r" },
+      { at: "2026-01-01T00:00:00.700Z", kind: "key", key: "d" },
+    ]);
+    expect(playbook.steps.join(" ")).toContain("[redacted input]");
+    expect(playbook.steps.join(" ")).not.toContain("password");
+  });
 });

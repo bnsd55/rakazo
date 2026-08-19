@@ -422,7 +422,7 @@ export function ShellPage() {
               }
               if (event.payload.role === "bot") markBotReadIfVisible(active.id);
             }
-            if (event.type === "run.completed") {
+            if (event.type === "run.completed" || event.type === "skill.teaching.stopped") {
               void refreshThread(active.id).catch(() => undefined);
             } else if (isComputerStatusEvent(event)) {
               void refreshComputerScreen(active.id).catch(() => undefined);
@@ -1576,6 +1576,8 @@ export function ShellPage() {
                     botId={active.id}
                     skill={recordingSkill}
                     enabled={Boolean(recordingSkill)}
+                    screenWidth={computer?.screenWidth}
+                    screenHeight={computer?.screenHeight}
                   />
                 ) : null}
               </>

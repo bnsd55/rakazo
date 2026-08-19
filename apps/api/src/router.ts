@@ -51,6 +51,7 @@ import {
 import {
   ACTIVE_RUN_STATUSES,
   AttachmentValidationError,
+  computerScreenSize,
   nextCronDate,
   projectMessages,
 } from "@rakazo/core";
@@ -1791,6 +1792,7 @@ function toComputerStatus(
           computer?.state === "error"
         ? computer.state
         : "stopped";
+  const screen = computerScreenSize(computer?.kind);
   return {
     botId,
     mode: computer?.scope === "dedicated" ? "dedicated" : "team",
@@ -1799,6 +1801,8 @@ function toComputerStatus(
     controlHolder: (computer?.controlHolder ?? "none") as ComputerStatus["controlHolder"],
     controlBotId: computer?.controlBotId ?? null,
     screenAvailable: state === "running" || state === "booting",
+    screenWidth: screen.width,
+    screenHeight: screen.height,
     homeRevision: computer?.homeRevision ?? null,
     busyBotName: null,
   };

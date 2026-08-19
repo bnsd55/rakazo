@@ -45,7 +45,9 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
     message: {
       findMany: vi
         .fn()
-        .mockResolvedValue([{ blocks: [{ kind: "skill_draft", skillId: "skill-1" }] }]),
+        .mockResolvedValue([
+          { id: "message-1", blocks: [{ kind: "skill_draft", skillId: "skill-1" }] },
+        ]),
     },
   };
   return {
@@ -63,7 +65,9 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
         message: {
           findMany: vi
             .fn()
-            .mockResolvedValue([{ blocks: [{ kind: "skill_draft", skillId: "skill-1" }] }]),
+            .mockResolvedValue([
+              { id: "message-1", blocks: [{ kind: "skill_draft", skillId: "skill-1" }] },
+            ]),
         },
       },
       events: { append: vi.fn(), finalizeComputerControlRelease: vi.fn() },
@@ -130,6 +134,18 @@ describe("expireTaughtSkillTeaching", () => {
     });
     await expireTaughtSkillTeaching(deps as never, "skill-1");
     expect(deps.jobs.cancel).toHaveBeenCalled();
+    expect(deps.events.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.message.created",
+        payload: expect.objectContaining({ messageId: "message-1" }),
+      }),
+    );
+    expect(deps.events.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "skill.draft.created",
+        payload: expect.objectContaining({ skillId: "skill-1" }),
+      }),
+    );
   });
 });
 
