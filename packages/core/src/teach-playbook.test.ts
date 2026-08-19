@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { buildPlaybookFromRecording } from "./teach-playbook.js";
+import { buildPlaybookFromRecording, promptInvokesSkill } from "./teach-playbook.js";
+
+describe("promptInvokesSkill", () => {
+  it("matches an explicit request to run the skill", () => {
+    expect(promptInvokesSkill("run Export weekly CRM list", "Export weekly CRM list")).toBe(true);
+    expect(promptInvokesSkill("Please use the Export CRM skill now", "Export CRM")).toBe(true);
+  });
+
+  it("ignores prompts that only mention the name in passing", () => {
+    expect(promptInvokesSkill("export the notes to markdown", "Export")).toBe(false);
+    expect(promptInvokesSkill("run the exporter script", "Export")).toBe(false);
+    expect(promptInvokesSkill("run a report", "Export weekly CRM list")).toBe(false);
+  });
+
+  it("skips prompts that already carry the playbook and very short names", () => {
+    expect(promptInvokesSkill("Run taught skill: Export\nSteps:", "Export")).toBe(false);
+    expect(promptInvokesSkill("run cs now", "cs")).toBe(false);
+  });
+});
 
 describe("buildPlaybookFromRecording", () => {
   it("turns pointer and typing events into steps", () => {

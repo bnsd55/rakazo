@@ -164,6 +164,27 @@ export function buildPlaybookFromRecording(
   };
 }
 
+const SKILL_RUN_PROMPT_PREFIX = "run taught skill:";
+const SKILL_INVOCATION_VERB = /\b(run|use|do|repeat|perform|execute)\b/;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * A saved skill only takes over a task when the user actually asks for it: an invocation verb
+ * plus the whole skill name. A bare substring match would hijack any request that happens to
+ * mention a common word used as a skill name.
+ */
+export function promptInvokesSkill(prompt: string, name: string): boolean {
+  const skill = name.trim().toLowerCase();
+  const text = prompt.toLowerCase();
+  if (skill.length < 3) return false;
+  if (text.startsWith(SKILL_RUN_PROMPT_PREFIX)) return false;
+  if (!SKILL_INVOCATION_VERB.test(text)) return false;
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(skill)}([^\\p{L}\\p{N}]|$)`, "u").test(text);
+}
+
 export function formatSkillRunPrompt(name: string, playbook: SkillPlaybook, test = false): string {
   const safety = test
     ? "This is a safe test run. Do not send, spend, delete, or publish anything."

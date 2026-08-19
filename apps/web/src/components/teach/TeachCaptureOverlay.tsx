@@ -74,18 +74,46 @@ export function TeachCaptureOverlay({
       enqueueInput(() => sendPointer("down", x, y, buttonFor(event)));
     }
 
+    // Each input is one request, one recording write and one sandbox action, so a raw pointer
+    // stream would queue faster than it drains. Keep only the newest position and send it once
+    // the previous one has landed.
+    let pendingMove: { x: number; y: number; button: "left" | "right" } | null = null;
+    let moveInFlight = false;
+
+    function pumpMove() {
+      if (moveInFlight || !pendingMove) return;
+      const move = pendingMove;
+      pendingMove = null;
+      moveInFlight = true;
+      enqueueInput(async () => {
+        try {
+          await sendPointer("move", move.x, move.y, move.button);
+        } finally {
+          moveInFlight = false;
+          pumpMove();
+        }
+      });
+    }
+
     function onPointerMove(event: PointerEvent) {
       if (!event.buttons) return;
       event.preventDefault();
       const { x, y } = pointerAt(event);
-      enqueueInput(() => sendPointer("move", x, y, event.buttons === 2 ? "right" : "left"));
+      pendingMove = { x, y, button: event.buttons === 2 ? "right" : "left" };
+      pumpMove();
     }
 
     function onPointerUp(event: PointerEvent) {
       event.preventDefault();
       if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
       const { x, y } = pointerAt(event);
-      enqueueInput(() => sendPointer("up", x, y, buttonFor(event)));
+      const button = buttonFor(event);
+      const dragged = pendingMove !== null;
+      pendingMove = null;
+      // The final position has to reach the sandbox before the release; dropped intermediate
+      // moves are fine, a release at a stale position is not.
+      if (dragged) enqueueInput(() => sendPointer("move", x, y, button));
+      enqueueInput(() => sendPointer("up", x, y, button));
     }
 
     function onWheel(event: WheelEvent) {

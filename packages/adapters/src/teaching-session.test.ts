@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   appendRecordingEvent,
+  applyTeachingDesktopInput,
   emptyRecording,
   expireTaughtSkillTeaching,
   recordTeachingInputEvent,
@@ -271,5 +272,64 @@ describe("recordTeachingInputEvent", () => {
     ).resolves.toBe("recorded");
     expect(order).toEqual(["persist", "send"]);
     expect(current().recording.events).toHaveLength(1);
+  });
+});
+
+describe("applyTeachingDesktopInput", () => {
+  const computer = {
+    homeKey: "bot-1",
+    kind: "e2b",
+    providerRef: "box-1",
+    controlLeaseId: "lease-1",
+  };
+
+  it("types printable characters that have no keysym", async () => {
+    const sandbox = { sendInput: vi.fn(), act: vi.fn() };
+    await applyTeachingDesktopInput(
+      sandbox as never,
+      computer,
+      { kind: "key", key: " " },
+      {} as never,
+    );
+    expect(sandbox.sendInput).toHaveBeenCalledWith(
+      expect.anything(),
+      { kind: "clipboard", text: " " },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("sends browser key names as X11 keysyms", async () => {
+    const sandbox = { sendInput: vi.fn(), act: vi.fn() };
+    await applyTeachingDesktopInput(
+      sandbox as never,
+      computer,
+      { kind: "key", key: "ArrowLeft" },
+      {} as never,
+    );
+    expect(sandbox.sendInput).toHaveBeenCalledWith(
+      expect.anything(),
+      { kind: "key", key: "Left" },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("leaves pointer input untouched", async () => {
+    const sandbox = { sendInput: vi.fn(), act: vi.fn() };
+    const pointer = {
+      kind: "pointer" as const,
+      x: 5,
+      y: 6,
+      button: "left" as const,
+      type: "click" as const,
+    };
+    await applyTeachingDesktopInput(sandbox as never, computer, pointer, {} as never);
+    expect(sandbox.sendInput).toHaveBeenCalledWith(
+      expect.anything(),
+      pointer,
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

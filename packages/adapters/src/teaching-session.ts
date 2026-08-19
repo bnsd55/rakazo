@@ -9,6 +9,7 @@ import { computerControlExpireJobKey, skillTeachingExpireJobKey } from "@rakazo/
 import type { Actor, MessageBlock, TaughtSkill } from "@rakazo/contracts";
 import {
   buildPlaybookFromRecording,
+  computerInputForDomKey,
   type SkillPlaybook,
   type TeachRecordingEvent,
   type TeachSnapshot,
@@ -502,7 +503,11 @@ export async function applyTeachingDesktopInput(
     );
     return;
   }
-  await sandbox.sendInput(toComputerRef(computer), mapped, lease, context);
+  const input: ComputerInput =
+    mapped.kind === "key" && mapped.key && !mapped.modifiers?.length
+      ? computerInputForDomKey(mapped.key)
+      : mapped;
+  await sandbox.sendInput(toComputerRef(computer), input, lease, context);
 }
 
 export async function recordTeachingInputEvent(

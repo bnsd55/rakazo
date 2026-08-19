@@ -28,6 +28,34 @@ export function teachCaptureKey(
   return SPECIAL_TEACH_KEYS.has(key) ? key : null;
 }
 
+// Browser key names are not X11 keysyms. Anything sent as a `key` input ends up in
+// `xdotool key <name>` (or the e2b equivalent), which silently drops names it cannot resolve.
+const X11_KEYSYM_BY_DOM_KEY: Record<string, string> = {
+  Enter: "Return",
+  Backspace: "BackSpace",
+  Escape: "Escape",
+  Tab: "Tab",
+  Delete: "Delete",
+  Home: "Home",
+  End: "End",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+};
+
+/**
+ * Turns a captured browser key into an input the sandbox can actually apply. Printable
+ * characters (including spaces and punctuation) have no keysym of their own, so they are
+ * typed as text instead of pressed as a key.
+ */
+export function computerInputForDomKey(
+  key: string,
+): { kind: "clipboard"; text: string } | { kind: "key"; key: string } {
+  if (key.length === 1) return { kind: "clipboard", text: key };
+  return { kind: "key", key: X11_KEYSYM_BY_DOM_KEY[key] ?? key };
+}
+
 export const DEFAULT_COMPUTER_SCREEN = { width: 1280, height: 800 } as const;
 export const BOX_COMPUTER_SCREEN = { width: 1920, height: 1080 } as const;
 
@@ -38,6 +66,15 @@ export function computerScreenSize(kind: string | null | undefined): {
   return kind === "box" ? BOX_COMPUTER_SCREEN : DEFAULT_COMPUTER_SCREEN;
 }
 
+function clamp(value: number, max: number): number {
+  return Math.min(Math.max(value, 0), max);
+}
+
+/**
+ * The embedded viewer scales the remote framebuffer to fit while preserving its aspect ratio
+ * and centres it, so the visible screen is letterboxed inside the container. Map through that
+ * letterbox instead of stretching across the whole container rect.
+ */
 export function mapTeachPointer(
   clientX: number,
   clientY: number,
@@ -46,8 +83,11 @@ export function mapTeachPointer(
 ): { x: number; y: number } {
   const width = rect.width || 1;
   const height = rect.height || 1;
+  const scale = Math.min(width / screen.width, height / screen.height) || 1;
+  const offsetX = (width - screen.width * scale) / 2;
+  const offsetY = (height - screen.height * scale) / 2;
   return {
-    x: Math.round(((clientX - rect.left) / width) * screen.width),
-    y: Math.round(((clientY - rect.top) / height) * screen.height),
+    x: clamp(Math.round((clientX - rect.left - offsetX) / scale), screen.width - 1),
+    y: clamp(Math.round((clientY - rect.top - offsetY) / scale), screen.height - 1),
   };
 }

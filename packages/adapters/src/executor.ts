@@ -25,6 +25,7 @@ import {
   isTerminal,
   nextCronDate,
   nextFence,
+  promptInvokesSkill,
   redactSecrets,
   sandboxCommandTimeoutMs,
   userTurnBlocksForRun,
@@ -798,12 +799,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 )}\nWhen the user asks to run a taught skill by name, follow that skill's playbook exactly. The full playbook is included in the user task when they invoke it.`
             : undefined;
         const taskPrompt = [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n");
-        const invokedSkill = taskPrompt.toLowerCase().startsWith("run taught skill:")
-          ? null
-          : savedSkills.find((skill) => {
-              const name = (skill.name || skill.goal).trim().toLowerCase();
-              return name.length >= 3 && taskPrompt.toLowerCase().includes(name);
-            });
+        const invokedSkill = savedSkills.find((skill) =>
+          promptInvokesSkill(taskPrompt, skill.name || skill.goal),
+        );
         const prompt = invokedSkill
           ? `${formatSkillRunPrompt(
               invokedSkill.name || invokedSkill.goal.slice(0, 80),
