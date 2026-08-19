@@ -1753,8 +1753,9 @@ const Composer = memo(function Composer({
         <button
           type="button"
           aria-label="Attach file"
+          disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
-          className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[18px] text-[#9A9AA0]"
+          className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[18px] text-[#9A9AA0] disabled:opacity-40"
         >
           +
         </button>
