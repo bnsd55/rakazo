@@ -315,6 +315,7 @@ describe("answerRunInput", () => {
   it("approves consequential actions without overwriting the task prompt", async () => {
     const fanout = new TestFanout();
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
       message: {
         findFirst: vi.fn().mockResolvedValue({
           id: "message-1",
@@ -333,7 +334,10 @@ describe("answerRunInput", () => {
         }),
         update: vi.fn().mockResolvedValue({ id: "message-1" }),
       },
-      run: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      run: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockResolvedValue({ status: "queued" }),
+      },
       task: { updateMany: vi.fn() },
       externalEffect: {
         findFirst: vi.fn().mockResolvedValue({ id: "effect-1", status: "intended" }),
@@ -384,6 +388,7 @@ describe("answerRunInput", () => {
   it("approves and upserts always-allow without overwriting the task prompt", async () => {
     const fanout = new TestFanout();
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
       message: {
         findFirst: vi.fn().mockResolvedValue({
           id: "message-1",
@@ -472,6 +477,7 @@ describe("answerRunInput", () => {
 
   it("does not queue a run when an approval card has no matching effect", async () => {
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
       message: {
         findFirst: vi.fn().mockResolvedValue({
           id: "message-1",
@@ -511,6 +517,7 @@ describe("answerRunInput", () => {
 
   it("does not queue a run for an action that the approval card did not offer", async () => {
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
       message: {
         findFirst: vi.fn().mockResolvedValue({
           id: "message-1",

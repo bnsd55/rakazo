@@ -243,7 +243,7 @@ describe("mobile thread event reduction", () => {
 
   it("clears loaded history and active state when another client clears the thread", () => {
     const initial = snapshot([mobileMessage("message-1", [{ kind: "text", text: "old" }])], 1);
-    initial.run = { status: "running" };
+    initial.run = { id: "run-1", status: "running" };
 
     const next = applyMobileThreadEvent(initial, { type: "thread.cleared", seq: 12 });
 
