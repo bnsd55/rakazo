@@ -61,11 +61,12 @@ export default function Thread() {
   useLayoutEffect(() => {
     navigation.setOptions({
       title: name || "Thread",
-      headerRight: () => (
-        <Pressable accessibilityLabel="Bot actions" hitSlop={8} onPress={showBotActions}>
-          <NativeSymbol ios="ellipsis" android="ellipsis-horizontal" size={21} color="#ECECEE" />
-        </Pressable>
-      ),
+      headerRight: () =>
+        inGroup ? null : (
+          <Pressable accessibilityLabel="Bot actions" hitSlop={8} onPress={showBotActions}>
+            <NativeSymbol ios="ellipsis" android="ellipsis-horizontal" size={21} color="#ECECEE" />
+          </Pressable>
+        ),
     });
   }, [botId, name, navigation]);
 
