@@ -918,10 +918,19 @@ export function createRouter(deps: RouterDeps) {
                 };
         const recorded = await taughtSkills.recordInput(context.actor, bot.id, mapped);
         if (!recorded) return { ok: true as const };
+        const latest = await deps.prisma.computer.findUnique({ where: { id: computer.id } });
+        if (
+          !latest ||
+          !hasActiveComputerControl(latest) ||
+          latest.controlBotId !== bot.id ||
+          !latest.providerRef
+        ) {
+          return { ok: true as const };
+        }
         await deps.sandbox.sendInput(
-          toComputerRef(computer),
+          toComputerRef(latest),
           mapped,
-          { leaseId: computer.controlLeaseId ?? "lease", holder: "user", fence: 0 },
+          { leaseId: latest.controlLeaseId ?? "lease", holder: "user", fence: 0 },
           computerContext(context.actor, bot.id, "input"),
         );
         await deps.prisma.computer.updateMany({

@@ -12,8 +12,9 @@ import {
   type TeachSnapshot,
 } from "@rakazo/core";
 import {
-  createThreadMessage,
+  createThreadMessageInTransaction,
   IsolationError,
+  type Prisma,
   type PrismaClient,
   type ThreadEvents,
 } from "@rakazo/db";
@@ -287,11 +288,11 @@ async function releaseTeachingComputerControl(
 }
 
 async function hasSkillDraftMessage(
-  deps: TeachingSessionDeps,
+  prisma: { message: { findMany: PrismaClient["message"]["findMany"] } },
   threadId: string,
   skillId: string,
 ): Promise<boolean> {
-  const messages = await deps.prisma.message.findMany({
+  const messages = await prisma.message.findMany({
     where: { threadId, role: "bot" },
     orderBy: { seq: "desc" },
     take: 100,
@@ -313,33 +314,39 @@ async function emitSkillDraftMessages(
   bot: { id: string; thread: { id: string } | null },
 ): Promise<void> {
   if (skill.status !== "draft" || !bot.thread) return;
-  if (await hasSkillDraftMessage(deps, bot.thread.id, skill.id)) return;
-  const playbook = parsePlaybook(skill.playbook);
-  const blocks: MessageBlock[] = [
-    {
-      kind: "skill_draft",
-      skillId: skill.id,
-      name: skill.name || skill.goal.slice(0, 80),
-      goal: skill.goal,
-      playbook,
-      status: "draft",
-    },
-  ];
-  const message = await createThreadMessage(deps.prisma, {
-    threadId: bot.thread.id,
-    role: "bot",
-    blocks,
+  const threadId = bot.thread.id;
+  const created = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
+    if (await hasSkillDraftMessage(tx, threadId, skill.id)) return null;
+    const playbook = parsePlaybook(skill.playbook);
+    const blocks: MessageBlock[] = [
+      {
+        kind: "skill_draft",
+        skillId: skill.id,
+        name: skill.name || skill.goal.slice(0, 80),
+        goal: skill.goal,
+        playbook,
+        status: "draft",
+      },
+    ];
+    const message = await createThreadMessageInTransaction(tx, {
+      threadId,
+      role: "bot",
+      blocks,
+    });
+    return { message, blocks };
   });
+  if (!created) return;
   await deps.events.append({
     workspaceId: actor.workspaceId,
-    threadId: bot.thread.id,
+    threadId,
     botId: bot.id,
     type: "thread.message.created",
-    payload: { messageId: message.id, role: "bot", blocks },
+    payload: { messageId: created.message.id, role: "bot", blocks: created.blocks },
   });
   await deps.events.append({
     workspaceId: actor.workspaceId,
-    threadId: bot.thread.id,
+    threadId,
     botId: bot.id,
     type: "skill.draft.created",
     payload: { skillId: skill.id, name: skill.name || skill.goal.slice(0, 80) },
@@ -363,6 +370,7 @@ export async function completeTeachingSession(
     include: { thread: true, computer: true },
   });
   if (!bot) throw new IsolationError();
+  await releaseTeachingComputerControlForBot(deps, actor, bot.id);
   if (finalized.status === "draft") {
     await emitSkillDraftMessages(deps, actor, finalized, bot);
   }
@@ -375,7 +383,6 @@ export async function completeTeachingSession(
       payload: { skillId: finalized.id, reason },
     });
   }
-  await releaseTeachingComputerControlForBot(deps, actor, bot.id);
   return finalized;
 }
 

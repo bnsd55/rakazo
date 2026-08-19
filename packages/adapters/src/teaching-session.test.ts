@@ -42,6 +42,11 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
         return current;
       }),
     },
+    message: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([{ blocks: [{ kind: "skill_draft", skillId: "skill-1" }] }]),
+    },
   };
   return {
     current: () => current,
