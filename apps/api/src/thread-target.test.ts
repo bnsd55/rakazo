@@ -10,9 +10,14 @@ function fanoutRunClientNonce(
   return multiTarget ? `${clientNonce}:${botId}` : clientNonce;
 }
 
-function sendNonceKeys(clientNonce: string, targetBotIds: string[]): string[] {
-  if (targetBotIds.length <= 1) return [clientNonce];
-  return targetBotIds.map((botId) => `${clientNonce}:${botId}`);
+function sendNonceKeys(clientNonce: string, memberBotIds?: string[]): string[] {
+  const keys = new Set<string>([clientNonce]);
+  if (memberBotIds) {
+    for (const botId of memberBotIds) {
+      keys.add(`${clientNonce}:${botId}`);
+    }
+  }
+  return [...keys];
 }
 
 describe("fanoutRunClientNonce", () => {
@@ -27,12 +32,16 @@ describe("fanoutRunClientNonce", () => {
 });
 
 describe("sendNonceKeys", () => {
-  it("uses the raw nonce for a single target", () => {
-    expect(sendNonceKeys("nonce-1", ["bot-a"])).toEqual(["nonce-1"]);
+  it("uses only the raw nonce for a 1:1 bot send", () => {
+    expect(sendNonceKeys("nonce-1")).toEqual(["nonce-1"]);
   });
 
-  it("derives exact per-bot keys for multi-target fan-out", () => {
-    expect(sendNonceKeys("nonce-1", ["bot-a", "bot-b"])).toEqual(["nonce-1:bot-a", "nonce-1:bot-b"]);
+  it("includes raw nonce and every member key for group threads", () => {
+    expect(sendNonceKeys("nonce-1", ["bot-a", "bot-b"])).toEqual([
+      "nonce-1",
+      "nonce-1:bot-a",
+      "nonce-1:bot-b",
+    ]);
   });
 });
 

@@ -61,6 +61,7 @@ import {
 import {
   createGroupRepos,
   createRepos,
+  createThreadMessage,
   findDefaultModelCredential,
   IsolationError,
   newestModelCredentialOrder,

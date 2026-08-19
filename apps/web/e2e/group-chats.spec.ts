@@ -1,5 +1,16 @@
 import { expect, test } from "@playwright/test";
-import { completeOnboarding, signup } from "./helpers";
+import { completeOnboarding, openNewBot, signup } from "./helpers";
+
+async function createBot(page: import("@playwright/test").Page, name: string) {
+  const botList = page.locator("aside").first();
+  await openNewBot(page);
+  await expect(page.getByText("New bot", { exact: true })).toBeVisible();
+  await page.locator("label:has-text('Name') input").fill(name);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(botList.getByRole("button", { name: new RegExp(`^${name}`) })).toBeVisible();
+  await expect(page.getByPlaceholder(`Message ${name}`)).toBeVisible();
+  await page.waitForURL(/\/app\/[^/]+$/);
+}
 
 test("create group from + and see two bots in one transcript", async ({ page }) => {
   const stamp = Date.now();
@@ -8,17 +19,8 @@ test("create group from + and see two bots in one transcript", async ({ page }) 
   await page.goto("/app");
   await page.waitForURL(/\/app\/[^/]+$/);
 
-  await page.getByTitle("Create").click();
-  await page.getByRole("button", { name: "New bot" }).click();
-  await page.locator("label:has-text('Name') input").fill("Researcher");
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await page.waitForURL(/\/app\/[^/]+$/);
-
-  await page.getByTitle("Create").click();
-  await page.getByRole("button", { name: "New bot" }).click();
-  await page.locator("label:has-text('Name') input").fill("Writer");
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await page.waitForURL(/\/app\/[^/]+$/);
+  await createBot(page, "Researcher");
+  await createBot(page, "Writer");
 
   await page.getByTitle("Create").click();
   await page.getByRole("button", { name: "New group" }).click();
