@@ -14,6 +14,8 @@ Rakazo is in beta. Learn more at [rakazo.com](https://rakazo.com).
 ## Features
 
 - Persistent bots with their own conversations, memory, routines, and history
+- Chat attachments, artifacts, and workspace search
+- Approval prompts (allow once, always allow, or deny) for consequential actions
 - Shared Team Computers and isolated Private computers
 - Browser, terminal, file, and graphical desktop access
 - Bots that can delegate to peer bots or short-lived subagents
@@ -95,10 +97,21 @@ Common checks:
 ```bash
 pnpm lint
 pnpm check
-pnpm test
-pnpm test:integration
-pnpm test:e2e
+pnpm test              # unit, property, and in-process contract tests
+pnpm test:integration  # Postgres journeys, Graphile jobs, LISTEN/NOTIFY
+pnpm test:e2e          # Playwright against the emulated stack
+pnpm test:e2e -- --sandbox=e2b # the same deterministic suite against real E2B
+pnpm test:e2e -- --sandbox=daytona # the same suite against real Daytona
+pnpm test:e2e -- --sandbox=box # the same suite against real Box
+pnpm test:topology     # local Docker + Graphile worker recovery (needs Docker)
+pnpm test:canary       # live OpenRouter / E2B / Box canaries
+# explicit real vision-model + real E2B desktop acceptance test:
+COMPUTER_E2E_MODEL=<vision-capable-openrouter-model-id> pnpm test:computer
 ```
+
+The Playwright workflow can also be started manually with **Sandbox provider** set to `e2b`, `daytona`, or `box`.
+Those options require `E2B_API_KEY`, `DAYTONA_API_KEY`, or `BOX_API_KEY`, keep the deterministic scripted agent runtime, and destroy
+the provider machines after the run. The default and all automatic runs remain on `fake`.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and test matrix.
 
