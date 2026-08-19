@@ -215,6 +215,7 @@ export const appContract = {
           }),
       )
       .output(z.object({ ok: z.literal(true) })),
+    clear: oc.input(botId).output(z.object({ ok: z.literal(true) })),
     answer: oc
       .input(
         z

@@ -36,6 +36,41 @@ export type ThreadTarget =
     };
 
 const THREAD_MESSAGE_PAGE_SIZE = 100;
+const RUNS_NEEDING_CONTINUE = new Set(["queued", "waiting_input"]);
+
+function fanoutRunClientNonce(
+  clientNonce: string | undefined,
+  botId: string,
+  multiTarget: boolean,
+): string | undefined {
+  if (!clientNonce) return undefined;
+  return multiTarget ? `${clientNonce}:${botId}` : clientNonce;
+}
+
+async function findRunsForSendNonce(
+  prisma: PrismaClient,
+  workspaceId: string,
+  clientNonce: string,
+) {
+  return prisma.run.findMany({
+    where: {
+      workspaceId,
+      OR: [{ clientNonce }, { clientNonce: { startsWith: `${clientNonce}:` } }],
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+async function enqueueRunsNeedingContinue(
+  jobs: JobPublisher,
+  runs: Array<{ id: string; status: string }>,
+) {
+  for (const run of runs) {
+    if (RUNS_NEEDING_CONTINUE.has(run.status)) {
+      await jobs.enqueue(runContinueJob(run.id));
+    }
+  }
+}
 
 export async function resolveThreadTarget(
   prisma: PrismaClient,
@@ -218,11 +253,13 @@ export async function sendThreadMessage(
   },
 ) {
   if (input.clientNonce) {
-    const existingRuns = await deps.prisma.run.findMany({
-      where: { workspaceId: actor.workspaceId, clientNonce: input.clientNonce },
-      orderBy: { createdAt: "asc" },
-    });
+    const existingRuns = await findRunsForSendNonce(
+      deps.prisma,
+      actor.workspaceId,
+      input.clientNonce,
+    );
     if (existingRuns.length > 0) {
+      await enqueueRunsNeedingContinue(deps.jobs, existingRuns);
       const linked = await deps.prisma.message.findFirst({
         where: { runId: { in: existingRuns.map((run) => run.id) } },
         select: { seq: true },
@@ -331,6 +368,7 @@ export async function sendThreadMessage(
     const runIds: string[] = [];
     let firstTaskId = "";
     let firstRunId = "";
+    const multiTarget = targetBotIds.length > 1;
     for (const botId of targetBotIds) {
       const task = await tx.task.create({
         data: {
@@ -351,7 +389,7 @@ export async function sendThreadMessage(
           userId: actor.userId,
           status: "queued",
           trigger: "user",
-          clientNonce: input.clientNonce,
+          clientNonce: fanoutRunClientNonce(input.clientNonce, botId, multiTarget),
         },
       });
       if (!firstTaskId) {

@@ -1,6 +1,6 @@
 import { Stack, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput } from "react-native";
 import { BotAvatar } from "../components/bot-avatar";
 import { type MobileBot, rpc } from "../lib/api";
 

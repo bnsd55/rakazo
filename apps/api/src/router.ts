@@ -10,6 +10,7 @@ import {
   routineJobKey,
   routineWakeupJob,
   runContinueJob,
+  runJobKey,
   type SandboxProvider,
 } from "@rakazo/adapter-kit";
 import {
@@ -19,11 +20,13 @@ import {
   ComputerBusyError,
   type ComputerExecutionLease,
   checkpointAndRecordComputerWorkspace,
+  deleteSupermemoryContainer,
   destroyBot,
   displayBotWorkspacePath,
   type EncryptedSecretStore,
   expireComputerControl,
   hasActiveComputerControl,
+  isSupermemoryEnabled,
   listPiCatalog,
   type PiOAuthLogins,
   provisionComputer,
@@ -36,6 +39,7 @@ import {
   screenLeaseIdForRun,
   scriptedCatalogEntry,
   serializeModelSecret,
+  supermemoryContainerTag,
   takeoverLeaseMs,
   toComputerRef,
   touchRunningComputer,
@@ -57,7 +61,6 @@ import {
 import {
   createGroupRepos,
   createRepos,
-  createThreadMessage,
   findDefaultModelCredential,
   IsolationError,
   newestModelCredentialOrder,
@@ -66,13 +69,7 @@ import {
   parseComputerMode,
   type ThreadEvents,
 } from "@rakazo/db";
-import {
-  buildSendPrompt,
-  buildUserMessageBlocks,
-  createOwnedArtifact,
-  getOwnedArtifact,
-  resolveSendAttachments,
-} from "./artifacts.js";
+import { createOwnedArtifact, getOwnedArtifact } from "./artifacts.js";
 import { addScreenProxyCapability } from "./screen-proxy.js";
 import { queryWorkspaceSearch } from "./search.js";
 import { withSerializableRetry } from "./serializable-retry.js";
@@ -491,17 +488,47 @@ export function createRouter(deps: RouterDeps) {
         await stopThreadRuns(deps, context.actor, target);
         return { ok: true as const };
       }),
+      clear: authed.threads.clear.handler(async ({ context, input }) => {
+        const bot = await repos.getBot(context.actor, input.botId);
+        if (!bot.thread) throw new IsolationError();
+        const { cancelledRunIds } = await deps.events.clearThread({
+          workspaceId: context.actor.workspaceId,
+          threadId: bot.thread.id,
+          botId: bot.id,
+        });
+        await Promise.all(
+          cancelledRunIds.map((runId) => deps.jobs.cancel(runJobKey(runId)).catch(() => undefined)),
+        );
+        if (isSupermemoryEnabled(process.env.SUPERMEMORY_API_KEY)) {
+          const purged = await deleteSupermemoryContainer(supermemoryContainerTag(bot.id));
+          if (!purged.ok) {
+            console.error("supermemory purge after thread clear failed", purged.error);
+          }
+        }
+        return { ok: true as const };
+      }),
       followUp: authed.threads.followUp.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        if (target.kind === "bot") {
+          const sent = await deps.events.sendUserMessage({
+            workspaceId: context.actor.workspaceId,
+            threadId: target.threadId,
+            botId: target.botId,
+            userId: context.actor.userId,
+            blocks: [{ kind: "text", text: input.text }],
+            prompt: input.text,
+            trigger: "follow_up",
+            onlyIfIdle: true,
+          });
+          if (sent.runId) await deps.jobs.enqueue(runContinueJob(sent.runId));
+          return { ok: true as const };
+        }
         const message = await createThreadMessage(deps.prisma, {
           threadId: target.threadId,
           role: "user",
           blocks: [{ kind: "text", text: input.text }],
         });
-        const eventBotId =
-          target.kind === "bot"
-            ? target.botId
-            : (target.memberBotIds[0] ?? target.members[0]?.botId);
+        const eventBotId = target.memberBotIds[0] ?? target.members[0]?.botId;
         if (!eventBotId) throw new IsolationError();
         await deps.events.append({
           workspaceId: context.actor.workspaceId,
@@ -521,7 +548,7 @@ export function createRouter(deps: RouterDeps) {
           },
         });
         if (active) return { ok: true as const };
-        const botId = target.kind === "bot" ? target.botId : target.memberBotIds[0];
+        const botId = target.memberBotIds[0];
         if (!botId) throw new IsolationError();
         const task = await deps.prisma.task.create({
           data: {
@@ -1868,7 +1895,12 @@ function duplicateBotName(name: string) {
   return `${name.slice(0, 75)} copy`;
 }
 
-async function setThreadUnread(prisma: PrismaClient, actor: Actor, botId: string, unread: boolean) {
+async function _setThreadUnread(
+  prisma: PrismaClient,
+  actor: Actor,
+  botId: string,
+  unread: boolean,
+) {
   const result = await prisma.thread.updateMany({
     where: { botId, workspaceId: actor.workspaceId, userId: actor.userId },
     data: { unread },
