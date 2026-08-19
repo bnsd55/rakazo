@@ -12,9 +12,12 @@ import {
   ConnectionCatalogItemSchema,
   ConnectionSchema,
   CreateBotInput,
+  CreateGroupInput,
   CreateRoutineInput,
   DeploymentSettingsSchema,
   ExportManifestSchema,
+  GroupDetailSchema,
+  GroupSchema,
   MemoryDocumentSchema,
   MeSchema,
   ModelCatalogEntrySchema,
@@ -23,6 +26,7 @@ import {
   ThreadMessagePageSchema,
   ThreadSnapshotSchema,
   UpdateBotInput,
+  UpdateGroupInput,
   UsageRecordSchema,
 } from "./domain.js";
 import { ProductEventSchema } from "./events.js";
@@ -30,6 +34,55 @@ import { Id } from "./ids.js";
 import { SearchQueryOutputSchema } from "./search.js";
 
 const botId = z.object({ botId: Id });
+const groupId = z.object({ groupId: Id });
+
+const threadTarget = z
+  .object({
+    botId: Id.optional(),
+    groupId: Id.optional(),
+  })
+  .superRefine((input, ctx) => {
+    const hasBot = Boolean(input.botId);
+    const hasGroup = Boolean(input.groupId);
+    if (hasBot === hasGroup) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Provide exactly one of botId or groupId",
+        path: ["botId"],
+      });
+    }
+  });
+
+const threadSendInput = z
+  .object({
+    botId: Id.optional(),
+    groupId: Id.optional(),
+    text: z.string().optional(),
+    artifactIds: z.array(Id).max(ATTACHMENT_MAX_COUNT).optional(),
+    mentions: z.array(Id).optional(),
+    replyToMessageId: Id.optional(),
+    clientNonce: z.string().optional(),
+  })
+  .superRefine((input, ctx) => {
+    const hasBot = Boolean(input.botId);
+    const hasGroup = Boolean(input.groupId);
+    if (hasBot === hasGroup) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Provide exactly one of botId or groupId",
+        path: ["botId"],
+      });
+    }
+    const text = input.text?.trim() ?? "";
+    const artifactIds = input.artifactIds ?? [];
+    if (!text && artifactIds.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Provide text or at least one attachment",
+        path: ["text"],
+      });
+    }
+  });
 
 export const appContract = {
   health: oc.output(z.object({ ok: z.literal(true), version: z.string() })),
@@ -107,12 +160,18 @@ export const appContract = {
       .input(z.object({ botId: Id, deleteMemories: z.boolean().default(false) }))
       .output(z.object({ ok: z.literal(true) })),
   },
+  groups: {
+    create: oc.input(CreateGroupInput).output(GroupSchema),
+    list: oc.output(z.array(GroupSchema)),
+    get: oc.input(groupId).output(GroupDetailSchema),
+    update: oc.input(UpdateGroupInput).output(GroupSchema),
+    remove: oc.input(groupId).output(z.object({ ok: z.literal(true) })),
+  },
   threads: {
-    get: oc.input(z.object({ botId: Id })).output(ThreadSnapshotSchema),
+    get: oc.input(threadTarget).output(ThreadSnapshotSchema),
     messages: oc
       .input(
-        z.object({
-          botId: Id,
+        threadTarget.extend({
           before: z.number().int().nonnegative().optional(),
           around: z
             .object({
@@ -124,39 +183,61 @@ export const appContract = {
       )
       .output(ThreadMessagePageSchema),
     subscribe: oc
-      .input(z.object({ botId: Id, cursor: z.number().int().min(-1) }))
+      .input(threadTarget.extend({ cursor: z.number().int().min(-1) }))
       .output(eventIterator(ProductEventSchema)),
     send: oc
-      .input(
-        z
-          .object({
-            botId: Id,
-            text: z.string().optional(),
-            artifactIds: z.array(Id).max(ATTACHMENT_MAX_COUNT).optional(),
-            clientNonce: z.string().optional(),
-          })
-          .superRefine((input, ctx) => {
-            const text = input.text?.trim() ?? "";
-            const artifactIds = input.artifactIds ?? [];
-            if (!text && artifactIds.length === 0) {
-              ctx.addIssue({
-                code: "custom",
-                message: "Provide text or at least one attachment",
-                path: ["text"],
-              });
-            }
-          }),
-      )
-      .output(z.object({ taskId: Id, runId: Id, seq: z.number().int() })),
-    stop: oc.input(botId).output(z.object({ ok: z.literal(true) })),
+      .input(threadSendInput)
+      .output(
+        z.object({
+          taskId: Id,
+          runId: Id,
+          seq: z.number().int(),
+          runIds: z.array(Id).optional(),
+        }),
+      ),
+    stop: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
     followUp: oc
-      .input(z.object({ botId: Id, text: z.string().min(1) }))
+      .input(
+        z.object({
+          botId: Id.optional(),
+          groupId: Id.optional(),
+          text: z.string().min(1),
+        }).superRefine((input, ctx) => {
+          const hasBot = Boolean(input.botId);
+          const hasGroup = Boolean(input.groupId);
+          if (hasBot === hasGroup) {
+            ctx.addIssue({
+              code: "custom",
+              message: "Provide exactly one of botId or groupId",
+              path: ["botId"],
+            });
+          }
+        }),
+      )
       .output(z.object({ ok: z.literal(true) })),
     answer: oc
-      .input(z.object({ botId: Id, runId: Id, messageId: Id, answer: z.string().min(1) }))
+      .input(
+        z.object({
+          botId: Id.optional(),
+          groupId: Id.optional(),
+          runId: Id,
+          messageId: Id,
+          answer: z.string().min(1),
+        }).superRefine((input, ctx) => {
+          const hasBot = Boolean(input.botId);
+          const hasGroup = Boolean(input.groupId);
+          if (hasBot === hasGroup) {
+            ctx.addIssue({
+              code: "custom",
+              message: "Provide exactly one of botId or groupId",
+              path: ["botId"],
+            });
+          }
+        }),
+      )
       .output(z.object({ ok: z.literal(true) })),
-    markRead: oc.input(botId).output(z.object({ ok: z.literal(true) })),
-    markUnread: oc.input(botId).output(z.object({ ok: z.literal(true) })),
+    markRead: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
+    markUnread: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
   },
   computer: {
     status: oc.input(botId).output(ComputerStatusSchema),

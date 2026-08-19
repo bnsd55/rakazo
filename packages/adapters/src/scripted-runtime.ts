@@ -219,6 +219,31 @@ export function inferScript(
       },
     ];
   }
+  if (
+    lower.includes("hand this to") ||
+    lower.includes("hand off to") ||
+    lower.includes("handoff to") ||
+    (lower.includes("@writer") && lower.includes("draft"))
+  ) {
+    const target = /(?:hand(?:\s+this|\s+off)?\s+to|@)\s*([A-Za-z0-9][A-Za-z0-9_-]{0,39})/i.exec(
+      prompt,
+    )?.[1];
+    return [
+      {
+        assistant: "handing this off in the group thread.",
+        toolCalls: [
+          {
+            name: "handoff_to_bot",
+            args: {
+              confirm_name: target ?? "Writer",
+              message: prompt,
+            },
+          },
+        ],
+        complete: true,
+      },
+    ];
+  }
   if (lower.includes("connector") || lower.includes("crm") || lower.includes("destination")) {
     return [
       {

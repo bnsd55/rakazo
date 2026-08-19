@@ -3,6 +3,7 @@ import type {
   Bot,
   ComputerMode,
   ComputerStatus,
+  Group,
   Me,
   ProductEvent,
   Routine,
@@ -41,6 +42,7 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { CreateGroupForm, GroupSettings, memberName } from "./GroupPanel";
 import { decodeArtifactBase64, openArtifact } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
@@ -72,7 +74,7 @@ const RoutineSchedule = lazy(() =>
   import("./RoutineSchedule").then((module) => ({ default: module.RoutineSchedule })),
 );
 
-type Panel = "computer" | "settings" | "routine" | "create" | null;
+type Panel = "computer" | "settings" | "routine" | "create" | "create-group" | "group-settings" | null;
 
 type PendingAttachment = {
   id: string;
@@ -84,11 +86,12 @@ type PendingAttachment = {
 const ATTACHMENT_ACCEPT = ATTACHMENT_ALLOWED_MIME_TYPES.join(",");
 
 export function ShellPage() {
-  const { botId } = useParams();
+  const { botId, groupId } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const session = authClient.useSession();
   const [bots, setBots] = useState<Bot[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [archivedBots, setArchivedBots] = useState<Bot[]>([]);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -107,6 +110,7 @@ export function ShellPage() {
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [botMenu, setBotMenu] = useState<{
     botId: string;
     position: ContextMenuPosition;
@@ -151,15 +155,21 @@ export function ShellPage() {
   computerVisible.current = panel === "computer" || computerOpen;
 
   const active = bots.find((b) => b.id === botId) ?? bots[0];
+  const activeGroup = groups.find((group) => group.id === groupId);
+  const inGroup = Boolean(groupId);
   const activePendingAttachments = useMemo(
-    () => attachmentsForBot(pendingAttachments, active?.id),
-    [active?.id, pendingAttachments],
+    () => attachmentsForBot(pendingAttachments, inGroup ? groupId : active?.id),
+    [active?.id, groupId, inGroup, pendingAttachments],
   );
-  const activeRoutines = routinesBotId === active?.id ? routines : [];
+  const activeRoutines = !inGroup && routinesBotId === active?.id ? routines : [];
   const routeBotId = useRef<string | undefined>(botId);
   routeBotId.current = botId;
-  const activeBotId = useRef<string | undefined>(active?.id);
-  activeBotId.current = active?.id;
+  const routeGroupId = useRef<string | undefined>(groupId);
+  routeGroupId.current = groupId;
+  const activeBotId = useRef<string | undefined>(inGroup ? undefined : active?.id);
+  activeBotId.current = inGroup ? undefined : active?.id;
+  const activeGroupId = useRef<string | undefined>(groupId);
+  activeGroupId.current = groupId;
   const screenRequest = useRef(0);
   const contextBot = botMenu ? bots.find((bot) => bot.id === botMenu.botId) : undefined;
   const closeBotMenu = useCallback(() => setBotMenu(null), []);
@@ -207,22 +217,57 @@ export function ShellPage() {
 
   async function refreshBots(includeArchived = false) {
     markOnce("rk:renderer:bots-request-start");
-    const [list, archived] = await Promise.all([
+    const [list, archived, groupList] = await Promise.all([
       rpc.bots.list(),
       includeArchived ? rpc.bots.listArchived() : Promise.resolve(null),
+      rpc.groups.list(),
     ]);
     markOnce("rk:renderer:bots-response");
     setBots(list);
+    setGroups(groupList);
     setInitialBotsLoaded(true);
     if (archived) setArchivedBots(archived);
-    if (includeArchived && list.length === 0 && archived?.length === 0) {
+    if (includeArchived && list.length === 0 && archived?.length === 0 && groupList.length === 0) {
       navigate("/onboarding", { replace: true });
+      return;
+    }
+    const currentGroupId = routeGroupId.current;
+    if (currentGroupId) {
+      if (!groupList.some((group) => group.id === currentGroupId)) {
+        navigate(list[0] ? `/app/${list[0].id}` : groupList[0] ? `/app/g/${groupList[0].id}` : "/app", {
+          replace: true,
+        });
+      }
       return;
     }
     const currentBotId = routeBotId.current;
     if (!currentBotId || !list.some((bot) => bot.id === currentBotId)) {
-      navigate(list[0] ? `/app/${list[0].id}` : "/app", { replace: true });
+      navigate(list[0] ? `/app/${list[0].id}` : groupList[0] ? `/app/g/${groupList[0].id}` : "/app", {
+        replace: true,
+      });
     }
+  }
+
+  async function refreshGroupThread(id: string) {
+    const scrollElement = messageScroll.current;
+    const stickToEnd =
+      !scrollElement ||
+      scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80;
+    markOnce("rk:renderer:thread-request-start");
+    const snap = await rpc.threads.get({ groupId: id });
+    markOnce("rk:renderer:thread-response");
+    if (activeGroupId.current !== id) return snap;
+    setSnapshot((prev) => mergeThreadSnapshot(prev, snap, expandedHistoryThread.current === snap.threadId));
+    setComputer(null);
+    setRoutines([]);
+    setRoutinesBotId(null);
+    if (stickToEnd) {
+      window.requestAnimationFrame(() => {
+        const element = messageScroll.current;
+        if (element) element.scrollTop = element.scrollHeight;
+      });
+    }
+    return snap;
   }
 
   async function refreshThread(id: string) {
@@ -251,7 +296,7 @@ export function ShellPage() {
       }
       return merged;
     });
-    setComputer(snap.computer);
+    setComputer(snap.computer ?? null);
     setRoutines(routines);
     setRoutinesBotId(id);
     if (!keepPin && stickToEnd) {
@@ -311,9 +356,9 @@ export function ShellPage() {
         if (bootstrap.thread) {
           bootstrappedThread.current = bootstrap.thread;
           setSnapshot(bootstrap.thread);
-          setComputer(bootstrap.thread.computer);
+          setComputer(bootstrap.thread.computer ?? null);
           setRoutines(bootstrap.routines);
-          setRoutinesBotId(bootstrap.thread.botId);
+          setRoutinesBotId(bootstrap.thread.botId ?? null);
           markOnce("rk:renderer:bots-response");
           markOnce("rk:renderer:thread-response");
         }
@@ -429,6 +474,60 @@ export function ShellPage() {
     };
   }, [active?.id, markBotReadIfVisible, searchParams]);
 
+  useEffect(() => {
+    if (!groupId || !activeGroup) return;
+    manuallyUnread.current.delete(activeGroup.id);
+    const markVisibleGroupRead = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        void rpc.threads.markRead({ groupId }).then(() => {
+          setGroups((current) =>
+            current.map((group) =>
+              group.id === groupId ? { ...group, unread: false } : group,
+            ),
+          );
+        });
+      }
+    };
+    markVisibleGroupRead();
+    window.addEventListener("focus", markVisibleGroupRead);
+    document.addEventListener("visibilitychange", markVisibleGroupRead);
+    pinnedAroundRef.current = null;
+    const abort = new AbortController();
+    void (async () => {
+      const snap = await refreshGroupThread(groupId).catch(() => null);
+      if (abort.signal.aborted) return;
+      let cursor = snap?.cursor ?? -1;
+      let retryMs = 250;
+      while (!abort.signal.aborted) {
+        try {
+          const events = await rpc.threads.subscribe(
+            { groupId, cursor },
+            { signal: abort.signal },
+          );
+          for await (const event of events) {
+            if (abort.signal.aborted) break;
+            cursor = Math.max(cursor, event.seq);
+            retryMs = 250;
+            applyThreadEvent(event, setSnapshot, setComputer);
+            if (event.type === "thread.message.created" && event.payload.role === "bot") {
+              markVisibleGroupRead();
+            }
+            if (event.type === "run.completed") {
+              void refreshGroupThread(groupId).catch(() => undefined);
+            }
+          }
+        } catch {
+          // reconnect safely
+        }
+        if (abort.signal.aborted) break;
+        await refreshGroupThread(groupId).catch(() => null);
+        await abortableDelay(retryMs, abort.signal);
+        retryMs = Math.min(retryMs * 2, 5_000);
+      }
+    })();
+    return () => abort.abort();
+  }, [activeGroup?.id, groupId]);
+
   const filtered = useMemo(
     () => bots.filter((b) => `${b.name} ${b.preview}`.toLowerCase().includes(query.toLowerCase())),
     [bots, query],
@@ -493,7 +592,7 @@ export function ShellPage() {
       messages: page.messages,
       olderCursor: page.olderCursor,
     });
-    setComputer(snap.computer);
+    setComputer(snap.computer ?? null);
     setRoutines(await rpc.routines.list({ botId }));
     setRoutinesBotId(botId);
     window.requestAnimationFrame(() => {
@@ -532,9 +631,15 @@ export function ShellPage() {
     }
   }, [active?.id, routines, routinesBotId, searchParams, setSearchParams]);
   const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
-  const shellReady = initialBotsLoaded && Boolean(active && snapshot?.botId === active.id);
+  const shellReady =
+    initialBotsLoaded &&
+    (inGroup
+      ? Boolean(activeGroup && snapshot?.groupId === activeGroup.id)
+      : Boolean(active && snapshot?.botId === active.id));
   const refreshThreadRef = useRef(refreshThread);
   refreshThreadRef.current = refreshThread;
+  const refreshGroupThreadRef = useRef(refreshGroupThread);
+  refreshGroupThreadRef.current = refreshGroupThread;
   const loadOlderMessagesRef = useRef(loadOlderMessages);
   loadOlderMessagesRef.current = loadOlderMessages;
 
@@ -616,15 +721,24 @@ export function ShellPage() {
   }, []);
   const sendMessage = useCallback(
     async (text: string) => {
-      const id = activeBotId.current;
-      if (!id || sending) return;
-      const attachments = attachmentsForBot(pendingAttachments, id);
+      const botTarget = activeBotId.current;
+      const groupTarget = activeGroupId.current;
+      if ((!botTarget && !groupTarget) || sending) return;
+      const attachments = attachmentsForBot(
+        pendingAttachments,
+        groupTarget ?? botTarget,
+      );
       const trimmed = text.trim();
       if (!trimmed && attachments.length === 0) return;
       setSending(true);
       setSendError(null);
       try {
         const artifactIds: string[] = [];
+        const uploadBotId =
+          botTarget ??
+          snapshot?.members?.[0]?.botId ??
+          activeGroup?.members[0]?.botId;
+        if (!uploadBotId) throw new Error("No bot available for attachments");
         for (const pending of attachments) {
           const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
           if (!mimeType) {
@@ -632,38 +746,67 @@ export function ShellPage() {
           }
           const contentBase64 = await readFileAsBase64(pending.file);
           const artifact = await rpc.artifacts.create({
-            botId: id,
+            botId: uploadBotId,
             name: pending.file.name,
             mimeType,
             contentBase64,
           });
           artifactIds.push(artifact.id);
         }
-        await rpc.threads.send({
-          botId: id,
-          text: trimmed || undefined,
-          artifactIds: artifactIds.length ? artifactIds : undefined,
-        });
+        if (groupTarget) {
+          await rpc.threads.send({
+            groupId: groupTarget,
+            text: trimmed || undefined,
+            artifactIds: artifactIds.length ? artifactIds : undefined,
+          });
+        } else if (botTarget) {
+          await rpc.threads.send({
+            botId: botTarget,
+            text: trimmed || undefined,
+            artifactIds: artifactIds.length ? artifactIds : undefined,
+          });
+        }
         revokePendingAttachmentPreviews(attachments);
-        setPendingAttachments((current) => current.filter((attachment) => attachment.botId !== id));
-        if (activeBotId.current === id) setAttachmentNotice(null);
-        await refreshThreadRef.current(id);
+        setPendingAttachments((current) =>
+          current.filter(
+            (attachment) => attachment.botId !== (groupTarget ?? botTarget),
+          ),
+        );
+        if (groupTarget && activeGroupId.current === groupTarget) setAttachmentNotice(null);
+        if (botTarget && activeBotId.current === botTarget) setAttachmentNotice(null);
+        if (groupTarget) await refreshGroupThreadRef.current(groupTarget);
+        else if (botTarget) await refreshThreadRef.current(botTarget);
       } catch (error) {
-        if (activeBotId.current === id) {
+        if (groupTarget && activeGroupId.current === groupTarget) {
+          setSendError(error instanceof Error ? error.message : "Failed to send message");
+        } else if (botTarget && activeBotId.current === botTarget) {
           setSendError(error instanceof Error ? error.message : "Failed to send message");
         }
       } finally {
         setSending(false);
       }
     },
-    [pendingAttachments, sending],
+    [activeGroup?.members, pendingAttachments, sending, snapshot?.members],
   );
   const stopRun = useCallback(async () => {
-    const id = activeBotId.current;
-    if (!id) return;
-    await rpc.threads.stop({ botId: id });
-    await refreshThreadRef.current(id);
+    const botTarget = activeBotId.current;
+    const groupTarget = activeGroupId.current;
+    if (groupTarget) {
+      await rpc.threads.stop({ groupId: groupTarget });
+      await refreshGroupThreadRef.current(groupTarget);
+      return;
+    }
+    if (!botTarget) return;
+    await rpc.threads.stop({ botId: botTarget });
+    await refreshThreadRef.current(botTarget);
   }, []);
+
+  async function createGroup(input: { name: string; botIds: string[] }) {
+    const group = await rpc.groups.create(input);
+    setPanel(null);
+    await refreshBots();
+    navigate(`/app/g/${group.id}`);
+  }
 
   async function createBot(input: {
     name: string;
@@ -801,14 +944,40 @@ export function ShellPage() {
       <aside className="flex w-[316px] shrink-0 flex-col border-r border-[#171719] bg-[#0B0B0C]">
         <div className="app-drag flex items-center justify-between px-[18px] pb-3 pt-4">
           <WindowChrome />
-          <button
-            type="button"
-            onClick={() => setPanel("create")}
-            className="app-no-drag text-[21px] text-[#7A7A80] hover:text-[#C9C9CE]"
-            title="New bot"
-          >
-            +
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setCreateMenuOpen((open) => !open)}
+              className="app-no-drag text-[21px] text-[#7A7A80] hover:text-[#C9C9CE]"
+              title="Create"
+            >
+              +
+            </button>
+            {createMenuOpen ? (
+              <div className="app-no-drag absolute right-0 top-full z-20 mt-2 min-w-[160px] rounded-xl border border-[#26262A] bg-[#141416] py-1 shadow-lg">
+                <button
+                  type="button"
+                  className="block w-full px-3.5 py-2 text-left text-[14px] text-[#ECECEE] hover:bg-[#1A1A1D]"
+                  onClick={() => {
+                    setCreateMenuOpen(false);
+                    setPanel("create");
+                  }}
+                >
+                  New bot
+                </button>
+                <button
+                  type="button"
+                  className="block w-full px-3.5 py-2 text-left text-[14px] text-[#ECECEE] hover:bg-[#1A1A1D]"
+                  onClick={() => {
+                    setCreateMenuOpen(false);
+                    setPanel("create-group");
+                  }}
+                >
+                  New group
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="mx-3.5 mb-3 flex items-center gap-2.5 rounded-xl border border-[#202023] bg-[#141416] px-3 py-2 text-[14px] text-[#6C6C70]">
           <span>⌕</span>
@@ -838,7 +1007,7 @@ export function ShellPage() {
                 }}
                 className="flex gap-3 rounded-xl px-2.5 py-[11px] text-left"
                 style={{
-                  background: active?.id === bot.id ? "#161618" : "transparent",
+                  background: !inGroup && active?.id === bot.id ? "#161618" : "transparent",
                 }}
               >
                 <BotAvatar color={bot.color} size={38} />
@@ -873,6 +1042,43 @@ export function ShellPage() {
               </button>
             ))
           )}
+          {!showWorkspaceSearch
+            ? groups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() => navigate(`/app/g/${group.id}`)}
+                  className="flex gap-3 rounded-xl px-2.5 py-[11px] text-left"
+                  style={{
+                    background: inGroup && activeGroup?.id === group.id ? "#161618" : "transparent",
+                  }}
+                >
+                  <span className="grid h-[38px] w-[38px] place-items-center rounded-full bg-[#232326] text-[13px] text-[#C9C9CE]">
+                    G
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span
+                        className={`text-[15px] text-[#ECECEE] ${
+                          group.unread ? "font-semibold" : "font-medium"
+                        }`}
+                      >
+                        {group.name}
+                      </span>
+                      {group.unread ? (
+                        <span
+                          aria-hidden="true"
+                          className="inline-block h-2 w-2 rounded-full bg-[#8B5CF6]"
+                        />
+                      ) : null}
+                    </div>
+                    <div className="mt-0.5 truncate text-[13.5px] text-[#85858A]">
+                      {group.members.map((member) => member.name).join(", ")}
+                    </div>
+                  </div>
+                </button>
+              ))
+            : null}
           {archivedBots.length > 0 && !showWorkspaceSearch ? (
             <div className="mt-2 border-t border-[#202023] pt-2">
               <button
@@ -993,16 +1199,23 @@ export function ShellPage() {
           <button
             type="button"
             data-testid="bot-settings-trigger"
-            onClick={() => setPanel("settings")}
+            onClick={() => setPanel(inGroup ? "group-settings" : "settings")}
             className="flex min-w-0 items-center gap-3"
           >
-            {active ? <BotAvatar color={active.color} size={26} /> : null}
+            {inGroup ? (
+              <span className="grid h-[26px] w-[26px] place-items-center rounded-full bg-[#232326] text-[11px] text-[#C9C9CE]">
+                G
+              </span>
+            ) : active ? (
+              <BotAvatar color={active.color} size={26} />
+            ) : null}
             <span className="min-w-0">
               <span className="block truncate text-[16px] font-medium text-[#ECECEE]">
-                {active?.name ?? "Select a bot"}
+                {inGroup ? (activeGroup?.name ?? snapshot?.groupName ?? "Group") : (active?.name ?? "Select a bot")}
               </span>
             </span>
           </button>
+          {!inGroup ? (
           <button
             type="button"
             title="Agent computer"
@@ -1022,10 +1235,11 @@ export function ShellPage() {
               <path d="M8 21h8M12 17v4" />
             </svg>
           </button>
+          ) : null}
         </div>
         <Transcript
           scrollRef={messageScroll}
-          botId={active?.id ?? ""}
+          botId={inGroup ? (groupId ?? "") : (active?.id ?? "")}
           messages={snapshot?.messages ?? []}
           olderCursor={snapshot?.olderCursor ?? null}
           loadingOlder={loadingOlder}
@@ -1036,9 +1250,10 @@ export function ShellPage() {
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
           onAnswer={answerMessage}
+          memberName={(botId) => memberName(snapshot?.members ?? activeGroup?.members, botId)}
         />
         <Composer
-          activeName={active?.name}
+          activeName={inGroup ? (activeGroup?.name ?? snapshot?.groupName) : active?.name}
           running={Boolean(snapshot?.run && isActive(snapshot.run.status))}
           pendingAttachments={activePendingAttachments}
           attachmentNotice={attachmentNotice}
@@ -1056,15 +1271,15 @@ export function ShellPage() {
         data-testid="side-panel"
         data-panel={panel ?? "closed"}
         className={`relative z-20 flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#0A0A0B] transition-[width] duration-150 ease-out ${
-          panel && active ? "w-[384px] border-l border-[#141416]" : "pointer-events-none w-0"
+          panel && (active || activeGroup) ? "w-[384px] border-l border-[#141416]" : "pointer-events-none w-0"
         }`}
       >
-        {panel && active ? (
+        {panel && (active || activeGroup) ? (
           <div className="rk-scroll h-full w-[384px] overflow-y-auto px-5 py-[17px]">
-            {panel !== "routine" && panel !== "create" ? (
+            {panel !== "routine" && panel !== "create" && panel !== "create-group" && panel !== "group-settings" ? (
               <div className="mb-4 flex items-center justify-between">
                 <span className="text-[13.5px] text-[#85858A]">
-                  {computer?.state ?? active.status}
+                  {active ? (computer?.state ?? active.status) : "group"}
                 </span>
                 <div className="flex gap-3.5">
                   <button
@@ -1080,7 +1295,7 @@ export function ShellPage() {
                 </div>
               </div>
             ) : null}
-            {panel === "computer" ? (
+            {panel === "computer" && active ? (
               <div>
                 <div className="relative aspect-[16/10] overflow-hidden rounded-[14px] bg-[#0E0E10]">
                   {computerOpen ? (
@@ -1183,13 +1398,37 @@ export function ShellPage() {
                 </button>
               </div>
             ) : null}
+            {panel === "create-group" ? (
+              <CreateGroupForm
+                bots={bots}
+                onCancel={() => setPanel(null)}
+                onCreate={(input) => void createGroup(input)}
+              />
+            ) : null}
+            {panel === "group-settings" && activeGroup ? (
+              <GroupSettings
+                group={activeGroup}
+                bots={bots}
+                onSave={async (input) => {
+                  await rpc.groups.update({ groupId: activeGroup.id, ...input });
+                  await refreshBots();
+                  await refreshGroupThread(activeGroup.id);
+                  setPanel(null);
+                }}
+                onRemove={async () => {
+                  await rpc.groups.remove({ groupId: activeGroup.id });
+                  setPanel(null);
+                  await refreshBots();
+                }}
+              />
+            ) : null}
             {panel === "create" ? (
               <CreateBotForm
                 onCancel={() => setPanel(null)}
                 onCreate={(input) => void createBot(input)}
               />
             ) : null}
-            {panel === "settings" ? (
+            {panel === "settings" && active ? (
               <BotSettings
                 key={active.id}
                 bot={active}
@@ -1217,7 +1456,7 @@ export function ShellPage() {
                 }}
               />
             ) : null}
-            {panel === "routine" ? (
+            {panel === "routine" && active ? (
               <div>
                 <div className="mb-5 flex items-center justify-between">
                   <button
@@ -1515,6 +1754,7 @@ const Transcript = memo(function Transcript({
   onLoadOlder,
   onOpenBot,
   onAnswer,
+  memberName,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   botId: string;
@@ -1526,6 +1766,7 @@ const Transcript = memo(function Transcript({
   onLoadOlder: () => void | Promise<void>;
   onOpenBot: (botId: string) => void;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
+  memberName?: (botId: string | undefined) => string | undefined;
 }) {
   return (
     <div
@@ -1551,6 +1792,9 @@ const Transcript = memo(function Transcript({
             canAnswer={message.id === answerableAskMessageId}
             onOpenBot={onOpenBot}
             onAnswer={onAnswer}
+            speakerName={
+              message.role === "bot" ? memberName?.(message.botId) : undefined
+            }
           />
         </div>
       ))}
@@ -1735,16 +1979,32 @@ const MessageView = memo(function MessageView({
   message,
   onAnswer,
   onOpenBot,
+  speakerName,
 }: {
   botId: string;
   canAnswer: boolean;
   message: ThreadMessage;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
+  speakerName?: string;
 }) {
   return (
     <>
+      {speakerName ? (
+        <div className="mb-1 text-[12.5px] font-medium text-[#85858A]">{speakerName}</div>
+      ) : null}
       {message.blocks.map((block, i) => {
+        if (block.kind === "handoff") {
+          return (
+            <div
+              key={i}
+              className="flex items-center justify-center gap-2 py-1 text-[13.5px] text-[#85858A]"
+            >
+              <span>↪ handoff</span>
+              <span>{block.text}</span>
+            </div>
+          );
+        }
         if (block.kind === "meta") {
           return (
             <div

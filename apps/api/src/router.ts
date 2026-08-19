@@ -55,6 +55,7 @@ import {
   projectMessages,
 } from "@rakazo/core";
 import {
+  createGroupRepos,
   createRepos,
   createThreadMessage,
   findDefaultModelCredential,
@@ -76,6 +77,13 @@ import { addScreenProxyCapability } from "./screen-proxy.js";
 import { queryWorkspaceSearch } from "./search.js";
 import { withSerializableRetry } from "./serializable-retry.js";
 import { loadAllMessages, loadMessagePage } from "./thread-message-pages.js";
+import {
+  resolveThreadTarget,
+  sendThreadMessage,
+  setThreadUnreadState,
+  stopThreadRuns,
+  threadSnapshot,
+} from "./thread-target.js";
 
 const MAX_COMPUTER_TEXT_FILE_BYTES = 2 * 1024 * 1024;
 const THREAD_MESSAGE_PAGE_SIZE = 100;
@@ -118,6 +126,7 @@ export interface RouterDeps {
 export function createRouter(deps: RouterDeps) {
   const os = implement(appContract).$context<{ actor: Actor | null; signal?: AbortSignal }>();
   const repos = createRepos(deps.prisma);
+  const groupRepos = createGroupRepos(deps.prisma);
 
   const authed = os.use(async ({ context, next }) => {
     if (!context.actor) throw new ORPCError("UNAUTHORIZED");
@@ -421,151 +430,77 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
     },
-    threads: {
-      get: authed.threads.get.handler(async ({ context, input }) =>
-        snapshot(deps, context.actor, input.botId),
+    groups: {
+      create: authed.groups.create.handler(async ({ context, input }) =>
+        groupRepos.createGroup(context.actor, input),
       ),
+      list: authed.groups.list.handler(async ({ context }) => groupRepos.listGroups(context.actor)),
+      get: authed.groups.get.handler(async ({ context, input }) => {
+        const group = await groupRepos.getGroup(context.actor, input.groupId);
+        return {
+          ...groupRepos.mapGroup(group),
+          messages: (
+            await loadMessagePage(
+              deps.prisma,
+              group.thread!.id,
+              undefined,
+              THREAD_MESSAGE_PAGE_SIZE,
+            )
+          ).messages,
+        };
+      }),
+      update: authed.groups.update.handler(async ({ context, input }) =>
+        groupRepos.updateGroup(context.actor, input),
+      ),
+      remove: authed.groups.remove.handler(async ({ context, input }) => {
+        await groupRepos.removeGroup(context.actor, input.groupId);
+        return { ok: true as const };
+      }),
+    },
+    threads: {
+      get: authed.threads.get.handler(async ({ context, input }) => {
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        return threadSnapshot(deps, context.actor, target);
+      }),
       messages: authed.threads.messages.handler(async ({ context, input }) => {
-        const bot = await repos.getBot(context.actor, input.botId);
-        if (!bot.thread) throw new IsolationError();
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         return loadMessagePage(
           deps.prisma,
-          bot.thread.id,
+          target.threadId,
           input.before,
           THREAD_MESSAGE_PAGE_SIZE,
           input.around,
         );
       }),
       subscribe: authed.threads.subscribe.handler(async function* ({ context, input }) {
-        const bot = await repos.getBot(context.actor, input.botId);
-        if (!bot.thread) throw new IsolationError();
-        for await (const event of deps.events.follow(bot.thread.id, input.cursor, context.signal)) {
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        for await (const event of deps.events.follow(target.threadId, input.cursor, context.signal)) {
           yield event;
         }
       }),
       send: authed.threads.send.handler(async ({ context, input }) => {
-        const bot = await repos.getBot(context.actor, input.botId);
-        if (!bot.thread) throw new IsolationError();
-        if (input.clientNonce) {
-          const dup = await deps.prisma.run.findFirst({
-            where: { workspaceId: context.actor.workspaceId, clientNonce: input.clientNonce },
-          });
-          if (dup) return { taskId: dup.taskId, runId: dup.id, seq: 0 };
-        }
-        const { blocks: attachmentBlocks, artifacts } = await resolveSendAttachments(
-          deps,
-          context.actor,
-          bot.id,
-          input.artifactIds,
-        );
-        const blocks = buildUserMessageBlocks(input.text, attachmentBlocks);
-        const prompt = buildSendPrompt(input.text, artifacts);
-        const message = await createThreadMessage(deps.prisma, {
-          threadId: bot.thread.id,
-          role: "user",
-          blocks,
-        });
-        await deps.events.append({
-          workspaceId: context.actor.workspaceId,
-          threadId: bot.thread.id,
-          botId: bot.id,
-          type: "thread.message.created",
-          payload: {
-            messageId: message.id,
-            role: "user",
-            blocks,
-          },
-        });
-        const task = await deps.prisma.task.create({
-          data: {
-            workspaceId: context.actor.workspaceId,
-            botId: bot.id,
-            threadId: bot.thread.id,
-            userId: context.actor.userId,
-            prompt,
-            status: "queued",
-          },
-        });
-        const run = await deps.prisma.run.create({
-          data: {
-            workspaceId: context.actor.workspaceId,
-            botId: bot.id,
-            threadId: bot.thread.id,
-            taskId: task.id,
-            userId: context.actor.userId,
-            status: "queued",
-            trigger: "user",
-            clientNonce: input.clientNonce,
-          },
-        });
-        await deps.prisma.message.update({
-          where: { id: message.id },
-          data: { runId: run.id },
-        });
-        await deps.prisma.run.updateMany({
-          where: {
-            botId: bot.id,
-            status: "queued",
-            id: { not: run.id },
-          },
-          data: { status: "cancelled", completedAt: new Date() },
-        });
-        await deps.jobs.enqueue(runContinueJob(run.id));
-        return { taskId: task.id, runId: run.id, seq: message.seq };
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        return sendThreadMessage(deps, context.actor, target, input);
       }),
       stop: authed.threads.stop.handler(async ({ context, input }) => {
-        const bot = await repos.getBot(context.actor, input.botId);
-        const activeRuns = await deps.prisma.run.findMany({
-          where: {
-            botId: bot.id,
-            status: { in: [...ACTIVE_RUN_STATUSES] },
-          },
-          select: { id: true },
-        });
-        await deps.prisma.run.updateMany({
-          where: {
-            botId: bot.id,
-            status: { in: [...ACTIVE_RUN_STATUSES] },
-          },
-          data: { status: "cancelled", completedAt: new Date() },
-        });
-        await deps.prisma.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
-        await deps.prisma.computer.updateMany({
-          where: { executionBotId: bot.id },
-          data: {
-            executionRunId: null,
-            executionBotId: null,
-            executionLeaseExpiresAt: null,
-          },
-        });
-        if (bot.computer?.providerRef) {
-          await deps.sandbox
-            .releaseScreen?.(
-              toComputerRef(bot.computer),
-              computerContext(context.actor, bot.id, "stop"),
-            )
-            .catch(() => undefined);
-        }
-        await deps.prisma.event.deleteMany({
-          where: {
-            type: "thread.progress",
-            runId: { in: activeRuns.map((run) => run.id) },
-          },
-        });
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        await stopThreadRuns(deps, context.actor, target);
         return { ok: true as const };
       }),
       followUp: authed.threads.followUp.handler(async ({ context, input }) => {
-        const bot = await repos.getBot(context.actor, input.botId);
-        if (!bot.thread) throw new IsolationError();
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         const message = await createThreadMessage(deps.prisma, {
-          threadId: bot.thread.id,
+          threadId: target.threadId,
           role: "user",
           blocks: [{ kind: "text", text: input.text }],
         });
+        const eventBotId =
+          target.kind === "bot" ? target.botId : (target.memberBotIds[0] ?? target.members[0]?.botId);
+        if (!eventBotId) throw new IsolationError();
         await deps.events.append({
           workspaceId: context.actor.workspaceId,
-          threadId: bot.thread.id,
-          botId: bot.id,
+          threadId: target.threadId,
+          botId: eventBotId,
           type: "thread.message.created",
           payload: {
             messageId: message.id,
@@ -574,14 +509,19 @@ export function createRouter(deps: RouterDeps) {
           },
         });
         const active = await deps.prisma.run.findFirst({
-          where: { botId: bot.id, status: { in: ["running", "queued", "leased"] } },
+          where: {
+            threadId: target.threadId,
+            status: { in: ["running", "queued", "leased"] },
+          },
         });
         if (active) return { ok: true as const };
+        const botId = target.kind === "bot" ? target.botId : target.memberBotIds[0];
+        if (!botId) throw new IsolationError();
         const task = await deps.prisma.task.create({
           data: {
             workspaceId: context.actor.workspaceId,
-            botId: bot.id,
-            threadId: bot.thread.id,
+            botId,
+            threadId: target.threadId,
             userId: context.actor.userId,
             prompt: input.text,
             status: "queued",
@@ -590,8 +530,8 @@ export function createRouter(deps: RouterDeps) {
         const run = await deps.prisma.run.create({
           data: {
             workspaceId: context.actor.workspaceId,
-            botId: bot.id,
-            threadId: bot.thread.id,
+            botId,
+            threadId: target.threadId,
             taskId: task.id,
             userId: context.actor.userId,
             status: "queued",
@@ -602,12 +542,14 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
       answer: authed.threads.answer.handler(async ({ context, input }) => {
-        const bot = await repos.getBot(context.actor, input.botId);
-        if (!bot.thread) throw new IsolationError();
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        const eventBotId =
+          target.kind === "bot" ? target.botId : (target.memberBotIds[0] ?? target.members[0]?.botId);
+        if (!eventBotId) throw new IsolationError();
         const answered = await deps.events.answerRunInput({
           workspaceId: context.actor.workspaceId,
-          threadId: bot.thread.id,
-          botId: bot.id,
+          threadId: target.threadId,
+          botId: eventBotId,
           runId: input.runId,
           messageId: input.messageId,
           answer: input.answer,
@@ -621,11 +563,13 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
       markRead: authed.threads.markRead.handler(async ({ context, input }) => {
-        await setThreadUnread(deps.prisma, context.actor, input.botId, false);
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        await setThreadUnreadState(deps.prisma, context.actor, target, false);
         return { ok: true as const };
       }),
       markUnread: authed.threads.markUnread.handler(async ({ context, input }) => {
-        await setThreadUnread(deps.prisma, context.actor, input.botId, true);
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        await setThreadUnreadState(deps.prisma, context.actor, target, true);
         return { ok: true as const };
       }),
     },

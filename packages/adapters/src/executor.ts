@@ -66,6 +66,7 @@ import {
   secretValuesToRedact,
   serializeModelSecret,
 } from "./pi-oauth.js";
+import { handoffToGroupBot, loadGroupContext } from "./group-handoff.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 import {
@@ -363,9 +364,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const attachedFilesPrompt = currentTurnFilesInstruction(currentTurnFiles);
         const graphical =
           computer.kind !== "desktop" && deps.sandbox.describe().capabilities.graphical;
-        const builtins = graphical
-          ? builtinAgentTools
-          : builtinAgentTools.filter((tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name));
+        const groupContext = thread.groupId
+          ? await loadGroupContext(deps.prisma, thread.groupId)
+          : undefined;
+        const builtins = (graphical ? builtinAgentTools : builtinAgentTools.filter(
+          (tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name),
+        )).filter((tool) => thread.groupId || tool.name !== "handoff_to_bot");
         const tools = [
           ...builtins,
           ...discovered.filter(
@@ -671,6 +675,15 @@ export function createRunExecutor(deps: ExecutorDeps) {
             }
             return spawned;
           }
+          if (name === "handoff_to_bot") {
+            if (!thread.groupId) return finish({ error: "handoff_to_bot is only for group chats" });
+            const result = await handoffToGroupBot(deps, run, thread.groupId, {
+              bot_id: args.bot_id ? String(args.bot_id) : undefined,
+              confirm_name: args.confirm_name ? String(args.confirm_name) : undefined,
+              message: String(args.message ?? ""),
+            });
+            return finish(result);
+          }
           if (name === "archive_bot" || name === "delete_bot") {
             const archived = await archiveSpawnedBot(
               deps,
@@ -752,6 +765,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               prompt: [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n"),
               instructions: [
                 bot.instructions || `${bot.name}: ${bot.title}\n${bot.description}`,
+                groupContext,
                 memoryContext ? redactSecrets(memoryContext, runSecrets) : undefined,
                 `${computerInstruction} Use remember for durable facts. Use request_takeover when the user must provide protected input or human judgment. Use destination_write only for connected destination records.`,
                 workspaceInstruction,
@@ -1198,6 +1212,7 @@ async function publishMessage(
     threadId: run.threadId,
     role,
     blocks,
+    botId: run.botId,
     runId: run.id,
   });
   await deps.events.append({

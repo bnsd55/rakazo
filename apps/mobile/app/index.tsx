@@ -3,6 +3,7 @@ import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -14,7 +15,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BotAvatar } from "../components/bot-avatar";
 import { NativeSymbol } from "../components/native-symbol";
-import { loadSessionToken, type MobileBot, type MobileMe, rpc } from "../lib/api";
+import { loadSessionToken, type MobileBot, type MobileGroup, type MobileMe, rpc } from "../lib/api";
 import { botTag, filterBots, formatThreadTime, userInitials } from "../lib/inbox";
 import { native } from "../lib/native";
 import { previewSnippet } from "../lib/preview";
@@ -26,6 +27,7 @@ const FALLBACK_COLOR = "#9B5CF6";
 
 export default function Home() {
   const [bots, setBots] = useState<MobileBot[]>([]);
+  const [groups, setGroups] = useState<MobileGroup[]>([]);
   const [me, setMe] = useState<MobileMe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -39,7 +41,12 @@ export default function Home() {
   const loadBots = useCallback(async () => {
     setError(null);
     try {
-      setBots(await rpc<MobileBot[]>("bots/list"));
+      const [nextBots, nextGroups] = await Promise.all([
+        rpc<MobileBot[]>("bots/list"),
+        rpc<MobileGroup[]>("groups/list"),
+      ]);
+      setBots(nextBots);
+      setGroups(nextGroups);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load bots");
     }
@@ -103,10 +110,10 @@ export default function Home() {
   }, [query, searching]);
 
   const visible = useMemo(() => filterBots(bots, query), [bots, query]);
-  const listData = useMemo(
-    (): Array<MobileBot | SearchHit> => (query.trim() && searching ? searchHits : visible),
-    [query, searching, searchHits, visible],
-  );
+  const listData = useMemo((): Array<MobileBot | MobileGroup | SearchHit> => {
+    if (query.trim() && searching) return searchHits;
+    return [...groups, ...visible];
+  }, [groups, query, searching, searchHits, visible]);
   const initials = userInitials(me?.name ?? "");
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -139,7 +146,16 @@ export default function Home() {
           >
             <NativeSymbol ios="magnifyingglass" android="search" size={17} />
           </CircleButton>
-          <CircleButton accessibilityLabel="New bot" onPress={() => router.push("/new")}>
+          <CircleButton
+            accessibilityLabel="Create"
+            onPress={() =>
+              Alert.alert("Create", undefined, [
+                { text: "New bot", onPress: () => router.push("/new") },
+                { text: "New group", onPress: () => router.push("/new-group") },
+                { text: "Cancel", style: "cancel" },
+              ])
+            }
+          >
             <NativeSymbol ios="plus" android="add" size={18} />
           </CircleButton>
         </View>
@@ -163,12 +179,14 @@ export default function Home() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <FlatList<MobileBot | SearchHit>
+      <FlatList<MobileBot | MobileGroup | SearchHit>
         data={listData}
         keyExtractor={(item) =>
           "kind" in item
             ? `${item.kind}-${item.botId}-${item.messageId ?? item.artifactId ?? item.routineId ?? item.url}`
-            : item.id
+            : "members" in item
+              ? `group-${item.id}`
+              : item.id
         }
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
@@ -206,6 +224,8 @@ export default function Home() {
                 router.push(mobileSearchDestination(item));
               }}
             />
+          ) : "members" in item ? (
+            <GroupRow group={item} />
           ) : (
             <BotRow bot={item} />
           )
@@ -302,6 +322,43 @@ function BotRow({ bot }: { bot: MobileBot }) {
           numberOfLines={1}
           ellipsizeMode="tail"
         >
+          {preview}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function GroupRow({ group }: { group: MobileGroup }) {
+  const router = useRouter();
+  const preview =
+    previewSnippet(group.preview, 40) ||
+    group.members.map((member) => member.name).join(", ");
+  const time = group.updatedAt ? formatThreadTime(group.updatedAt) : "";
+  return (
+    <Pressable
+      accessibilityLabel={[group.name, group.unread ? "unread" : null, time, preview]
+        .filter(Boolean)
+        .join(", ")}
+      onPress={() =>
+        router.push({ pathname: "/group-thread", params: { groupId: group.id, name: group.name } })
+      }
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+    >
+      <View style={[styles.groupAvatar]}>
+        <Text style={styles.groupAvatarLabel}>G</Text>
+      </View>
+      <View style={styles.rowBody}>
+        <View style={styles.rowTop}>
+          <Text style={styles.name} numberOfLines={1}>
+            {group.name}
+          </Text>
+          <View style={styles.rowMeta}>
+            {time ? <Text style={styles.time}>{time}</Text> : null}
+            {group.unread ? <View accessibilityElementsHidden style={styles.unreadDot} /> : null}
+          </View>
+        </View>
+        <Text style={[styles.preview, group.unread && styles.unreadPreview]} numberOfLines={1}>
           {preview}
         </Text>
       </View>
@@ -441,5 +498,18 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#8B5CF6",
+  },
+  groupAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#232326",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  groupAvatarLabel: {
+    color: "#C9C9CE",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

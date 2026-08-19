@@ -327,6 +327,7 @@ export async function finalizeRun(
         threadId: input.threadId,
         role: "bot",
         blocks: input.blocks,
+        botId: input.botId,
         runId: input.runId,
       });
       await appendEventInTransaction(tx, {

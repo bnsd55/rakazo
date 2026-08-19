@@ -180,14 +180,26 @@ export type MobileMessage = {
   }>;
 };
 
+export type MobileGroup = {
+  id: string;
+  name: string;
+  preview: string;
+  unread: boolean;
+  updatedAt: string;
+  members: Array<{ botId: string; name: string; color: string }>;
+};
+
 export type MobileSnapshot = {
-  botId: string;
+  botId?: string;
+  groupId?: string;
+  groupName?: string;
   threadId: string;
   cursor?: number;
   messages: MobileMessage[];
   olderCursor: number | null;
   run: { status: string } | null;
-  computer: {
+  members?: MobileGroup["members"];
+  computer?: {
     state: string;
     controlHolder: string;
     screenAvailable: boolean;
@@ -241,7 +253,7 @@ type ThreadEvent = {
 };
 
 export async function subscribeThread(
-  botId: string,
+  target: { botId: string } | { groupId: string },
   cursor: number,
   onEvent: (event: ThreadEvent) => void,
   signal: AbortSignal,
@@ -254,7 +266,7 @@ export async function subscribeThread(
       origin: "rakazo://",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ json: { botId, cursor } }),
+    body: JSON.stringify({ json: { ...target, cursor } }),
     signal,
   });
   if (!res.ok || !res.body) throw new Error(`rpc threads/subscribe failed (${res.status})`);

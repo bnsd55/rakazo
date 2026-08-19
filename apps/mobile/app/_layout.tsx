@@ -40,6 +40,15 @@ export default function Layout() {
             headerBackVisible: false,
           }}
         />
+        <Stack.Screen
+          name="new-group"
+          options={{
+            title: "New group",
+            presentation: "modal",
+            gestureEnabled: true,
+          }}
+        />
+        <Stack.Screen name="group-thread" options={{ title: "Group" }} />
         <Stack.Screen name="thread" options={{ title: "Thread" }} />
         <Stack.Screen name="routine" options={{ title: "Routine" }} />
         <Stack.Screen name="computer" options={{ title: "Computer" }} />

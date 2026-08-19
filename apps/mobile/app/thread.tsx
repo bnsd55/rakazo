@@ -29,11 +29,13 @@ type PendingAttachment = PickedAttachment & { botId: string };
 export default function Thread() {
   const navigation = useNavigation();
   const router = useRouter();
-  const { botId, name, messageId } = useLocalSearchParams<{
+  const { botId, groupId, name, messageId } = useLocalSearchParams<{
     botId?: string;
+    groupId?: string;
     name?: string;
     messageId?: string;
   }>();
+  const inGroup = Boolean(groupId);
   const scroll = useRef<ScrollView>(null);
   const loadingOlderContent = useRef(false);
   const expandedHistoryThread = useRef<string | null>(null);
@@ -94,8 +96,11 @@ export default function Thread() {
   }
 
   async function refresh() {
-    if (!botId) return;
-    const next = await rpc<MobileSnapshot>("threads/get", { botId });
+    if (!botId && !groupId) return;
+    const next = await rpc<MobileSnapshot>(
+      "threads/get",
+      groupId ? { groupId } : { botId: botId! },
+    );
     const pin = pinnedAroundRef.current;
     setSnap((prev) => {
       let merged = mergeMobileSnapshot(prev, next, expandedHistoryThread.current === next.threadId);
@@ -157,9 +162,14 @@ export default function Thread() {
   }
 
   const markReadIfVisible = useCallback(() => {
-    if (!botId || AppState.currentState !== "active" || !navigation.isFocused()) return;
+    if (AppState.currentState !== "active" || !navigation.isFocused()) return;
+    if (groupId) {
+      void rpc("threads/markRead", { groupId }).catch(() => undefined);
+      return;
+    }
+    if (!botId) return;
     void rpc("threads/markRead", { botId }).catch(() => undefined);
-  }, [botId, navigation]);
+  }, [botId, groupId, navigation]);
 
   // Covers returning from a pushed screen; the AppState listener covers returning from background.
   useFocusEffect(
@@ -176,7 +186,7 @@ export default function Thread() {
   }, [markReadIfVisible]);
 
   useEffect(() => {
-    if (!botId) return;
+    if (!botId && !groupId) return;
     if (!messageId) {
       pinnedAroundRef.current = null;
       jumpScrollTarget.current = null;
@@ -194,7 +204,7 @@ export default function Thread() {
       while (!abort.signal.aborted) {
         try {
           await subscribeThread(
-            botId,
+            groupId ? { groupId } : { botId: botId! },
             cursor,
             (event) => {
               cursor = Math.max(cursor, event.seq ?? -1);
@@ -229,7 +239,7 @@ export default function Thread() {
     return () => {
       abort.abort();
     };
-  }, [botId, markReadIfVisible]);
+  }, [botId, groupId, markReadIfVisible]);
 
   useEffect(() => {
     if (!botId || !messageId) return;
@@ -247,38 +257,50 @@ export default function Thread() {
 
   async function send() {
     const targetBotId = botId;
-    if (!targetBotId || sending) return;
-    const attachments = attachmentsForBot(pendingAttachments, targetBotId);
+    const targetGroupId = groupId;
+    if ((!targetBotId && !targetGroupId) || sending) return;
+    const uploadBotId = targetBotId ?? snap?.members?.[0]?.botId;
+    const attachments = attachmentsForBot(pendingAttachments, uploadBotId ?? groupId);
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     setSending(true);
     setError(null);
     try {
       const artifactIds: string[] = [];
+      if (attachments.length && !uploadBotId) throw new Error("No bot available for attachments");
       for (const pending of attachments) {
         const artifact = await rpc<{ id: string }>("artifacts/create", {
-          botId: targetBotId,
+          botId: uploadBotId!,
           name: pending.name,
           mimeType: pending.mimeType,
           contentBase64: pending.contentBase64,
         });
         artifactIds.push(artifact.id);
       }
-      await rpc("threads/send", {
-        botId: targetBotId,
-        text: text || undefined,
-        artifactIds: artifactIds.length ? artifactIds : undefined,
-      });
-      setPendingAttachments((current) =>
-        current.filter((attachment) => attachment.botId !== targetBotId),
+      await rpc(
+        "threads/send",
+        targetGroupId
+          ? {
+              groupId: targetGroupId,
+              text: text || undefined,
+              artifactIds: artifactIds.length ? artifactIds : undefined,
+            }
+          : {
+              botId: targetBotId!,
+              text: text || undefined,
+              artifactIds: artifactIds.length ? artifactIds : undefined,
+            },
       );
-      if (activeBotId.current === targetBotId) {
+      setPendingAttachments((current) =>
+        current.filter((attachment) => attachment.botId !== (uploadBotId ?? groupId)),
+      );
+      if (activeBotId.current === targetBotId || groupId) {
         setDraft("");
         setAttachmentNotice(null);
         await refresh();
       }
     } catch (err) {
-      if (activeBotId.current === targetBotId) {
+      if (activeBotId.current === targetBotId || groupId) {
         setError(err instanceof Error ? err.message : "Failed to send message");
       }
     } finally {
