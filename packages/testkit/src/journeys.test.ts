@@ -63,11 +63,26 @@ describeJourneys("required product journeys", () => {
     text: string,
     waitForBotId?: string,
   ) {
-    const { runIds } = await rpc<{ runId: string; runIds?: string[] }>(app, cookie, "threads/send", {
-      groupId,
-      text,
-    });
-    const targets = waitForBotId ? [waitForBotId] : runIds ?? [];
+    const { runIds, runId } = await rpc<{ runId: string; runIds?: string[] }>(
+      app,
+      cookie,
+      "threads/send",
+      {
+        groupId,
+        text,
+      },
+    );
+    let targets = runIds ?? [runId];
+    if (waitForBotId) {
+      const runs = await prisma.run.findMany({
+        where: { id: { in: targets }, botId: waitForBotId },
+        select: { id: true },
+      });
+      targets = runs.map((run) => run.id);
+      if (targets.length === 0) {
+        throw new Error(`no run scheduled for bot ${waitForBotId}`);
+      }
+    }
     for (const runId of targets) {
       let terminal: { status: string; error: string | null } | null = null;
       await waitForDatabase(async () => {
@@ -1081,13 +1096,7 @@ describeJourneys("required product journeys", () => {
     expect(await countUserRuns(botB.id)).toBe(botBBefore);
     expect(await countUserRuns(botC.id)).toBe(botCBefore);
 
-    await sendGroupAndWait(
-      app,
-      ada,
-      group.id,
-      "@BotA hand this to Writer for the draft",
-      botA.id,
-    );
+    await sendGroupAndWait(app, ada, group.id, "@BotA hand this to Writer for the draft", botA.id);
     const handoffSnap = await rpc<Snap>(app, ada, "threads/get", { groupId: group.id });
     expect(
       handoffSnap.messages.some((message) =>

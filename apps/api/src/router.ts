@@ -474,7 +474,11 @@ export function createRouter(deps: RouterDeps) {
       }),
       subscribe: authed.threads.subscribe.handler(async function* ({ context, input }) {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
-        for await (const event of deps.events.follow(target.threadId, input.cursor, context.signal)) {
+        for await (const event of deps.events.follow(
+          target.threadId,
+          input.cursor,
+          context.signal,
+        )) {
           yield event;
         }
       }),
@@ -495,7 +499,9 @@ export function createRouter(deps: RouterDeps) {
           blocks: [{ kind: "text", text: input.text }],
         });
         const eventBotId =
-          target.kind === "bot" ? target.botId : (target.memberBotIds[0] ?? target.members[0]?.botId);
+          target.kind === "bot"
+            ? target.botId
+            : (target.memberBotIds[0] ?? target.members[0]?.botId);
         if (!eventBotId) throw new IsolationError();
         await deps.events.append({
           workspaceId: context.actor.workspaceId,
@@ -544,7 +550,9 @@ export function createRouter(deps: RouterDeps) {
       answer: authed.threads.answer.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         const eventBotId =
-          target.kind === "bot" ? target.botId : (target.memberBotIds[0] ?? target.members[0]?.botId);
+          target.kind === "bot"
+            ? target.botId
+            : (target.memberBotIds[0] ?? target.members[0]?.botId);
         if (!eventBotId) throw new IsolationError();
         const answered = await deps.events.answerRunInput({
           workspaceId: context.actor.workspaceId,

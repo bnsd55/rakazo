@@ -153,6 +153,10 @@ describe("destroyBot", () => {
     const removeArtifact = vi.fn().mockResolvedValue(undefined);
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
+        chatGroup: {
+          findMany: vi.fn().mockResolvedValue([]),
+          delete: vi.fn().mockResolvedValue(undefined),
+        },
         computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         computer: { updateMany: releaseComputers },
         $executeRaw: executeRaw,

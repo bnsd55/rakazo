@@ -23,8 +23,9 @@ test("create group from + and see two bots in one transcript", async ({ page }) 
   await page.getByTitle("Create").click();
   await page.getByRole("button", { name: "New group" }).click();
   await page.locator("label:has-text('Name') input").fill("Draft team");
-  await page.getByRole("button", { name: "Researcher" }).click();
-  await page.getByRole("button", { name: "Writer" }).click();
+  const panel = page.getByTestId("side-panel");
+  await panel.getByRole("button", { name: "Researcher" }).click();
+  await panel.getByRole("button", { name: "Writer" }).click();
   await page.getByRole("button", { name: "Create group", exact: true }).click();
   await page.waitForURL(/\/app\/g\/[^/]+$/);
 

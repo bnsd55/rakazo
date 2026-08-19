@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, TextInput } from "react-native";
 import { BotAvatar } from "../components/bot-avatar";
 import { type MobileBot, type MobileGroup, rpc } from "../lib/api";
 
@@ -60,32 +60,31 @@ export default function GroupSettingsScreen() {
 
   function remove() {
     if (!groupId || !group) return;
-    Alert.alert(
-      group.name,
-      "Delete this group? Bots and their solo threads are kept.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () =>
-            void rpc("groups/remove", { groupId })
-              .then(() => router.replace("/"))
-              .catch((err) =>
-                Alert.alert(
-                  "Could not delete group",
-                  err instanceof Error ? err.message : "Try again.",
-                ),
+    Alert.alert(group.name, "Delete this group? Bots and their solo threads are kept.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () =>
+          void rpc("groups/remove", { groupId })
+            .then(() => router.replace("/"))
+            .catch((err) =>
+              Alert.alert(
+                "Could not delete group",
+                err instanceof Error ? err.message : "Try again.",
               ),
-        },
-      ],
-    );
+            ),
+      },
+    ]);
   }
 
   return (
     <>
       <Stack.Screen options={{ title: "Group settings" }} />
-      <ScrollView style={{ flex: 1, backgroundColor: "#050506" }} contentContainerStyle={{ padding: 24 }}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: "#050506" }}
+        contentContainerStyle={{ padding: 24 }}
+      >
         <Text style={{ color: "#85858A", fontSize: 14 }}>Name</Text>
         <TextInput
           value={name}
@@ -123,7 +122,8 @@ export default function GroupSettingsScreen() {
           style={{
             marginTop: 24,
             backgroundColor: "#8B5CF6",
-            opacity: !name.trim() || selected.length < 2 || selected.length > 6 || pending ? 0.5 : 1,
+            opacity:
+              !name.trim() || selected.length < 2 || selected.length > 6 || pending ? 0.5 : 1,
             borderRadius: 11,
             padding: 14,
             alignItems: "center",

@@ -1,13 +1,13 @@
-import type { Actor, ComputerStatus, GroupMember, ThreadSnapshot } from "@rakazo/contracts";
-import { runContinueJob, type JobPublisher } from "@rakazo/adapter-kit";
+import { type JobPublisher, runContinueJob } from "@rakazo/adapter-kit";
 import { toComputerRef } from "@rakazo/adapters";
+import type { Actor, ComputerStatus, GroupMember, ThreadSnapshot } from "@rakazo/contracts";
 import { ACTIVE_RUN_STATUSES, projectMessages, resolveGroupTargetBotIds } from "@rakazo/core";
 import {
   createGroupRepos,
   createRepos,
   createThreadMessage,
+  createThreadMessageInTransaction,
   IsolationError,
-  touchGroupUpdatedAt,
   type PrismaClient,
   type ThreadEvents,
 } from "@rakazo/db";
@@ -218,10 +218,22 @@ export async function sendThreadMessage(
   },
 ) {
   if (input.clientNonce) {
-    const dup = await deps.prisma.run.findFirst({
+    const existingRuns = await deps.prisma.run.findMany({
       where: { workspaceId: actor.workspaceId, clientNonce: input.clientNonce },
+      orderBy: { createdAt: "asc" },
     });
-    if (dup) return { taskId: dup.taskId, runId: dup.id, seq: 0, runIds: [dup.id] };
+    if (existingRuns.length > 0) {
+      const linked = await deps.prisma.message.findFirst({
+        where: { runId: { in: existingRuns.map((run) => run.id) } },
+        select: { seq: true },
+      });
+      return {
+        taskId: existingRuns[0]!.taskId,
+        runId: existingRuns[0]!.id,
+        seq: linked?.seq ?? 0,
+        runIds: existingRuns.map((run) => run.id),
+      };
+    }
   }
 
   if (input.replyToMessageId) {
@@ -309,11 +321,62 @@ export async function sendThreadMessage(
     members: target.members.map((member) => ({ id: member.botId, name: member.name })),
     explicitMentions: input.mentions,
   });
-  const message = await createThreadMessage(deps.prisma, {
-    threadId: target.threadId,
-    role: "user",
-    blocks,
-    replyToMessageId: input.replyToMessageId,
+  const fanout = await deps.prisma.$transaction(async (tx) => {
+    const message = await createThreadMessageInTransaction(tx, {
+      threadId: target.threadId,
+      role: "user",
+      blocks,
+      replyToMessageId: input.replyToMessageId,
+    });
+    const runIds: string[] = [];
+    let firstTaskId = "";
+    let firstRunId = "";
+    for (const botId of targetBotIds) {
+      const task = await tx.task.create({
+        data: {
+          workspaceId: actor.workspaceId,
+          botId,
+          threadId: target.threadId,
+          userId: actor.userId,
+          prompt,
+          status: "queued",
+        },
+      });
+      const run = await tx.run.create({
+        data: {
+          workspaceId: actor.workspaceId,
+          botId,
+          threadId: target.threadId,
+          taskId: task.id,
+          userId: actor.userId,
+          status: "queued",
+          trigger: "user",
+          clientNonce: input.clientNonce,
+        },
+      });
+      if (!firstTaskId) {
+        firstTaskId = task.id;
+        firstRunId = run.id;
+      }
+      runIds.push(run.id);
+    }
+    await tx.message.update({
+      where: { id: message.id },
+      data: { runId: firstRunId || undefined },
+    });
+    await tx.run.updateMany({
+      where: {
+        threadId: target.threadId,
+        status: "queued",
+        id: { notIn: runIds },
+      },
+      data: { status: "cancelled", completedAt: new Date() },
+    });
+    await tx.chatGroup.update({
+      where: { id: target.groupId },
+      data: { updatedAt: new Date() },
+    });
+    return { message, runIds, firstTaskId, firstRunId };
   });
   const eventBotId = targetBotIds[0] ?? target.memberBotIds[0];
   if (!eventBotId) throw new IsolationError();
@@ -323,64 +386,20 @@ export async function sendThreadMessage(
     botId: eventBotId,
     type: "thread.message.created",
     payload: {
-      messageId: message.id,
+      messageId: fanout.message.id,
       role: "user",
       blocks,
       replyToMessageId: input.replyToMessageId,
     },
   });
-  await touchGroupUpdatedAt(deps.prisma, target.groupId);
-
-  const runIds: string[] = [];
-  let firstTaskId = "";
-  let firstRunId = "";
-  for (const botId of targetBotIds) {
-    const task = await deps.prisma.task.create({
-      data: {
-        workspaceId: actor.workspaceId,
-        botId,
-        threadId: target.threadId,
-        userId: actor.userId,
-        prompt,
-        status: "queued",
-      },
-    });
-    const run = await deps.prisma.run.create({
-      data: {
-        workspaceId: actor.workspaceId,
-        botId,
-        threadId: target.threadId,
-        taskId: task.id,
-        userId: actor.userId,
-        status: "queued",
-        trigger: "user",
-        clientNonce: targetBotIds.length === 1 ? input.clientNonce : undefined,
-      },
-    });
-    if (!firstTaskId) {
-      firstTaskId = task.id;
-      firstRunId = run.id;
-    }
-    runIds.push(run.id);
-    await deps.jobs.enqueue(runContinueJob(run.id));
+  for (const runId of fanout.runIds) {
+    await deps.jobs.enqueue(runContinueJob(runId));
   }
-  await deps.prisma.message.update({
-    where: { id: message.id },
-    data: { runId: firstRunId || undefined },
-  });
-  await deps.prisma.run.updateMany({
-    where: {
-      threadId: target.threadId,
-      status: "queued",
-      id: { notIn: runIds },
-    },
-    data: { status: "cancelled", completedAt: new Date() },
-  });
   return {
-    taskId: firstTaskId,
-    runId: firstRunId,
-    seq: message.seq,
-    runIds,
+    taskId: fanout.firstTaskId,
+    runId: fanout.firstRunId,
+    seq: fanout.message.seq,
+    runIds: fanout.runIds,
   };
 }
 

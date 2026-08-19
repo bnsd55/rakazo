@@ -58,6 +58,7 @@ import {
 } from "./computer-support.js";
 import { observationToolResult, parseComputerActions } from "./computer-tools.js";
 import { checkpointAndRecordComputerWorkspace } from "./computer-workspace.js";
+import { handoffToGroupBot, loadGroupContext } from "./group-handoff.js";
 import { loadAgentMemoryContext } from "./memory-context.js";
 import { toOAuthCredential } from "./pi-credentials.js";
 import {
@@ -66,7 +67,6 @@ import {
   secretValuesToRedact,
   serializeModelSecret,
 } from "./pi-oauth.js";
-import { handoffToGroupBot, loadGroupContext } from "./group-handoff.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 import {
@@ -367,9 +367,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const groupContext = thread.groupId
           ? await loadGroupContext(deps.prisma, thread.groupId)
           : undefined;
-        const builtins = (graphical ? builtinAgentTools : builtinAgentTools.filter(
-          (tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name),
-        )).filter((tool) => thread.groupId || tool.name !== "handoff_to_bot");
+        const builtins = (
+          graphical
+            ? builtinAgentTools
+            : builtinAgentTools.filter((tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name))
+        ).filter((tool) => thread.groupId || tool.name !== "handoff_to_bot");
         const tools = [
           ...builtins,
           ...discovered.filter(

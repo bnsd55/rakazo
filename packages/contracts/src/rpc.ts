@@ -185,55 +185,57 @@ export const appContract = {
     subscribe: oc
       .input(threadTarget.extend({ cursor: z.number().int().min(-1) }))
       .output(eventIterator(ProductEventSchema)),
-    send: oc
-      .input(threadSendInput)
-      .output(
-        z.object({
-          taskId: Id,
-          runId: Id,
-          seq: z.number().int(),
-          runIds: z.array(Id).optional(),
-        }),
-      ),
+    send: oc.input(threadSendInput).output(
+      z.object({
+        taskId: Id,
+        runId: Id,
+        seq: z.number().int(),
+        runIds: z.array(Id).optional(),
+      }),
+    ),
     stop: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
     followUp: oc
       .input(
-        z.object({
-          botId: Id.optional(),
-          groupId: Id.optional(),
-          text: z.string().min(1),
-        }).superRefine((input, ctx) => {
-          const hasBot = Boolean(input.botId);
-          const hasGroup = Boolean(input.groupId);
-          if (hasBot === hasGroup) {
-            ctx.addIssue({
-              code: "custom",
-              message: "Provide exactly one of botId or groupId",
-              path: ["botId"],
-            });
-          }
-        }),
+        z
+          .object({
+            botId: Id.optional(),
+            groupId: Id.optional(),
+            text: z.string().min(1),
+          })
+          .superRefine((input, ctx) => {
+            const hasBot = Boolean(input.botId);
+            const hasGroup = Boolean(input.groupId);
+            if (hasBot === hasGroup) {
+              ctx.addIssue({
+                code: "custom",
+                message: "Provide exactly one of botId or groupId",
+                path: ["botId"],
+              });
+            }
+          }),
       )
       .output(z.object({ ok: z.literal(true) })),
     answer: oc
       .input(
-        z.object({
-          botId: Id.optional(),
-          groupId: Id.optional(),
-          runId: Id,
-          messageId: Id,
-          answer: z.string().min(1),
-        }).superRefine((input, ctx) => {
-          const hasBot = Boolean(input.botId);
-          const hasGroup = Boolean(input.groupId);
-          if (hasBot === hasGroup) {
-            ctx.addIssue({
-              code: "custom",
-              message: "Provide exactly one of botId or groupId",
-              path: ["botId"],
-            });
-          }
-        }),
+        z
+          .object({
+            botId: Id.optional(),
+            groupId: Id.optional(),
+            runId: Id,
+            messageId: Id,
+            answer: z.string().min(1),
+          })
+          .superRefine((input, ctx) => {
+            const hasBot = Boolean(input.botId);
+            const hasGroup = Boolean(input.groupId);
+            if (hasBot === hasGroup) {
+              ctx.addIssue({
+                code: "custom",
+                message: "Provide exactly one of botId or groupId",
+                path: ["botId"],
+              });
+            }
+          }),
       )
       .output(z.object({ ok: z.literal(true) })),
     markRead: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),

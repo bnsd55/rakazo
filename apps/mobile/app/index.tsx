@@ -332,8 +332,7 @@ function BotRow({ bot }: { bot: MobileBot }) {
 function GroupRow({ group }: { group: MobileGroup }) {
   const router = useRouter();
   const preview =
-    previewSnippet(group.preview, 40) ||
-    group.members.map((member) => member.name).join(", ");
+    previewSnippet(group.preview, 40) || group.members.map((member) => member.name).join(", ");
   const time = group.updatedAt ? formatThreadTime(group.updatedAt) : "";
   return (
     <Pressable

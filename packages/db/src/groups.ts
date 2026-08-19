@@ -1,6 +1,5 @@
 import type { Actor, Group, GroupMember } from "@rakazo/contracts";
 import type { PrismaClient } from "./client.js";
-import { createThreadMessageInTransaction } from "./messages.js";
 import { IsolationError } from "./scope.js";
 
 const GROUP_MEMBER_MIN = 2;
@@ -144,7 +143,7 @@ export function createGroupRepos(prisma: PrismaClient) {
       actor: Actor,
       input: { groupId: string; name?: string; botIds?: string[] },
     ): Promise<Group> {
-      const existing = await this.getGroup(actor, input.groupId);
+      await this.getGroup(actor, input.groupId);
       if (input.botIds) await assertOwnedBots(prisma, actor, input.botIds);
       const updated = await prisma.$transaction(async (tx) => {
         if (input.name !== undefined) {

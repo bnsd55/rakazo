@@ -13,7 +13,9 @@ export default function NewGroup() {
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    void rpc<MobileBot[]>("bots/list").then(setBots).catch(() => undefined);
+    void rpc<MobileBot[]>("bots/list")
+      .then(setBots)
+      .catch(() => undefined);
   }, []);
 
   function toggle(botId: string) {
@@ -33,7 +35,10 @@ export default function NewGroup() {
         name: name.trim(),
         botIds: selected,
       });
-      router.replace({ pathname: "/group-thread", params: { groupId: group.id, name: group.name } });
+      router.replace({
+        pathname: "/group-thread",
+        params: { groupId: group.id, name: group.name },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create group");
     } finally {
@@ -44,7 +49,10 @@ export default function NewGroup() {
   return (
     <>
       <Stack.Screen options={{ title: "New group" }} />
-      <ScrollView style={{ flex: 1, backgroundColor: "#050506" }} contentContainerStyle={{ padding: 24 }}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: "#050506" }}
+        contentContainerStyle={{ padding: 24 }}
+      >
         <Text style={{ color: "#85858A", fontSize: 14 }}>Name</Text>
         <TextInput
           value={name}
