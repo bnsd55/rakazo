@@ -90,7 +90,7 @@ export type SkillPlaybook = z.infer<typeof SkillPlaybookSchema>;
 
 export const TeachRecordingEventSchema = z.object({
   at: z.string(),
-  kind: z.enum(["pointer", "key", "clipboard", "snapshot"]),
+  kind: z.enum(["pointer", "key", "clipboard", "snapshot", "scroll"]),
   x: z.number().optional(),
   y: z.number().optional(),
   button: z.string().optional(),
@@ -111,6 +111,7 @@ export type TeachSnapshot = z.infer<typeof TeachSnapshotSchema>;
 export const TeachRecordingSchema = z.object({
   events: z.array(TeachRecordingEventSchema),
   snapshots: z.array(TeachSnapshotSchema),
+  controlLeaseId: z.string().optional(),
 });
 export type TeachRecording = z.infer<typeof TeachRecordingSchema>;
 

@@ -169,7 +169,6 @@ export async function createApp(
     jobs,
     events,
     workerId: "api",
-    dataDir: env.dataDir,
     runtime,
     deploymentModelKey: env.openRouterKey,
   });

@@ -49,9 +49,13 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
           { id: "message-1", blocks: [{ kind: "skill_draft", skillId: "skill-1" }] },
         ]),
     },
+    bot: {
+      findUnique: vi.fn(),
+    },
   };
   return {
     current: () => current,
+    tx,
     deps: {
       prisma: {
         $transaction: vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
@@ -69,10 +73,13 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
               { id: "message-1", blocks: [{ kind: "skill_draft", skillId: "skill-1" }] },
             ]),
         },
+        event: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
       },
       events: { append: vi.fn(), finalizeComputerControlRelease: vi.fn() },
       jobs: { enqueue: vi.fn(), cancel: vi.fn() },
-      sandbox: { observe: vi.fn(), setScreenControl: vi.fn() },
+      sandbox: { observe: vi.fn(), setScreenControl: vi.fn(), sendInput: vi.fn(), act: vi.fn() },
       home: {},
       dataDir: "/tmp",
     },
@@ -117,9 +124,10 @@ describe("expireTaughtSkillTeaching", () => {
       skillRow({
         status: "draft",
         expiresAt: new Date(Date.now() - 1000),
+        recording: { ...emptyRecording(), controlLeaseId: "lease-1" },
       }),
     );
-    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue({
+    const bot = {
       id: "bot-1",
       thread: { id: "thread-1" },
       computer: {
@@ -131,7 +139,8 @@ describe("expireTaughtSkillTeaching", () => {
         controlBotId: "bot-1",
         controlLeaseId: "lease-1",
       },
-    });
+    };
+    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue(bot);
     await expireTaughtSkillTeaching(deps as never, "skill-1");
     expect(deps.jobs.cancel).toHaveBeenCalled();
     expect(deps.events.append).toHaveBeenCalledWith(
@@ -146,6 +155,43 @@ describe("expireTaughtSkillTeaching", () => {
         payload: expect.objectContaining({ skillId: "skill-1" }),
       }),
     );
+  });
+
+  it("does not steal a later manual takeover when retrying a draft", async () => {
+    const { deps } = recordingDeps(
+      skillRow({
+        status: "draft",
+        recording: { ...emptyRecording(), controlLeaseId: "teach-lease" },
+      }),
+    );
+    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue({
+      id: "bot-1",
+      thread: { id: "thread-1" },
+      computer: {
+        id: "computer-1",
+        homeKey: "bot-1",
+        kind: "cloud",
+        providerRef: "box-1",
+        controlHolder: "user",
+        controlBotId: "bot-1",
+        controlLeaseId: "manual-lease",
+      },
+    });
+    await expireTaughtSkillTeaching(deps as never, "skill-1");
+    expect(deps.jobs.cancel).not.toHaveBeenCalled();
+    expect(deps.events.finalizeComputerControlRelease).not.toHaveBeenCalled();
+  });
+
+  it("does not republish draft events once they already exist", async () => {
+    const { deps } = recordingDeps(skillRow({ status: "draft" }));
+    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue({
+      id: "bot-1",
+      thread: { id: "thread-1" },
+      computer: null,
+    });
+    deps.prisma.event.findMany = vi.fn().mockResolvedValue([{ payload: { skillId: "skill-1" } }]);
+    await expireTaughtSkillTeaching(deps as never, "skill-1");
+    expect(deps.events.append).not.toHaveBeenCalled();
   });
 });
 
@@ -174,5 +220,29 @@ describe("recordTeachingInputEvent", () => {
     );
     expect(outcome).toBe("stale");
     expect(current().recording.events).toHaveLength(0);
+  });
+
+  it("sends recorded input before the recording transaction commits", async () => {
+    const { deps, current, tx } = recordingDeps(skillRow());
+    const computer = {
+      id: "computer-1",
+      homeKey: "bot-1",
+      kind: "e2b",
+      providerRef: "box-1",
+      controlHolder: "user",
+      controlBotId: "bot-1",
+      controlLeaseId: "lease-1",
+    };
+    tx.bot.findUnique = vi.fn(async () => ({ id: "bot-1", computer }));
+    await expect(
+      recordTeachingInputEvent(
+        deps as never,
+        { workspaceId: "workspace-1", userId: "user-1" } as never,
+        "bot-1",
+        { kind: "pointer", x: 12, y: 40, button: "left", type: "click" },
+      ),
+    ).resolves.toBe("recorded");
+    expect(deps.sandbox.sendInput).toHaveBeenCalled();
+    expect(current().recording.events).toHaveLength(1);
   });
 });

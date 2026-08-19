@@ -23,11 +23,19 @@ export function TeachCaptureOverlay({
 
   useEffect(() => {
     if (!enabled || !skill || skill.status !== "recording") return;
-    const root = rootRef.current;
-    if (!root) return;
+    const overlay = rootRef.current;
+    if (!overlay) return;
+    const target: HTMLDivElement = overlay;
 
     function enqueueInput(task: () => Promise<void>) {
       inputChainRef.current = inputChainRef.current.then(task).catch(() => undefined);
+    }
+
+    function pointerAt(event: PointerEvent) {
+      return mapTeachPointer(event.clientX, event.clientY, target.getBoundingClientRect(), {
+        width,
+        height,
+      });
     }
 
     async function sendPointer(
@@ -47,17 +55,44 @@ export function TeachCaptureOverlay({
       await rpc.computer.input({ botId, kind: "key", payload: { key } });
     }
 
+    async function sendScroll(direction: "up" | "down", amount: number) {
+      await rpc.computer.input({
+        botId,
+        kind: "scroll",
+        payload: { direction, amount },
+      });
+    }
+
+    function buttonFor(event: PointerEvent): "left" | "right" {
+      return event.button === 2 ? "right" : "left";
+    }
+
     function onPointerDown(event: PointerEvent) {
       event.preventDefault();
-      const target = root;
-      if (!target) return;
-      const { x, y } = mapTeachPointer(
-        event.clientX,
-        event.clientY,
-        target.getBoundingClientRect(),
-        { width, height },
-      );
-      enqueueInput(() => sendPointer("click", x, y, event.button === 2 ? "right" : "left"));
+      target.setPointerCapture(event.pointerId);
+      const { x, y } = pointerAt(event);
+      enqueueInput(() => sendPointer("down", x, y, buttonFor(event)));
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (!event.buttons) return;
+      event.preventDefault();
+      const { x, y } = pointerAt(event);
+      enqueueInput(() => sendPointer("move", x, y, event.buttons === 2 ? "right" : "left"));
+    }
+
+    function onPointerUp(event: PointerEvent) {
+      event.preventDefault();
+      if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+      const { x, y } = pointerAt(event);
+      enqueueInput(() => sendPointer("up", x, y, buttonFor(event)));
+    }
+
+    function onWheel(event: WheelEvent) {
+      event.preventDefault();
+      const direction = event.deltaY < 0 ? "up" : "down";
+      const amount = Math.min(20, Math.max(1, Math.round(Math.abs(event.deltaY) / 80) || 1));
+      enqueueInput(() => sendScroll(direction, amount));
     }
 
     function onKeyDown(event: KeyboardEvent) {
@@ -67,10 +102,24 @@ export function TeachCaptureOverlay({
       enqueueInput(() => sendKey(key));
     }
 
-    root.addEventListener("pointerdown", onPointerDown);
+    function onContextMenu(event: Event) {
+      event.preventDefault();
+    }
+
+    target.addEventListener("pointerdown", onPointerDown);
+    target.addEventListener("pointermove", onPointerMove);
+    target.addEventListener("pointerup", onPointerUp);
+    target.addEventListener("pointercancel", onPointerUp);
+    target.addEventListener("wheel", onWheel, { passive: false });
+    target.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      root.removeEventListener("pointerdown", onPointerDown);
+      target.removeEventListener("pointerdown", onPointerDown);
+      target.removeEventListener("pointermove", onPointerMove);
+      target.removeEventListener("pointerup", onPointerUp);
+      target.removeEventListener("pointercancel", onPointerUp);
+      target.removeEventListener("wheel", onWheel);
+      target.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [botId, enabled, height, skill, width]);

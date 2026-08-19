@@ -1,9 +1,11 @@
-import type { AgentHomeStore, JobPublisher, SandboxProvider } from "@rakazo/adapter-kit";
-import {
-  type AdapterContext,
-  computerControlExpireJobKey,
-  skillTeachingExpireJobKey,
+import type {
+  AdapterContext,
+  ComputerInput,
+  ControlLeaseRef,
+  JobPublisher,
+  SandboxProvider,
 } from "@rakazo/adapter-kit";
+import { computerControlExpireJobKey, skillTeachingExpireJobKey } from "@rakazo/adapter-kit";
 import type { Actor, MessageBlock, TaughtSkill } from "@rakazo/contracts";
 import {
   buildPlaybookFromRecording,
@@ -41,15 +43,18 @@ export type TaughtSkillRow = {
 type TeachRecording = {
   events: TeachRecordingEvent[];
   snapshots: TeachSnapshot[];
+  controlLeaseId?: string;
 };
+
+export type TeachComputerInput =
+  | ComputerInput
+  | { kind: "scroll"; direction: "up" | "down"; amount?: number };
 
 export interface TeachingSessionDeps {
   prisma: PrismaClient;
   events: ThreadEvents;
   jobs: JobPublisher;
   sandbox: SandboxProvider;
-  home: AgentHomeStore;
-  dataDir: string;
 }
 
 export function emptyRecording(): TeachRecording {
@@ -62,6 +67,7 @@ export function parseRecording(value: unknown): TeachRecording {
   return {
     events: Array.isArray(record.events) ? (record.events as TeachRecordingEvent[]) : [],
     snapshots: Array.isArray(record.snapshots) ? (record.snapshots as TeachSnapshot[]) : [],
+    controlLeaseId: typeof record.controlLeaseId === "string" ? record.controlLeaseId : undefined,
   };
 }
 
@@ -160,20 +166,24 @@ export async function observeStopSnapshot(
   bot: { id: string; computer: { providerRef: string | null } | null },
 ): Promise<TeachSnapshot | undefined> {
   if (!bot.computer?.providerRef) return undefined;
-  const observation = await deps.sandbox.observe(
-    toComputerRef(bot.computer as never),
-    computerContext(actor, bot.id, "skills.snapshot"),
-  );
-  const summary =
-    typeof observation === "object" &&
-    observation &&
-    "activeWindow" in observation &&
-    observation.activeWindow &&
-    typeof observation.activeWindow === "object" &&
-    "title" in observation.activeWindow
-      ? String((observation.activeWindow as { title?: string }).title ?? "screen captured")
-      : "screen captured";
-  return { at: new Date().toISOString(), summary };
+  try {
+    const observation = await deps.sandbox.observe(
+      toComputerRef(bot.computer as never),
+      computerContext(actor, bot.id, "skills.snapshot"),
+    );
+    const summary =
+      typeof observation === "object" &&
+      observation &&
+      "activeWindow" in observation &&
+      observation.activeWindow &&
+      typeof observation.activeWindow === "object" &&
+      "title" in observation.activeWindow
+        ? String((observation.activeWindow as { title?: string }).title ?? "screen captured")
+        : "screen captured";
+    return { at: new Date().toISOString(), summary };
+  } catch {
+    return undefined;
+  }
 }
 
 async function finalizeTeachingRecording(
@@ -238,13 +248,14 @@ export async function releaseTeachingComputerControlForBot(
   deps: TeachingSessionDeps,
   actor: Actor,
   botId: string,
+  expectedLeaseId?: string | null,
 ): Promise<void> {
   const bot = await deps.prisma.bot.findUnique({
     where: { id: botId },
     include: { computer: true },
   });
   if (!bot) return;
-  await releaseTeachingComputerControl(deps, actor, bot);
+  await releaseTeachingComputerControl(deps, actor, bot, expectedLeaseId);
 }
 
 async function releaseTeachingComputerControl(
@@ -260,6 +271,7 @@ async function releaseTeachingComputerControl(
       controlLeaseId: string | null;
     } | null;
   },
+  expectedLeaseId?: string | null,
 ): Promise<void> {
   const computer = bot.computer;
   if (
@@ -269,6 +281,7 @@ async function releaseTeachingComputerControl(
   ) {
     return;
   }
+  if (!expectedLeaseId || computer.controlLeaseId !== expectedLeaseId) return;
   const leaseId = computer.controlLeaseId;
   if (computer.providerRef) {
     await deps.sandbox.setScreenControl?.(
@@ -326,6 +339,27 @@ async function findSkillDraftMessage(
   return null;
 }
 
+async function hasSkillDraftCreatedEvent(
+  prisma: PrismaClient,
+  threadId: string,
+  skillId: string,
+): Promise<boolean> {
+  const events = await prisma.event.findMany({
+    where: { threadId, type: "skill.draft.created" },
+    select: { payload: true },
+    take: 50,
+  });
+  return events.some((event) => {
+    const payload = event.payload;
+    return (
+      payload !== null &&
+      typeof payload === "object" &&
+      "skillId" in payload &&
+      payload.skillId === skillId
+    );
+  });
+}
+
 async function emitSkillDraftMessages(
   deps: TeachingSessionDeps,
   actor: Actor,
@@ -337,15 +371,18 @@ async function emitSkillDraftMessages(
   const created = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
     const existing = await findSkillDraftMessage(tx, threadId, skill.id);
-    if (existing) return existing;
+    if (existing) return { ...existing, inserted: false as const };
     const blocks = skillDraftBlocks(skill);
     const message = await createThreadMessageInTransaction(tx, {
       threadId,
       role: "bot",
       blocks,
     });
-    return { id: message.id, blocks };
+    return { id: message.id, blocks, inserted: true as const };
   });
+  if (!created.inserted && (await hasSkillDraftCreatedEvent(deps.prisma, threadId, skill.id))) {
+    return;
+  }
   await deps.events.append({
     workspaceId: actor.workspaceId,
     threadId,
@@ -379,7 +416,12 @@ export async function completeTeachingSession(
     include: { thread: true, computer: true },
   });
   if (!bot) throw new IsolationError();
-  await releaseTeachingComputerControlForBot(deps, actor, bot.id);
+  await releaseTeachingComputerControlForBot(
+    deps,
+    actor,
+    bot.id,
+    parseRecording(finalized.recording).controlLeaseId,
+  );
   if (finalized.status === "draft") {
     await emitSkillDraftMessages(deps, actor, finalized, bot);
   }
@@ -403,7 +445,8 @@ export async function expireTaughtSkillTeaching(
   if (!skill) return null;
   const actor = { workspaceId: skill.workspaceId, userId: skill.userId } as Actor;
   if (skill.status !== "recording") {
-    await releaseTeachingComputerControlForBot(deps, actor, skill.botId);
+    const leaseId = parseRecording(skill.recording).controlLeaseId;
+    if (leaseId) await releaseTeachingComputerControlForBot(deps, actor, skill.botId, leaseId);
     if (skill.status === "draft") {
       const bot = await deps.prisma.bot.findUnique({
         where: { id: skill.botId },
@@ -429,20 +472,42 @@ export async function expireTaughtSkillTeaching(
   return finalized;
 }
 
+export async function applyTeachingDesktopInput(
+  sandbox: SandboxProvider,
+  computer: {
+    homeKey: string;
+    kind: string;
+    providerRef: string | null;
+    controlLeaseId: string | null;
+  },
+  mapped: TeachComputerInput,
+  context: AdapterContext,
+): Promise<void> {
+  if (!computer.providerRef) return;
+  const lease: ControlLeaseRef = {
+    leaseId: computer.controlLeaseId ?? "lease",
+    holder: "user",
+    fence: 0,
+  };
+  if (mapped.kind === "scroll") {
+    await sandbox.act(
+      toComputerRef(computer),
+      {
+        actions: [{ kind: "scroll", direction: mapped.direction, amount: mapped.amount }],
+        observe: false,
+      },
+      context,
+    );
+    return;
+  }
+  await sandbox.sendInput(toComputerRef(computer), mapped, lease, context);
+}
+
 export async function recordTeachingInputEvent(
   deps: TeachingSessionDeps,
   actor: Actor,
   botId: string,
-  mapped:
-    | { kind: "key"; key: string }
-    | { kind: "clipboard"; text: string }
-    | {
-        kind: "pointer";
-        x: number;
-        y: number;
-        button: "left" | "right";
-        type: "move" | "down" | "up" | "click";
-      },
+  mapped: TeachComputerInput,
 ): Promise<"recorded" | "idle" | "stale"> {
   const skill = await getActiveTeachingSession(deps.prisma, actor.workspaceId, botId, actor.userId);
   if (!skill) return "idle";
@@ -450,27 +515,61 @@ export async function recordTeachingInputEvent(
     await expireTaughtSkillTeaching(deps, skill.id);
     return "stale";
   }
-  const updated = await appendRecordingEvent(deps, skill.id, {
+  const event: TeachRecordingEvent = {
     at: new Date().toISOString(),
-    kind: mapped.kind,
+    kind: mapped.kind === "scroll" ? "scroll" : mapped.kind,
     ...(mapped.kind === "key"
       ? { key: mapped.key }
       : mapped.kind === "clipboard"
         ? { text: mapped.text }
-        : {
-            x: mapped.x,
-            y: mapped.y,
-            button: mapped.button,
-            type: mapped.type,
-          }),
-  });
-  const appended =
-    parseRecording(updated.recording).events.length > parseRecording(skill.recording).events.length;
-  if (!appended && updated.expiresAt && updated.expiresAt.getTime() <= Date.now()) {
-    await expireTaughtSkillTeaching(deps, updated.id);
+        : mapped.kind === "scroll"
+          ? { type: mapped.direction, text: String(mapped.amount ?? 3) }
+          : {
+              x: mapped.x,
+              y: mapped.y,
+              button: mapped.button,
+              type: mapped.type,
+            }),
+  };
+  const outcome = await deps.prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
+      const current = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skill.id } });
+      if (current.status !== "recording") return "stale" as const;
+      if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) return "expired" as const;
+      const recording = parseRecording(current.recording);
+      if (
+        !recording.events.some(
+          (existing) => recordingEventKey(existing) === recordingEventKey(event),
+        )
+      ) {
+        recording.events.push(event);
+        await tx.taughtSkill.update({
+          where: { id: skill.id },
+          data: { recording: recording as never },
+        });
+      }
+      const bot = await tx.bot.findUnique({
+        where: { id: botId },
+        include: { computer: true },
+      });
+      if (bot?.computer?.providerRef) {
+        await applyTeachingDesktopInput(
+          deps.sandbox,
+          bot.computer,
+          mapped,
+          computerContext(actor, botId, "input"),
+        );
+      }
+      return "recorded" as const;
+    },
+    { timeout: 15_000 },
+  );
+  if (outcome === "expired") {
+    await expireTaughtSkillTeaching(deps, skill.id);
     return "stale";
   }
-  return updated.status === "recording" ? "recorded" : "stale";
+  return outcome;
 }
 
 export async function captureTeachingSnapshot(

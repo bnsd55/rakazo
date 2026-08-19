@@ -171,7 +171,7 @@ export const appContract = {
       .input(
         z.object({
           botId: Id,
-          kind: z.enum(["key", "pointer", "clipboard"]),
+          kind: z.enum(["key", "pointer", "clipboard", "scroll"]),
           payload: z.record(z.string(), z.unknown()),
         }),
       )

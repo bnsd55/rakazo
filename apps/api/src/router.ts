@@ -14,6 +14,7 @@ import {
 } from "@rakazo/adapter-kit";
 import {
   acquireComputerExecutionLease,
+  applyTeachingDesktopInput,
   archiveBot,
   type ComposioProvider,
   ComputerBusyError,
@@ -943,35 +944,32 @@ export function createRouter(deps: RouterDeps) {
             ? { kind: "key" as const, key: String(input.payload.key ?? "") }
             : input.kind === "clipboard"
               ? { kind: "clipboard" as const, text: String(input.payload.text ?? "") }
-              : {
-                  kind: "pointer" as const,
-                  x: Number(input.payload.x ?? 0),
-                  y: Number(input.payload.y ?? 0),
-                  button: (input.payload.button as "left" | "right" | undefined) ?? "left",
-                  type:
-                    (input.payload.type as "move" | "down" | "up" | "click" | undefined) ?? "click",
-                };
+              : input.kind === "scroll"
+                ? {
+                    kind: "scroll" as const,
+                    direction:
+                      input.payload.direction === "up" ? ("up" as const) : ("down" as const),
+                    amount: Number(input.payload.amount ?? 3),
+                  }
+                : {
+                    kind: "pointer" as const,
+                    x: Number(input.payload.x ?? 0),
+                    y: Number(input.payload.y ?? 0),
+                    button: (input.payload.button as "left" | "right" | undefined) ?? "left",
+                    type:
+                      (input.payload.type as "move" | "down" | "up" | "click" | undefined) ??
+                      "click",
+                  };
         const outcome = await taughtSkills.recordInput(context.actor, bot.id, mapped);
         if (outcome === "stale") return { ok: true as const };
-        let target = computer;
-        if (outcome === "idle") {
-          const latest = await deps.prisma.computer.findUnique({ where: { id: computer.id } });
-          if (
-            !latest ||
-            !hasActiveComputerControl(latest) ||
-            latest.controlBotId !== bot.id ||
-            !latest.providerRef
-          ) {
-            return { ok: true as const };
-          }
-          target = latest;
+        if (outcome !== "recorded") {
+          await applyTeachingDesktopInput(
+            deps.sandbox,
+            computer,
+            mapped,
+            computerContext(context.actor, bot.id, "input"),
+          );
         }
-        await deps.sandbox.sendInput(
-          toComputerRef(target),
-          mapped,
-          { leaseId: target.controlLeaseId ?? "lease", holder: "user", fence: 0 },
-          computerContext(context.actor, bot.id, "input"),
-        );
         await deps.prisma.computer.updateMany({
           where: { id: computer.id, state: "running" },
           data: { updatedAt: new Date() },

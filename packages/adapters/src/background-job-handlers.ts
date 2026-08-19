@@ -20,8 +20,6 @@ export function createBackgroundJobHandlers(deps: {
   jobs: JobPublisher;
   events: ThreadEvents;
   workerId: string;
-  dataDir: string;
-  onSkillTeachingExpire?: (skillId: string) => Promise<void>;
   runtime: AgentRuntime;
   deploymentModelKey?: string;
 }): BackgroundJobHandlers {
@@ -41,10 +39,6 @@ export function createBackgroundJobHandlers(deps: {
       }
     },
     "skill.teaching-expire": async (payload) => {
-      if (deps.onSkillTeachingExpire) {
-        await deps.onSkillTeachingExpire(payload.skillId);
-        return;
-      }
       await expireTaughtSkillTeaching(deps, payload.skillId);
     },
     "history.compact": async (payload) => {

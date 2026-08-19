@@ -19,12 +19,14 @@ import {
   mapTaughtSkill,
   observeStopSnapshot,
   parsePlaybook,
+  parseRecording,
   provisionComputer,
   recordTeachingInputEvent,
   releaseComputerExecutionLease,
   releaseTeachingComputerControlForBot,
   scheduleComputerControlExpiry,
   screenLeaseIdForRun,
+  type TeachComputerInput,
   teachingControlLeaseExpiresAt,
 } from "@rakazo/adapters";
 import type { Actor, MessageBlock, TaughtSkill } from "@rakazo/contracts";
@@ -171,10 +173,12 @@ async function grantTakeover(
   actor: Actor,
   bot: Awaited<ReturnType<ReturnType<typeof import("@rakazo/db").createRepos>["getBot"]>>,
   until: Date,
-) {
+): Promise<{ bot: typeof bot; leaseId: string }> {
   if (!bot.computer) throw new IsolationError();
   if (await extendActiveComputerControl(deps.prisma, deps.jobs, bot.computer, bot.id, until)) {
-    return bot;
+    const leaseId = bot.computer.controlLeaseId;
+    if (!leaseId) throw new IsolationError();
+    return { bot, leaseId };
   }
   const leaseId = randomUUID();
   const expiresAt = teachingControlLeaseExpiresAt(until);
@@ -204,7 +208,7 @@ async function grantTakeover(
       payload: { holder: "user", reason: "teaching" },
     });
   }
-  return bot;
+  return { bot, leaseId };
 }
 
 async function updateSkillDraftMessage(
@@ -276,7 +280,12 @@ export async function stopTeachingSession(
   await expireTeachingSessionIfNeeded(deps, skillId);
   const current = await deps.prisma.taughtSkill.findUniqueOrThrow({ where: { id: skillId } });
   if (current.status === "draft" || current.status === "saved") {
-    await releaseTeachingComputerControlForBot(deps, actor, current.botId);
+    await releaseTeachingComputerControlForBot(
+      deps,
+      actor,
+      current.botId,
+      parseRecording(current.recording).controlLeaseId,
+    );
     return mapTaughtSkill(current);
   }
   if (current.status !== "recording" && current.status !== "drafting") {
@@ -319,11 +328,18 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
         include: { thread: true, computer: true },
       });
       if (!bot) throw new IsolationError();
+      const alreadyRecording = await deps.prisma.taughtSkill.findFirst({
+        where: { botId, status: "recording" },
+        select: { id: true },
+      });
+      if (alreadyRecording) {
+        throw new ORPCError("CONFLICT", { message: "A teaching session is already active" });
+      }
       await cancelActiveRuns(deps, actor, botId);
       bot = await ensureGraphicalComputer(deps, actor, bot);
       const startedAt = new Date();
       const expiresAt = new Date(startedAt.getTime() + teachRecordingTtlMs());
-      await grantTakeover(deps, actor, bot, expiresAt);
+      const { leaseId } = await grantTakeover(deps, actor, bot, expiresAt);
       let row: TaughtSkillRow;
       try {
         row = await deps.prisma.$transaction(async (tx) => {
@@ -343,7 +359,7 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
               status: "recording",
               startedAt,
               expiresAt,
-              recording: emptyRecording() as never,
+              recording: { ...emptyRecording(), controlLeaseId: leaseId } as never,
               playbook: buildPlaybookFromRecording(goal, []) as never,
             },
           });
@@ -509,7 +525,12 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
       const skill = await getOwnedSkill(deps, actor, skillId);
       if (skill.status === "recording") {
         await deps.jobs.cancel(skillTeachingExpireJobKey(skill.id));
-        await releaseTeachingComputerControlForBot(deps, actor, skill.botId);
+        await releaseTeachingComputerControlForBot(
+          deps,
+          actor,
+          skill.botId,
+          parseRecording(skill.recording).controlLeaseId,
+        );
       }
       await deps.prisma.taughtSkill.delete({ where: { id: skill.id } });
       return { ok: true as const };
@@ -521,16 +542,7 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
     async recordInput(
       actor: Actor,
       botId: string,
-      mapped:
-        | { kind: "key"; key: string }
-        | { kind: "clipboard"; text: string }
-        | {
-            kind: "pointer";
-            x: number;
-            y: number;
-            button: "left" | "right";
-            type: "move" | "down" | "up" | "click";
-          },
+      mapped: TeachComputerInput,
     ): Promise<"recorded" | "idle" | "stale"> {
       return recordTeachingInputEvent(deps, actor, botId, mapped);
     },

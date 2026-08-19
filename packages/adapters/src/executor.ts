@@ -82,7 +82,7 @@ import {
   searchSupermemory,
   supermemoryContainerTag,
 } from "./supermemory-client.js";
-import { getActiveTeachingSession } from "./teaching-session.js";
+import { getActiveTeachingSession, parsePlaybook } from "./teaching-session.js";
 import {
   attachWorkspaceFileToThread,
   currentTurnFilesInstruction,
@@ -784,36 +784,32 @@ export function createRunExecutor(deps: ExecutorDeps) {
           connectedPlugins.length > 0
             ? `Connected plugins: ${connectedPlugins.map((row) => `${row.displayName} (${row.provider})`).join(", ")}. Use those plugin tools when the user asks about those apps.`
             : "No plugins are connected yet.";
+        const taughtSkillIndex = savedSkills.slice(0, 20);
         const taughtSkillsLine =
-          savedSkills.length > 0
-            ? `Saved taught skills:\n${savedSkills
+          taughtSkillIndex.length > 0
+            ? `Saved taught skills:\n${taughtSkillIndex
                 .map((skill) => {
-                  const playbook = skill.playbook as {
-                    whenToUse?: string;
-                    inputs?: string[];
-                    steps?: string[];
-                    howToCheck?: string;
-                    whatToReturn?: string;
-                    approvalBoundaries?: string;
-                    failureHandling?: string;
-                  };
-                  return `- ${skill.name || skill.goal}: ${formatSkillRunPrompt(
-                    skill.name || skill.goal,
-                    {
-                      whenToUse: playbook.whenToUse ?? skill.goal,
-                      inputs: playbook.inputs ?? [],
-                      steps: playbook.steps ?? [],
-                      howToCheck: playbook.howToCheck ?? "",
-                      whatToReturn: playbook.whatToReturn ?? "",
-                      approvalBoundaries: playbook.approvalBoundaries ?? "",
-                      failureHandling: playbook.failureHandling ?? "",
-                    },
-                  )}`;
+                  const playbook = parsePlaybook(skill.playbook);
+                  const name = skill.name || skill.goal.slice(0, 80);
+                  return `- ${name}: ${playbook.whenToUse || skill.goal}`;
                 })
                 .join(
-                  "\n\n",
-                )}\nWhen the user asks to run a taught skill by name, follow that playbook exactly.`
+                  "\n",
+                )}\nWhen the user asks to run a taught skill by name, follow that skill's playbook exactly. The full playbook is included in the user task when they invoke it.`
             : undefined;
+        const taskPrompt = [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n");
+        const invokedSkill = taskPrompt.toLowerCase().startsWith("run taught skill:")
+          ? null
+          : savedSkills.find((skill) => {
+              const name = (skill.name || skill.goal).trim().toLowerCase();
+              return name.length >= 3 && taskPrompt.toLowerCase().includes(name);
+            });
+        const prompt = invokedSkill
+          ? `${formatSkillRunPrompt(
+              invokedSkill.name || invokedSkill.goal.slice(0, 80),
+              parsePlaybook(invokedSkill.playbook),
+            )}\n\n${taskPrompt}`
+          : taskPrompt;
 
         try {
           for await (const event of deps.runtime.run(
@@ -821,7 +817,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               botId: bot.id,
               threadId: thread.id,
               runId,
-              prompt: [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n"),
+              prompt,
               instructions: [
                 bot.instructions || `${bot.name}: ${bot.title}\n${bot.description}`,
                 memoryContext ? redactSecrets(memoryContext, runSecrets) : undefined,

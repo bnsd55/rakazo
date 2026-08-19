@@ -85,7 +85,6 @@ async function main() {
     jobs,
     events,
     workerId: process.pid.toString(),
-    dataDir,
     runtime,
     deploymentModelKey: process.env.OPENROUTER_API_KEY,
   });

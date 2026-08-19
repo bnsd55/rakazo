@@ -1,6 +1,6 @@
 export type TeachRecordingEvent = {
   at: string;
-  kind: "pointer" | "key" | "clipboard" | "snapshot";
+  kind: "pointer" | "key" | "clipboard" | "snapshot" | "scroll";
   x?: number;
   y?: number;
   button?: string;
@@ -37,7 +37,21 @@ function describePointer(event: TeachRecordingEvent): string {
   if (action === "move") {
     return `Move pointer to (${event.x ?? 0}, ${event.y ?? 0}).`;
   }
+  if (action === "down") {
+    return `Press ${button} button at (${event.x ?? 0}, ${event.y ?? 0}).`;
+  }
+  if (action === "up") {
+    return `Release ${button} button at (${event.x ?? 0}, ${event.y ?? 0}).`;
+  }
   return `${action === "click" ? "Click" : action} ${button} button at (${event.x ?? 0}, ${event.y ?? 0}).`;
+}
+
+function describeScroll(event: TeachRecordingEvent): string {
+  const direction = event.type === "up" ? "up" : "down";
+  const amount = Number(event.text ?? 3);
+  return Number.isFinite(amount) && amount > 1
+    ? `Scroll ${direction} ${amount} times.`
+    : `Scroll ${direction}.`;
 }
 
 function redactSensitiveText(text: string): string {
@@ -57,6 +71,8 @@ export function buildPlaybookFromRecording(
 ): SkillPlaybook {
   const steps: string[] = [];
   let typed = "";
+  let drag: { button: string; fromX: number; fromY: number; toX: number; toY: number } | null =
+    null;
 
   function flushTyped() {
     if (!typed) return;
@@ -65,10 +81,22 @@ export function buildPlaybookFromRecording(
     typed = "";
   }
 
+  function flushDrag() {
+    if (!drag) return;
+    const moved = Math.hypot(drag.toX - drag.fromX, drag.toY - drag.fromY) >= 8;
+    steps.push(
+      moved
+        ? `Drag ${drag.button} button from (${drag.fromX}, ${drag.fromY}) to (${drag.toX}, ${drag.toY}).`
+        : `Click ${drag.button} button at (${drag.fromX}, ${drag.fromY}).`,
+    );
+    drag = null;
+  }
+
   for (const event of events) {
     if (event.kind === "key") {
       const key = event.key;
       if (!key) continue;
+      flushDrag();
       if (isTypedCharacter(key)) {
         typed += key;
         continue;
@@ -79,13 +107,45 @@ export function buildPlaybookFromRecording(
     }
     flushTyped();
     if (event.kind === "pointer") {
+      const action = event.type ?? "click";
+      const button = event.button ?? "left";
+      const x = event.x ?? 0;
+      const y = event.y ?? 0;
+      if (action === "down") {
+        flushDrag();
+        drag = { button, fromX: x, fromY: y, toX: x, toY: y };
+        continue;
+      }
+      if (action === "move" && drag) {
+        drag.toX = x;
+        drag.toY = y;
+        continue;
+      }
+      if (action === "up") {
+        if (drag) {
+          drag.toX = x;
+          drag.toY = y;
+          flushDrag();
+        } else {
+          steps.push(describePointer(event));
+        }
+        continue;
+      }
+      flushDrag();
       steps.push(describePointer(event));
     } else if (event.kind === "clipboard") {
+      flushDrag();
       const text = event.text ? redactSensitiveText(event.text) : "";
       if (text) steps.push(`Paste or type: ${text}.`);
+    } else if (event.kind === "scroll") {
+      flushDrag();
+      steps.push(describeScroll(event));
+    } else {
+      flushDrag();
     }
   }
   flushTyped();
+  flushDrag();
 
   if (steps.length === 0) {
     steps.push("Repeat the demonstrated workflow using the same navigation pattern.");

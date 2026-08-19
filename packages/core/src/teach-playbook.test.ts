@@ -74,4 +74,26 @@ describe("buildPlaybookFromRecording", () => {
     expect(playbook.steps.join(" ")).toContain("[redacted input]");
     expect(playbook.steps.join(" ")).not.toContain("password");
   });
+
+  it("coalesces a press-and-release into a click and keeps a drag", () => {
+    const click = buildPlaybookFromRecording("Open", [
+      { at: "2026-01-01T00:00:00.000Z", kind: "pointer", x: 10, y: 20, type: "down" },
+      { at: "2026-01-01T00:00:00.050Z", kind: "pointer", x: 10, y: 20, type: "up" },
+    ]);
+    expect(click.steps).toEqual(["Click left button at (10, 20)."]);
+
+    const drag = buildPlaybookFromRecording("Move", [
+      { at: "2026-01-01T00:00:00.000Z", kind: "pointer", x: 10, y: 20, type: "down" },
+      { at: "2026-01-01T00:00:00.050Z", kind: "pointer", x: 80, y: 90, type: "move" },
+      { at: "2026-01-01T00:00:00.080Z", kind: "pointer", x: 80, y: 90, type: "up" },
+    ]);
+    expect(drag.steps).toEqual(["Drag left button from (10, 20) to (80, 90)."]);
+  });
+
+  it("records scroll steps from a demo", () => {
+    const playbook = buildPlaybookFromRecording("Scroll the list", [
+      { at: "2026-01-01T00:00:00.000Z", kind: "scroll", type: "down", text: "3" },
+    ]);
+    expect(playbook.steps).toEqual(["Scroll down 3 times."]);
+  });
 });

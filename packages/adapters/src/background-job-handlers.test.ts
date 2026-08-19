@@ -25,7 +25,6 @@ describe("createBackgroundJobHandlers", () => {
       jobs,
       events: {} as unknown as ThreadEvents,
       workerId: "worker-1",
-      dataDir: "/tmp",
       runtime,
       deploymentModelKey: "openrouter-key",
     });

@@ -25,7 +25,7 @@ export function TeachComputerSection({
   const [goalOpen, setGoalOpen] = useState(false);
   const [goal, setGoal] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
-  const busy = busyProp ?? localBusy;
+  const busy = Boolean(busyProp) || localBusy;
   const recording = useMemo(
     () => skills.find((skill) => skill.status === "recording") ?? null,
     [skills],
