@@ -4,7 +4,7 @@ import type {
   AgentRuntime,
   AgentRuntimeEvent,
 } from "@rakazo/adapter-kit";
-import { abortableDelay } from "@rakazo/core";
+import { abortableDelay, inferHandoffTargetName } from "@rakazo/core";
 
 const running = new Map<string, AbortController>();
 
@@ -225,9 +225,7 @@ export function inferScript(
     lower.includes("handoff to") ||
     (lower.includes("@writer") && lower.includes("draft"))
   ) {
-    const target = /(?:hand(?:\s+this|\s+off)?\s+to|@)\s*([A-Za-z0-9][A-Za-z0-9_-]{0,39})/i.exec(
-      prompt,
-    )?.[1];
+    const target = inferHandoffTargetName(prompt) ?? "Writer";
     return [
       {
         assistant: "handing this off in the group thread.",
@@ -235,7 +233,7 @@ export function inferScript(
           {
             name: "handoff_to_bot",
             args: {
-              confirm_name: target ?? "Writer",
+              confirm_name: target,
               message: prompt,
             },
           },

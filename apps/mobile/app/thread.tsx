@@ -1,5 +1,5 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
-import { abortableDelay, attachmentsForBot } from "@rakazo/core";
+import { abortableDelay, attachmentsForThread } from "@rakazo/core";
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AppState, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -24,7 +24,7 @@ import {
   takePhoto,
 } from "../lib/pick-attachments";
 
-type PendingAttachment = PickedAttachment & { botId: string };
+type PendingAttachment = PickedAttachment & { threadKey: string };
 
 export default function Thread() {
   const navigation = useNavigation();
@@ -49,26 +49,43 @@ export default function Thread() {
   const jumpScrollTarget = useRef<string | null>(null);
   const activeBotId = useRef(botId);
   activeBotId.current = botId;
+  const activeGroupId = useRef(groupId);
+  activeGroupId.current = groupId;
+  const threadKey = groupId ?? botId;
   const [snap, setSnap] = useState<MobileSnapshot | null>(null);
   const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [replyTarget, setReplyTarget] = useState<MobileMessage | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const activePendingAttachments = attachmentsForBot(pendingAttachments, botId);
+  const activePendingAttachments = attachmentsForThread(pendingAttachments, threadKey);
 
   useLayoutEffect(() => {
     navigation.setOptions({
       title: name || "Thread",
       headerRight: () =>
-        inGroup ? null : (
+        inGroup ? (
+          <Pressable
+            accessibilityLabel="Group settings"
+            hitSlop={8}
+            onPress={() =>
+              router.push({
+                pathname: "/group-settings",
+                params: { groupId: groupId ?? "" },
+              })
+            }
+          >
+            <NativeSymbol ios="gearshape" android="settings-outline" size={21} color="#ECECEE" />
+          </Pressable>
+        ) : (
           <Pressable accessibilityLabel="Bot actions" hitSlop={8} onPress={showBotActions}>
             <NativeSymbol ios="ellipsis" android="ellipsis-horizontal" size={21} color="#ECECEE" />
           </Pressable>
         ),
     });
-  }, [botId, name, navigation]);
+  }, [botId, groupId, inGroup, name, navigation, router]);
 
   function leaveBot() {
     router.dismissAll();
@@ -250,18 +267,19 @@ export default function Thread() {
   }, [botId, messageId]);
 
   useEffect(() => {
-    setPendingAttachments((current) => attachmentsForBot(current, botId));
+    setPendingAttachments((current) => attachmentsForThread(current, threadKey));
     setDraft("");
+    setReplyTarget(null);
     setAttachmentNotice(null);
     setError(null);
-  }, [botId]);
+  }, [threadKey]);
 
   async function send() {
     const targetBotId = botId;
     const targetGroupId = groupId;
     if ((!targetBotId && !targetGroupId) || sending) return;
     const uploadBotId = targetBotId ?? snap?.members?.[0]?.botId;
-    const attachments = attachmentsForBot(pendingAttachments, uploadBotId ?? groupId);
+    const attachments = attachmentsForThread(pendingAttachments, threadKey);
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     setSending(true);
@@ -285,18 +303,21 @@ export default function Thread() {
               groupId: targetGroupId,
               text: text || undefined,
               artifactIds: artifactIds.length ? artifactIds : undefined,
+              replyToMessageId: replyTarget?.id,
             }
           : {
               botId: targetBotId!,
               text: text || undefined,
               artifactIds: artifactIds.length ? artifactIds : undefined,
+              replyToMessageId: replyTarget?.id,
             },
       );
       setPendingAttachments((current) =>
-        current.filter((attachment) => attachment.botId !== (uploadBotId ?? groupId)),
+        current.filter((attachment) => attachment.threadKey !== threadKey),
       );
       if (activeBotId.current === targetBotId || groupId) {
         setDraft("");
+        setReplyTarget(null);
         setAttachmentNotice(null);
         await refresh();
       }
@@ -324,14 +345,14 @@ export default function Thread() {
       skipped: Array<{ name: string; reason: string }>;
     }>,
   ) {
-    const targetBotId = botId;
-    if (!targetBotId) return;
+    const targetKey = groupId ?? botId;
+    if (!targetKey) return;
     const result = await picker(activePendingAttachments.length);
-    if (activeBotId.current !== targetBotId) return;
+    if ((groupId ?? botId) !== targetKey) return;
     if (result.attachments.length) {
       setPendingAttachments((current) => [
         ...current,
-        ...result.attachments.map((attachment) => ({ ...attachment, botId: targetBotId })),
+        ...result.attachments.map((attachment) => ({ ...attachment, threadKey: targetKey })),
       ]);
     }
     setAttachmentNotice(
@@ -390,16 +411,67 @@ export default function Thread() {
               justifyContent: message.role === "user" ? "flex-end" : "flex-start",
             }}
           >
-            <MessageBubble
-              botId={botId ?? ""}
-              message={message}
-              onOpenBot={(id, botName) =>
-                router.push({ pathname: "/thread", params: { botId: id, name: botName } })
-              }
-            />
+            <View style={{ maxWidth: "90%", flexShrink: 1 }}>
+              {message.role !== "user" ? (
+                <Pressable
+                  accessibilityLabel="Reply"
+                  onPress={() => setReplyTarget(message)}
+                  style={{ alignSelf: "flex-start", marginBottom: 4 }}
+                >
+                  <Text style={{ color: "#6C6C70", fontSize: 12 }}>Reply</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  accessibilityLabel="Reply"
+                  onPress={() => setReplyTarget(message)}
+                  style={{ alignSelf: "flex-end", marginBottom: 4 }}
+                >
+                  <Text style={{ color: "#6C6C70", fontSize: 12 }}>Reply</Text>
+                </Pressable>
+              )}
+              <MessageBubble
+                botId={botId ?? snap?.members?.[0]?.botId ?? ""}
+                message={message}
+                members={snap?.members}
+                replyPreview={
+                  message.replyToMessageId
+                    ? snap?.messages.find((row) => row.id === message.replyToMessageId)
+                    : undefined
+                }
+                onOpenBot={(id, botName) =>
+                  router.push({ pathname: "/thread", params: { botId: id, name: botName } })
+                }
+              />
+            </View>
           </View>
         ))}
       </ScrollView>
+      {replyTarget ? (
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: "#26262A",
+            backgroundColor: "#17171A",
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#85858A", fontSize: 12 }}>Replying to</Text>
+            <Text style={{ color: "#C9C9CE", fontSize: 13 }} numberOfLines={1}>
+              {previewMessageText(replyTarget)}
+            </Text>
+          </View>
+          <Pressable accessibilityLabel="Cancel reply" onPress={() => setReplyTarget(null)}>
+            <Text style={{ color: "#85858A" }}>✕</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {attachmentNotice ? (
         <Text style={{ color: "#D6CFA0", marginTop: 12, fontSize: 13 }}>{attachmentNotice}</Text>
       ) : null}
@@ -494,27 +566,67 @@ export default function Thread() {
           <NativeSymbol ios="arrow.up" android="arrow-up" size={18} color="#17171A" />
         </Pressable>
       </View>
-      <Link
-        href={{ pathname: "/computer", params: { botId: botId ?? "", name: name ?? "Bot" } }}
-        asChild
-      >
-        <Pressable style={{ marginTop: 16 }}>
-          <Text style={{ color: "#C9C9CE" }}>Open computer →</Text>
-        </Pressable>
-      </Link>
+      {!inGroup ? (
+        <Link
+          href={{ pathname: "/computer", params: { botId: botId ?? "", name: name ?? "Bot" } }}
+          asChild
+        >
+          <Pressable style={{ marginTop: 16 }}>
+            <Text style={{ color: "#C9C9CE" }}>Open computer →</Text>
+          </Pressable>
+        </Link>
+      ) : null}
     </View>
   );
+}
+
+function previewMessageText(message: MobileMessage): string {
+  const text = message.blocks
+    .filter((block) => block.kind === "text" && block.text)
+    .map((block) => block.text)
+    .join(" ")
+    .trim();
+  if (text) return text;
+  if (message.blocks.some((block) => block.kind === "image" || block.kind === "file")) {
+    return "Attachment";
+  }
+  return "Message";
+}
+
+function memberName(
+  members: MobileSnapshot["members"] | undefined,
+  botId: string | undefined,
+): string | undefined {
+  if (!botId || !members) return undefined;
+  return members.find((member) => member.botId === botId)?.name;
 }
 
 function MessageBubble({
   botId,
   message,
+  members,
+  replyPreview,
   onOpenBot,
 }: {
   botId: string;
   message: MobileMessage;
+  members?: MobileSnapshot["members"];
+  replyPreview?: MobileMessage;
   onOpenBot: (botId: string, name: string) => void;
 }) {
+  const handoff = message.blocks.find((block) => block.kind === "handoff");
+  if (handoff) {
+    const from = memberName(members, handoff.fromBotId) ?? "bot";
+    const to = memberName(members, handoff.toBotId) ?? "bot";
+    return (
+      <View style={{ paddingVertical: 4 }}>
+        <Text style={{ color: "#85858A", fontSize: 13.5, textAlign: "center" }}>
+          ↪ {to} ← {from}
+          {handoff.text ? ` · ${handoff.text}` : ""}
+        </Text>
+      </View>
+    );
+  }
   const special = message.blocks.find(
     (block) => block.kind === "subagent" || block.kind === "child_bot",
   );
@@ -603,10 +715,11 @@ function MessageBubble({
     .map((block) => block.text)
     .join("\n");
   if (attachments.length > 0) {
+    const speaker = message.role === "bot" ? memberName(members, message.botId) : undefined;
     return (
       <View
         style={{
-          maxWidth: "85%",
+          maxWidth: "100%",
           borderRadius: 20,
           borderWidth: 1,
           borderColor: "#26262A",
@@ -616,6 +729,14 @@ function MessageBubble({
           gap: 8,
         }}
       >
+        {speaker ? (
+          <Text style={{ color: "#85858A", fontSize: 12.5, fontWeight: "600" }}>{speaker}</Text>
+        ) : null}
+        {replyPreview ? (
+          <Text style={{ color: "#85858A", fontSize: 12.5 }} numberOfLines={2}>
+            {previewMessageText(replyPreview)}
+          </Text>
+        ) : null}
         {caption ? (
           <Text style={{ color: message.role === "user" ? "#1A1A1A" : "#DFDFE2", fontSize: 15 }}>
             {caption}
@@ -682,17 +803,28 @@ function MessageBubble({
       </View>
     );
   }
+  const speaker = message.role === "bot" ? memberName(members, message.botId) : undefined;
   return (
     <View
       style={{
         flexShrink: 1,
         minWidth: 0,
-        maxWidth: "85%",
+        maxWidth: "100%",
         backgroundColor: message.role === "user" ? "#F1F1EF" : "#1A1A1D",
         padding: 12,
         borderRadius: 20,
       }}
     >
+      {speaker ? (
+        <Text style={{ color: "#85858A", fontSize: 12.5, fontWeight: "600", marginBottom: 4 }}>
+          {speaker}
+        </Text>
+      ) : null}
+      {replyPreview ? (
+        <Text style={{ color: "#85858A", fontSize: 12.5, marginBottom: 6 }} numberOfLines={2}>
+          {previewMessageText(replyPreview)}
+        </Text>
+      ) : null}
       {message.role === "user" ? (
         <Text style={{ color: "#1A1A1A", fontSize: 15.5, lineHeight: 23 }}>
           {blockText(message)}

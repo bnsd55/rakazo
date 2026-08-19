@@ -35,6 +35,7 @@ test("create group from + and see two bots in one transcript", async ({ page }) 
   await expect(page.getByTestId("transcript")).toContainText(/handled|on it|gather/i, {
     timeout: 60_000,
   });
-  await expect(page.getByText("Researcher").first()).toBeVisible();
-  await expect(page.getByText("Writer").first()).toBeVisible();
+  const transcript = page.getByTestId("transcript");
+  await expect(transcript.getByText("Researcher", { exact: true }).first()).toBeVisible();
+  await expect(transcript.getByText("Writer", { exact: true }).first()).toBeVisible();
 });

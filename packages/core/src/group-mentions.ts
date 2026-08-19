@@ -46,6 +46,13 @@ export function resolveGroupTargetBotIds(input: {
   return [...targetIds];
 }
 
+export function inferHandoffTargetName(prompt: string): string | undefined {
+  const handoffMatch =
+    /hand(?:\s+this|\s+off|\s+it)?\s+to\s+@?([A-Za-z0-9][A-Za-z0-9_-]{0,39})/i.exec(prompt) ??
+    /@([A-Za-z0-9][A-Za-z0-9_-]{0,39})\s+take/i.exec(prompt);
+  return handoffMatch?.[1];
+}
+
 export function inferHandoffTargetBotId(
   prompt: string,
   members: GroupMemberRef[],
@@ -54,10 +61,7 @@ export function inferHandoffTargetBotId(
   if (lower.includes("@writer")) {
     return members.find((member) => member.name.toLowerCase() === "writer")?.id;
   }
-  const handoffMatch =
-    /hand(?:\s+this|\s+off|\s+it)?\s+to\s+@?([A-Za-z0-9][A-Za-z0-9_-]{0,39})/i.exec(prompt) ??
-    /@([A-Za-z0-9][A-Za-z0-9_-]{0,39})\s+take/i.exec(prompt);
-  const name = handoffMatch?.[1]?.toLowerCase();
+  const name = inferHandoffTargetName(prompt)?.toLowerCase();
   if (!name) return undefined;
   return members.find((member) => member.name.toLowerCase() === name)?.id;
 }

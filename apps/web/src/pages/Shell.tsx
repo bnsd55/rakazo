@@ -19,6 +19,7 @@ import {
 import {
   abortableDelay,
   attachmentsForBot,
+  attachmentsForThread,
   cronFromPreset,
   defaultCronPreset,
   formatCron,
@@ -78,7 +79,7 @@ type Panel = "computer" | "settings" | "routine" | "create" | "create-group" | "
 
 type PendingAttachment = {
   id: string;
-  botId: string;
+  threadKey: string;
   file: File;
   previewUrl?: string;
 };
@@ -99,6 +100,7 @@ export function ShellPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [replyTarget, setReplyTarget] = useState<ThreadMessage | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
@@ -158,7 +160,7 @@ export function ShellPage() {
   const activeGroup = groups.find((group) => group.id === groupId);
   const inGroup = Boolean(groupId);
   const activePendingAttachments = useMemo(
-    () => attachmentsForBot(pendingAttachments, inGroup ? groupId : active?.id),
+    () => attachmentsForThread(pendingAttachments, inGroup ? groupId : active?.id),
     [active?.id, groupId, inGroup, pendingAttachments],
   );
   const activeRoutines = !inGroup && routinesBotId === active?.id ? routines : [];
@@ -683,9 +685,9 @@ export function ShellPage() {
   }, []);
   const onAttachmentPick = useCallback(
     async (files: FileList | null) => {
-      const id = activeBotId.current;
-      if (!id || !files?.length) return;
-      const existing = attachmentsForBot(pendingAttachments, id);
+      const threadKey = activeGroupId.current ?? activeBotId.current;
+      if (!threadKey || !files?.length) return;
+      const existing = attachmentsForThread(pendingAttachments, threadKey);
       const next: PendingAttachment[] = [];
       const skipped: string[] = [];
       for (const file of Array.from(files)) {
@@ -704,7 +706,7 @@ export function ShellPage() {
         }
         next.push({
           id: `${file.name}-${file.size}-${file.lastModified}-${next.length}`,
-          botId: id,
+          threadKey,
           file,
           previewUrl: mimeType.startsWith("image/") ? URL.createObjectURL(file) : undefined,
         });
@@ -724,7 +726,7 @@ export function ShellPage() {
       const botTarget = activeBotId.current;
       const groupTarget = activeGroupId.current;
       if ((!botTarget && !groupTarget) || sending) return;
-      const attachments = attachmentsForBot(
+      const attachments = attachmentsForThread(
         pendingAttachments,
         groupTarget ?? botTarget,
       );
@@ -758,18 +760,21 @@ export function ShellPage() {
             groupId: groupTarget,
             text: trimmed || undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
+            replyToMessageId: replyTarget?.id,
           });
         } else if (botTarget) {
           await rpc.threads.send({
             botId: botTarget,
             text: trimmed || undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
+            replyToMessageId: replyTarget?.id,
           });
         }
+        setReplyTarget(null);
         revokePendingAttachmentPreviews(attachments);
         setPendingAttachments((current) =>
           current.filter(
-            (attachment) => attachment.botId !== (groupTarget ?? botTarget),
+            (attachment) => attachment.threadKey !== (groupTarget ?? botTarget),
           ),
         );
         if (groupTarget && activeGroupId.current === groupTarget) setAttachmentNotice(null);
@@ -786,7 +791,7 @@ export function ShellPage() {
         setSending(false);
       }
     },
-    [activeGroup?.members, pendingAttachments, sending, snapshot?.members],
+    [activeGroup?.members, pendingAttachments, replyTarget?.id, sending, snapshot?.members],
   );
   const stopRun = useCallback(async () => {
     const botTarget = activeBotId.current;
@@ -878,14 +883,16 @@ export function ShellPage() {
   }, [active?.id]);
 
   useEffect(() => {
+    const threadKey = inGroup ? groupId : active?.id;
     setPendingAttachments((current) => {
-      const stale = current.filter((attachment) => attachment.botId !== active?.id);
+      const stale = current.filter((attachment) => attachment.threadKey !== threadKey);
       revokePendingAttachmentPreviews(stale);
-      return attachmentsForBot(current, active?.id);
+      return attachmentsForThread(current, threadKey);
     });
+    setReplyTarget(null);
     setAttachmentNotice(null);
     setSendError(null);
-  }, [active?.id]);
+  }, [active?.id, groupId, inGroup]);
 
   useEffect(() => {
     if (!computerOpen) return;
@@ -1250,6 +1257,7 @@ export function ShellPage() {
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
           onAnswer={answerMessage}
+          onReply={setReplyTarget}
           memberName={(botId) => memberName(snapshot?.members ?? activeGroup?.members, botId)}
         />
         <Composer
@@ -1264,6 +1272,14 @@ export function ShellPage() {
           onRemoveAttachment={removeAttachment}
           onSend={sendMessage}
           onStop={stopRun}
+          replyTarget={replyTarget}
+          onClearReply={() => setReplyTarget(null)}
+          mentionMembers={
+            inGroup ? (snapshot?.members ?? activeGroup?.members)?.map((member) => ({
+              botId: member.botId,
+              name: member.name,
+            })) : undefined
+          }
         />
       </main>
 
@@ -1754,6 +1770,7 @@ const Transcript = memo(function Transcript({
   onLoadOlder,
   onOpenBot,
   onAnswer,
+  onReply,
   memberName,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -1766,8 +1783,13 @@ const Transcript = memo(function Transcript({
   onLoadOlder: () => void | Promise<void>;
   onOpenBot: (botId: string) => void;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
+  onReply: (message: ThreadMessage) => void;
   memberName?: (botId: string | undefined) => string | undefined;
 }) {
+  const messageById = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages],
+  );
   return (
     <div
       ref={scrollRef}
@@ -1785,7 +1807,15 @@ const Transcript = memo(function Transcript({
         </button>
       ) : null}
       {messages.map((message) => (
-        <div key={message.id} data-message-id={message.id}>
+        <div key={message.id} data-message-id={message.id} className="group/message relative">
+          <button
+            type="button"
+            aria-label="Reply"
+            onClick={() => onReply(message)}
+            className="absolute right-0 top-0 hidden rounded px-2 py-1 text-[12px] text-[#85858A] group-hover/message:block hover:text-[#ECECEE]"
+          >
+            Reply
+          </button>
           <MessageView
             botId={botId}
             message={message}
@@ -1794,6 +1824,12 @@ const Transcript = memo(function Transcript({
             onAnswer={onAnswer}
             speakerName={
               message.role === "bot" ? memberName?.(message.botId) : undefined
+            }
+            memberName={memberName}
+            replyPreview={
+              message.replyToMessageId
+                ? messageById.get(message.replyToMessageId)
+                : undefined
             }
           />
         </div>
@@ -1824,6 +1860,9 @@ const Composer = memo(function Composer({
   onRemoveAttachment,
   onSend,
   onStop,
+  replyTarget,
+  onClearReply,
+  mentionMembers,
 }: {
   activeName?: string;
   running: boolean;
@@ -1836,14 +1875,42 @@ const Composer = memo(function Composer({
   onRemoveAttachment: (attachment: PendingAttachment) => void;
   onSend: (text: string) => Promise<void>;
   onStop: () => Promise<void>;
+  replyTarget?: ThreadMessage | null;
+  onClearReply?: () => void;
+  mentionMembers?: Array<{ botId: string; name: string }>;
 }) {
   const [draft, setDraft] = useState("");
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const canSend = draft.trim().length > 0 || pendingAttachments.length > 0;
+
+  function updateDraft(value: string) {
+    setDraft(value);
+    const match = /(?:^|\s)@([\w-]*)$/.exec(value);
+    setMentionQuery(match ? (match[1] ?? "") : null);
+  }
+
+  function insertMention(name: string) {
+    setDraft((current) => current.replace(/@([\w-]*)$/, `@${name} `));
+    setMentionQuery(null);
+  }
+
+  const mentionOptions = useMemo(() => {
+    if (mentionQuery === null || !mentionMembers?.length) return [];
+    const query = mentionQuery.toLowerCase();
+    const options = mentionMembers.filter((member) =>
+      member.name.toLowerCase().startsWith(query),
+    );
+    if ("everyone".startsWith(query)) {
+      options.unshift({ botId: "everyone", name: "everyone" });
+    }
+    return options.slice(0, 8);
+  }, [mentionMembers, mentionQuery]);
 
   function send() {
     if (!canSend || sending) return;
     const text = draft;
     setDraft("");
+    setMentionQuery(null);
     void onSend(text);
   }
 
@@ -1852,6 +1919,17 @@ const Composer = memo(function Composer({
       {sendError ? (
         <div className="mb-3 rounded-[14px] border border-[#5A2A2A] bg-[#2A1717] px-4 py-2 text-[13px] text-[#F1A8A8]">
           {sendError}
+        </div>
+      ) : null}
+      {replyTarget ? (
+        <div className="mb-3 flex items-start justify-between gap-3 rounded-[14px] border border-[#26262A] bg-[#17171A] px-4 py-2 text-[13px] text-[#C9C9CE]">
+          <div className="min-w-0">
+            <div className="text-[#85858A]">Replying to</div>
+            <div className="truncate">{previewMessageText(replyTarget)}</div>
+          </div>
+          <button type="button" aria-label="Cancel reply" onClick={onClearReply} className="text-[#85858A]">
+            ✕
+          </button>
         </div>
       ) : null}
       {attachmentNotice ? (
@@ -1888,6 +1966,23 @@ const Composer = memo(function Composer({
           ))}
         </div>
       ) : null}
+      {mentionOptions.length ? (
+        <div className="mb-2 overflow-hidden rounded-[14px] border border-[#26262A] bg-[#17171A]">
+          {mentionOptions.map((member) => (
+            <button
+              key={member.botId}
+              type="button"
+              onClick={() => insertMention(member.name)}
+              className="block w-full px-4 py-2 text-left text-[14px] text-[#ECECEE] hover:bg-[#1F1F22]"
+            >
+              @{member.name}
+            </button>
+          ))}
+          <div className="border-t border-[#26262A] px-4 py-2 text-[12px] text-[#6C6C70]">
+            @everyone notifies all members — use sparingly.
+          </div>
+        </div>
+      ) : null}
       <div className="flex items-center gap-3.5 rounded-full border border-[#202023] bg-[#131315] py-[9px] pr-2.5 pl-3">
         <input
           ref={fileInputRef}
@@ -1907,7 +2002,7 @@ const Composer = memo(function Composer({
         </button>
         <input
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => updateDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -1941,6 +2036,19 @@ const Composer = memo(function Composer({
     </div>
   );
 });
+
+function previewMessageText(message: ThreadMessage): string {
+  const text = message.blocks
+    .map((block) => (block.kind === "text" ? block.text : ""))
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (text) return text;
+  if (message.blocks.some((block) => block.kind === "image" || block.kind === "file")) {
+    return "Attachment";
+  }
+  return "Message";
+}
 
 function applyThreadEvent(
   event: ProductEvent,
@@ -1980,6 +2088,8 @@ const MessageView = memo(function MessageView({
   onAnswer,
   onOpenBot,
   speakerName,
+  memberName,
+  replyPreview,
 }: {
   botId: string;
   canAnswer: boolean;
@@ -1987,20 +2097,29 @@ const MessageView = memo(function MessageView({
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
   speakerName?: string;
+  memberName?: (botId: string | undefined) => string | undefined;
+  replyPreview?: ThreadMessage;
 }) {
   return (
     <>
       {speakerName ? (
         <div className="mb-1 text-[12.5px] font-medium text-[#85858A]">{speakerName}</div>
       ) : null}
+      {replyPreview ? (
+        <div className="mb-2 max-w-[74%] rounded-[14px] border border-[#26262A] bg-[#131315] px-3 py-2 text-[12.5px] text-[#85858A]">
+          {previewMessageText(replyPreview)}
+        </div>
+      ) : null}
       {message.blocks.map((block, i) => {
         if (block.kind === "handoff") {
+          const from = memberName?.(block.fromBotId) ?? "bot";
+          const to = memberName?.(block.toBotId) ?? "bot";
           return (
             <div
               key={i}
               className="flex items-center justify-center gap-2 py-1 text-[13.5px] text-[#85858A]"
             >
-              <span>↪ handoff</span>
+              <span>↪ {to} ← {from}</span>
               <span>{block.text}</span>
             </div>
           );

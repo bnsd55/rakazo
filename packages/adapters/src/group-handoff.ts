@@ -23,8 +23,8 @@ export async function handoffToGroupBot(
   });
   let targetId = input.bot_id?.trim();
   if (!targetId && input.confirm_name?.trim()) {
-    const name = input.confirm_name.trim();
-    targetId = members.find((member) => member.bot.name === name)?.bot.id;
+    const name = input.confirm_name.trim().toLowerCase();
+    targetId = members.find((member) => member.bot.name.toLowerCase() === name)?.bot.id;
   }
   if (!targetId) return { error: "handoff target bot is required" };
   if (targetId === run.botId) return { error: "cannot hand off to yourself" };

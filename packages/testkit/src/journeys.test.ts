@@ -1069,13 +1069,17 @@ describeJourneys("required product journeys", () => {
     expect(runsAfterMention.some((run) => run.botId === botA.id)).toBe(true);
     expect(runsAfterMention.some((run) => run.botId === botB.id)).toBe(true);
 
-    await sendGroupAndWait(app, ada, group.id, "hello team");
-    const soloRuns = await prisma.run.findMany({
-      where: { threadId: group.threadId, trigger: "user" },
-      orderBy: { createdAt: "desc" },
-      take: 1,
-    });
-    expect(soloRuns).toHaveLength(1);
+    const countUserRuns = async (botId: string) =>
+      prisma.run.count({
+        where: { threadId: group.threadId, trigger: "user", botId },
+      });
+    const botABefore = await countUserRuns(botA.id);
+    const botBBefore = await countUserRuns(botB.id);
+    const botCBefore = await countUserRuns(botC.id);
+    await sendGroupAndWait(app, ada, group.id, "hello team", botA.id);
+    expect(await countUserRuns(botA.id)).toBe(botABefore + 1);
+    expect(await countUserRuns(botB.id)).toBe(botBBefore);
+    expect(await countUserRuns(botC.id)).toBe(botCBefore);
 
     await sendGroupAndWait(
       app,

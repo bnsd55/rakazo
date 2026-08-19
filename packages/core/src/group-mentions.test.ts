@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { inferHandoffTargetBotId, resolveGroupTargetBotIds } from "./group-mentions.js";
+import {
+  inferHandoffTargetBotId,
+  inferHandoffTargetName,
+  resolveGroupTargetBotIds,
+} from "./group-mentions.js";
 
 const members = [
   { id: "a", name: "BotA" },
@@ -46,6 +50,12 @@ describe("resolveGroupTargetBotIds", () => {
   });
 });
 
+describe("inferHandoffTargetName", () => {
+  it("picks Writer when BotA is also mentioned", () => {
+    expect(inferHandoffTargetName("@BotA hand this to Writer for the draft")).toBe("Writer");
+  });
+});
+
 describe("inferHandoffTargetBotId", () => {
   it("recognizes hand this to Writer", () => {
     expect(inferHandoffTargetBotId("hand this to Writer for the draft", members)).toBe("c");
@@ -53,5 +63,9 @@ describe("inferHandoffTargetBotId", () => {
 
   it("recognizes @Writer take the draft", () => {
     expect(inferHandoffTargetBotId("@Writer take the draft", members)).toBe("c");
+  });
+
+  it("resolves Writer from mixed mention prompt", () => {
+    expect(inferHandoffTargetBotId("@BotA hand this to Writer for the draft", members)).toBe("c");
   });
 });
