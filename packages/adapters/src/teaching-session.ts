@@ -460,9 +460,9 @@ export async function recordTeachingInputEvent(
   });
   const appended =
     parseRecording(updated.recording).events.length > parseRecording(skill.recording).events.length;
-  if (updated.expiresAt && updated.expiresAt.getTime() <= Date.now()) {
+  if (!appended && updated.expiresAt && updated.expiresAt.getTime() <= Date.now()) {
     await expireTaughtSkillTeaching(deps, updated.id);
-    return appended ? "recorded" : "stale";
+    return "stale";
   }
   return updated.status === "recording" ? "recorded" : "stale";
 }
