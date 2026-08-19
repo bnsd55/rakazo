@@ -241,7 +241,7 @@ describe("recordTeachingInputEvent", () => {
     expect(current().recording.events).toHaveLength(0);
   });
 
-  it("persists the recording before applying input to the sandbox", async () => {
+  it("applies input before persisting the recording", async () => {
     const { deps, current, tx } = recordingDeps(skillRow());
     const computer = {
       id: "computer-1",
@@ -270,8 +270,36 @@ describe("recordTeachingInputEvent", () => {
         { kind: "pointer", x: 12, y: 40, button: "left", type: "click" },
       ),
     ).resolves.toBe("recorded");
-    expect(order).toEqual(["persist", "send"]);
+    expect(order).toEqual(["send", "persist"]);
     expect(current().recording.events).toHaveLength(1);
+  });
+
+  it("does not persist an event when sandbox input fails", async () => {
+    const { deps, current, tx } = recordingDeps(skillRow());
+    tx.bot.findUnique = vi.fn(async () => ({
+      id: "bot-1",
+      computer: {
+        id: "computer-1",
+        homeKey: "bot-1",
+        kind: "e2b",
+        providerRef: "box-1",
+        controlHolder: "user",
+        controlBotId: "bot-1",
+        controlLeaseId: "lease-1",
+      },
+    }));
+    deps.sandbox.sendInput = vi.fn(async () => {
+      throw new Error("sandbox unavailable");
+    });
+    await expect(
+      recordTeachingInputEvent(
+        deps as never,
+        { workspaceId: "workspace-1", userId: "user-1" } as never,
+        "bot-1",
+        { kind: "key", key: "x" },
+      ),
+    ).rejects.toThrow("sandbox unavailable");
+    expect(current().recording.events).toHaveLength(0);
   });
 });
 

@@ -538,42 +538,62 @@ export async function recordTeachingInputEvent(
               type: mapped.type,
             }),
   };
-  const outcome = await deps.prisma.$transaction(async (tx) => {
+  const prepared = await deps.prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
     const current = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skill.id } });
-    if (current.status !== "recording") return { status: "stale" as const, computer: null };
+    if (current.status !== "recording") return { kind: "stale" as const };
     if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) {
-      return { status: "expired" as const, computer: null };
+      return { kind: "expired" as const };
     }
     const recording = parseRecording(current.recording);
     if (
-      !recording.events.some((existing) => recordingEventKey(existing) === recordingEventKey(event))
+      recording.events.some((existing) => recordingEventKey(existing) === recordingEventKey(event))
     ) {
-      recording.events.push(event);
-      await tx.taughtSkill.update({
-        where: { id: skill.id },
-        data: { recording: recording as never },
-      });
+      return { kind: "duplicate" as const };
     }
     const bot = await tx.bot.findUnique({
       where: { id: botId },
       include: { computer: true },
     });
-    return { status: "recorded" as const, computer: bot?.computer ?? null };
+    return { kind: "ready" as const, computer: bot?.computer ?? null };
   });
-  if (outcome.status === "expired") {
+  if (prepared.kind === "expired") {
     await expireTaughtSkillTeaching(deps, skill.id);
     return "stale";
   }
-  if (outcome.status === "recorded" && outcome.computer?.providerRef) {
+  if (prepared.kind === "stale") return "stale";
+  if (prepared.kind === "duplicate") return "recorded";
+  if (prepared.computer?.providerRef) {
     await applyTeachingDesktopInput(
       deps.sandbox,
-      outcome.computer,
+      prepared.computer,
       mapped,
       computerContext(actor, botId, "input"),
     );
   }
-  return outcome.status;
+  const recorded = await deps.prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
+    const current = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skill.id } });
+    if (current.status !== "recording") return "stale" as const;
+    if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) return "expired" as const;
+    const recording = parseRecording(current.recording);
+    if (
+      recording.events.some((existing) => recordingEventKey(existing) === recordingEventKey(event))
+    ) {
+      return "recorded" as const;
+    }
+    recording.events.push(event);
+    await tx.taughtSkill.update({
+      where: { id: skill.id },
+      data: { recording: recording as never },
+    });
+    return "recorded" as const;
+  });
+  if (recorded === "expired") {
+    await expireTaughtSkillTeaching(deps, skill.id);
+    return "stale";
+  }
+  return recorded;
 }
 
 export async function captureTeachingSnapshot(
