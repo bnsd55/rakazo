@@ -18,6 +18,7 @@ const payloadSchemas = {
     leaseId: z.string().min(1),
   }),
   "skill.teaching-expire": z.object({ skillId: z.string().min(1) }),
+  "history.compact": z.object({ threadId: z.string().min(1) }),
 } satisfies { [Name in BackgroundJobName]: z.ZodType<BackgroundJobPayloads[Name]> };
 
 export function parseBackgroundJob(name: string, payload: unknown): BackgroundJob {
@@ -102,5 +103,17 @@ export function skillTeachingExpireJob(skillId: string, availableAt: Date): Back
     payload: { skillId },
     availableAt,
     replaceKey: skillTeachingExpireJobKey(skillId),
+  };
+}
+
+export function historyCompactJobKey(threadId: string): string {
+  return `history.compact:${threadId}`;
+}
+
+export function historyCompactJob(threadId: string): BackgroundJob {
+  return {
+    name: "history.compact",
+    payload: { threadId },
+    replaceKey: historyCompactJobKey(threadId),
   };
 }

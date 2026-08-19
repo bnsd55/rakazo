@@ -133,6 +133,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["usage/summary"],
       ["export/bot", { botId: "missing-bot" }],
       ["notifications/registerPush", { token: "ExponentPushToken[not-real]" }],
+      ["search/query", { q: "anything" }],
     ]);
 
     const results = await Promise.all(
@@ -200,7 +201,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
         content: "owner-only-memory",
       },
     });
-    await handles.prisma.artifact.create({
+    const ownerArtifact = await handles.prisma.artifact.create({
       data: {
         workspaceId: ownerActor.workspaceId,
         userId: ownerActor.userId,
@@ -247,6 +248,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["threads/messages", { botId: ownerBot.id, before: 1 }],
       ["threads/subscribe", { botId: ownerBot.id, cursor: -1 }],
       ["threads/send", { botId: ownerBot.id, text: "intruder message" }],
+      ["threads/send", { botId: ownerBot.id, artifactIds: [ownerArtifact.id] }],
       ["threads/stop", { botId: ownerBot.id }],
       ["threads/followUp", { botId: ownerBot.id, text: "intruder follow-up" }],
       [
@@ -275,6 +277,16 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["skills/list", { botId: ownerBot.id }],
       ["skills/start", { botId: ownerBot.id, goal: "Intruder demo" }],
       ["artifacts/list", { botId: ownerBot.id }],
+      [
+        "artifacts/create",
+        {
+          botId: ownerBot.id,
+          name: "intruder.txt",
+          mimeType: "text/plain",
+          contentBase64: Buffer.from("nope").toString("base64"),
+        },
+      ],
+      ["artifacts/get", { botId: ownerBot.id, artifactId: ownerArtifact.id }],
       ["export/bot", { botId: ownerBot.id }],
     ];
     await Promise.all(
@@ -321,6 +333,9 @@ describeWithDatabase("API authorization and resource isolation", () => {
     expect(await rpc<Array<{ id: string }>>(app, intruder, "connections/list")).not.toContainEqual(
       expect.objectContaining({ id: ownerConnection.connectionId }),
     );
+    expect(
+      await rpc<{ hits: unknown[] }>(app, intruder, "search/query", { q: ownerBot.name }),
+    ).toEqual({ hits: [] });
 
     // These endpoints are deliberately idempotent for unknown IDs. Success must not mutate
     // a row in a different workspace or disclose whether it exists.

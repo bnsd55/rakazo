@@ -241,6 +241,11 @@ export interface AgentRunRequest {
   prompt: string;
   instructions: string;
   history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  currentTurnImages?: Array<{
+    name: string;
+    mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+    data: Uint8Array;
+  }>;
   tools: ConnectorTool[];
   model: {
     provider: string;
@@ -303,6 +308,7 @@ export interface BackgroundJobPayloads {
   "computer.sleep": { computerId: string };
   "computer.control-expire": { computerId: string; leaseId: string };
   "skill.teaching-expire": { skillId: string };
+  "history.compact": { threadId: string };
 }
 
 export type BackgroundJobName = keyof BackgroundJobPayloads;
