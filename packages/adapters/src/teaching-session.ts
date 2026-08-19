@@ -458,9 +458,11 @@ export async function recordTeachingInputEvent(
             type: mapped.type,
           }),
   });
+  const appended =
+    parseRecording(updated.recording).events.length > parseRecording(skill.recording).events.length;
   if (updated.expiresAt && updated.expiresAt.getTime() <= Date.now()) {
     await expireTaughtSkillTeaching(deps, updated.id);
-    return "stale";
+    return appended ? "recorded" : "stale";
   }
   return updated.status === "recording" ? "recorded" : "stale";
 }
