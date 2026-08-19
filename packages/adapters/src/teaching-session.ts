@@ -141,6 +141,9 @@ async function mutateRecording(
     if (options?.requireRecording !== false && skill.status !== "recording") {
       return skill;
     }
+    if (skill.expiresAt && skill.expiresAt.getTime() <= Date.now()) {
+      return skill;
+    }
     const current = parseRecording(skill.recording);
     const next = mutate(current);
     if (!next.changed) return skill;
@@ -455,6 +458,10 @@ export async function recordTeachingInputEvent(
             type: mapped.type,
           }),
   });
+  if (updated.expiresAt && updated.expiresAt.getTime() <= Date.now()) {
+    await expireTaughtSkillTeaching(deps, updated.id);
+    return "stale";
+  }
   return updated.status === "recording" ? "recorded" : "stale";
 }
 
