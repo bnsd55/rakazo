@@ -178,6 +178,9 @@ export type MobileMessage = {
     title?: string;
     agentId?: string;
     actions?: Array<{ id: string; label: string }>;
+    artifactId?: string;
+    mimeType?: string;
+    size?: number;
   }>;
 };
 
@@ -222,6 +225,10 @@ export function blockText(message: MobileMessage) {
       }
       if (block.kind === "child_bot") {
         return `${block.status === "archived" ? "Archived" : block.status === "deleted" ? "Deleted" : "Bot"} ${block.name ?? ""}`;
+      }
+      if (block.kind === "image") return `[image: ${block.name ?? "attachment"}]`;
+      if (block.kind === "file") {
+        return `[file: ${block.name ?? "attachment"}${block.size ? ` (${block.size} bytes)` : ""}]`;
       }
       return block.text ?? block.state ?? "";
     })
