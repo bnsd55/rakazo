@@ -437,6 +437,10 @@ export async function recordTeachingInputEvent(
 ): Promise<"recorded" | "idle" | "stale"> {
   const skill = await getActiveTeachingSession(deps.prisma, actor.workspaceId, botId, actor.userId);
   if (!skill) return "idle";
+  if (skill.expiresAt && skill.expiresAt.getTime() <= Date.now()) {
+    await expireTaughtSkillTeaching(deps, skill.id);
+    return "stale";
+  }
   const updated = await appendRecordingEvent(deps, skill.id, {
     at: new Date().toISOString(),
     kind: mapped.kind,

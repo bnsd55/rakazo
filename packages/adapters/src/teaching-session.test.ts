@@ -147,4 +147,16 @@ describe("recordTeachingInputEvent", () => {
     );
     expect(recorded).toBe("stale");
   });
+
+  it("rejects input after the recording window", async () => {
+    const { deps, current } = recordingDeps(skillRow({ expiresAt: new Date(Date.now() - 1000) }));
+    const outcome = await recordTeachingInputEvent(
+      deps as never,
+      { workspaceId: "workspace-1", userId: "user-1" } as never,
+      "bot-1",
+      { kind: "key", key: "x" },
+    );
+    expect(outcome).toBe("stale");
+    expect(current().recording.events).toHaveLength(0);
+  });
 });
