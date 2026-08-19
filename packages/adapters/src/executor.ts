@@ -64,6 +64,7 @@ import {
 } from "./pi-oauth.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
+import { getActiveTeachingSession } from "./teaching-session.js";
 
 const modelCredentialLocks = new Map<string, Promise<void>>();
 const READ_ONLY_AGENT_TOOLS = new Set([
@@ -266,42 +267,30 @@ export function createRunExecutor(deps: ExecutorDeps) {
 
       const runSecrets = [...deps.secrets];
       try {
-        const [
-          bot,
-          thread,
-          messages,
-          task,
-          connectedPlugins,
-          credential,
-          settings,
-          savedSkills,
-          teachingSession,
-        ] = await Promise.all([
-          deps.prisma.bot.findUniqueOrThrow({
-            where: { id: run.botId },
-            include: { computer: true },
-          }),
-          deps.prisma.thread.findUniqueOrThrow({ where: { id: run.threadId } }),
-          deps.prisma.message.findMany({
-            where: { threadId: run.threadId },
-            orderBy: { seq: "desc" },
-            take: MAX_AGENT_HISTORY_MESSAGES,
-            select: { role: true, blocks: true },
-          }),
-          deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
-          deps.prisma.connection.findMany({
-            where: { userId: run.userId, workspaceId: run.workspaceId, status: "connected" },
-            select: { provider: true, displayName: true },
-          }),
-          findDefaultModelCredential(deps.prisma, run),
-          deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
-          deps.prisma.taughtSkill.findMany({
-            where: { botId: run.botId, workspaceId: run.workspaceId, status: "saved" },
-          }),
-          deps.prisma.taughtSkill.findFirst({
-            where: { botId: run.botId, workspaceId: run.workspaceId, status: "recording" },
-          }),
-        ]);
+        const [bot, thread, messages, task, connectedPlugins, credential, settings, savedSkills] =
+          await Promise.all([
+            deps.prisma.bot.findUniqueOrThrow({
+              where: { id: run.botId },
+              include: { computer: true },
+            }),
+            deps.prisma.thread.findUniqueOrThrow({ where: { id: run.threadId } }),
+            deps.prisma.message.findMany({
+              where: { threadId: run.threadId },
+              orderBy: { seq: "desc" },
+              take: MAX_AGENT_HISTORY_MESSAGES,
+              select: { role: true, blocks: true },
+            }),
+            deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
+            deps.prisma.connection.findMany({
+              where: { userId: run.userId, workspaceId: run.workspaceId, status: "connected" },
+              select: { provider: true, displayName: true },
+            }),
+            findDefaultModelCredential(deps.prisma, run),
+            deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
+            deps.prisma.taughtSkill.findMany({
+              where: { botId: run.botId, workspaceId: run.workspaceId, status: "saved" },
+            }),
+          ]);
         runAbortController = new AbortController();
         if (!leaseValid) runAbortController.abort();
         const context = {
@@ -407,7 +396,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             return result;
           };
           if (name === "computer_observe") {
-            if (teachingSession) {
+            if (await getActiveTeachingSession(deps.prisma, run.workspaceId, run.botId)) {
               return { error: "Teaching is in progress. Stop teaching before using the computer." };
             }
             return computerScreenToolResult(async () =>
@@ -415,7 +404,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             );
           }
           if (name === "computer_act") {
-            if (teachingSession) {
+            if (await getActiveTeachingSession(deps.prisma, run.workspaceId, run.botId)) {
               return { error: "Teaching is in progress. Stop teaching before using the computer." };
             }
             return computerScreenToolResult(async () => {
