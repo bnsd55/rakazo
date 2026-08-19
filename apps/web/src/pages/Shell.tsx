@@ -781,6 +781,29 @@ export function ShellPage() {
       setTeachBusy(false);
     }
   }, [teachBusy, taughtSkills, taughtSkillsBotId]);
+  // Transcript and MessageView are memoized; these must stay referentially stable or every
+  // Shell state change re-renders the whole transcript.
+  const refreshActiveThread = useCallback(async () => {
+    const id = activeBotId.current;
+    if (!id) return;
+    await refreshThreadRef.current(id);
+  }, []);
+  const addSkillRoutine = useCallback((name: string, prompt: string) => {
+    setRoutineDraft({ name, prompt, schedule: defaultCronPreset() });
+    setEditingRoutine(null);
+    setPanel("routine");
+  }, []);
+  const speakingMessageIdRef = useRef(speakingMessageId);
+  speakingMessageIdRef.current = speakingMessageId;
+  const speakMessage = useCallback((message: ThreadMessage) => {
+    if (speakingMessageIdRef.current === message.id) {
+      speaker.stop();
+      return;
+    }
+    const text = speechFromBlocks(message.blocks);
+    const id = activeBotId.current;
+    if (text && id) void speaker.speak(text, { botId: id, messageId: message.id });
+  }, []);
 
   async function createBot(input: {
     name: string;
@@ -1193,26 +1216,11 @@ export function ShellPage() {
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
           onAnswer={answerMessage}
-          onRefresh={async () => {
-            if (!active) return;
-            await refreshThread(active.id);
-          }}
-          onAddRoutine={(name, prompt) => {
-            setRoutineDraft({ name, prompt, schedule: defaultCronPreset() });
-            setEditingRoutine(null);
-            setPanel("routine");
-          }}
+          onRefresh={refreshActiveThread}
+          onAddRoutine={addSkillRoutine}
           voiceReady={Boolean(voiceStatus?.ready)}
           speakingMessageId={speakingMessageId}
-          onSpeak={(message) => {
-            if (speakingMessageId === message.id) {
-              speaker.stop();
-              return;
-            }
-            const text = speechFromBlocks(message.blocks);
-            if (text && active)
-              void speaker.speak(text, { botId: active.id, messageId: message.id });
-          }}
+          onSpeak={speakMessage}
         />
         {recordingSkill ? (
           <div className="px-6 pb-2 text-center text-[13px] text-[#E65707]">
@@ -1381,9 +1389,7 @@ export function ShellPage() {
                     computer={computer}
                     skills={activeTaughtSkills}
                     busy={teachBusy}
-                    onRefresh={async () => {
-                      if (active) await refreshThread(active.id);
-                    }}
+                    onRefresh={refreshActiveThread}
                     onOpenComputer={openComputer}
                     onStopTeaching={stopTeaching}
                     onAddRoutine={(skill) => {

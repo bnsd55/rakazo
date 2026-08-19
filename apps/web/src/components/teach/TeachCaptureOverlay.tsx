@@ -124,6 +124,14 @@ export function TeachCaptureOverlay({
     }
 
     function onKeyDown(event: KeyboardEvent) {
+      // Keys aimed at page controls (the Stop teaching button, dialogs) must keep working;
+      // only keystrokes with no other target belong to the demo.
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest("button, input, textarea, select, a, [contenteditable]")
+      ) {
+        return;
+      }
       const key = teachCaptureKey(event.key, event);
       if (!key) return;
       event.preventDefault();

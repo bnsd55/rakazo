@@ -190,14 +190,16 @@ export async function observeStopSnapshot(
 
 async function finalizeTeachingRecording(
   deps: TeachingSessionDeps,
+  actor: Actor,
   skillId: string,
+  reason: "stopped" | "expired",
   stopSnapshot?: TeachSnapshot,
-): Promise<{ skill: TaughtSkillRow; didFinalize: boolean }> {
+): Promise<{ skill: TaughtSkillRow; stopped: { threadId: string; seq: number } | null }> {
   return deps.prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skillId} FOR UPDATE`;
     const skill = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skillId } });
     if (skill.status === "draft" || skill.status === "saved") {
-      return { skill, didFinalize: false };
+      return { skill, stopped: null };
     }
     if (skill.status !== "recording" && skill.status !== "drafting") {
       throw new Error("Teaching session is not active");
@@ -221,7 +223,24 @@ async function finalizeTeachingRecording(
         stoppedAt: new Date(),
       },
     });
-    return { skill: updated, didFinalize: true };
+    // The stopped event must commit with the status flip; appended afterwards it is lost for
+    // good when the process dies in between, because retries see a draft and skip it.
+    const bot = await tx.bot.findUnique({
+      where: { id: skill.botId },
+      include: { thread: true },
+    });
+    let stopped: { threadId: string; seq: number } | null = null;
+    if (bot?.thread) {
+      const event = await appendEventInTransaction(tx, {
+        workspaceId: actor.workspaceId,
+        threadId: bot.thread.id,
+        botId: skill.botId,
+        type: "skill.teaching.stopped",
+        payload: { skillId: skill.id, reason },
+      });
+      stopped = { threadId: bot.thread.id, seq: event.seq };
+    }
+    return { skill: updated, stopped };
   });
 }
 
@@ -409,9 +428,11 @@ export async function completeTeachingSession(
   reason: "stopped" | "expired",
   stopSnapshot?: TeachSnapshot,
 ): Promise<TaughtSkillRow> {
-  const { skill: finalized, didFinalize } = await finalizeTeachingRecording(
+  const { skill: finalized, stopped } = await finalizeTeachingRecording(
     deps,
+    actor,
     skillId,
+    reason,
     stopSnapshot,
   );
   const bot = await deps.prisma.bot.findUnique({
@@ -428,15 +449,7 @@ export async function completeTeachingSession(
   if (finalized.status === "draft") {
     await emitSkillDraftMessages(deps, actor, finalized, bot);
   }
-  if (didFinalize && bot.thread) {
-    await deps.events.append({
-      workspaceId: actor.workspaceId,
-      threadId: bot.thread.id,
-      botId: bot.id,
-      type: "skill.teaching.stopped",
-      payload: { skillId: finalized.id, reason },
-    });
-  }
+  if (stopped) await deps.events.notify(stopped.threadId, stopped.seq);
   return finalized;
 }
 

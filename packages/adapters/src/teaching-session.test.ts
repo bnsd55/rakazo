@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendRecordingEvent,
   applyTeachingDesktopInput,
+  completeTeachingSession,
   emptyRecording,
   expireTaughtSkillTeaching,
   recordTeachingInputEvent,
@@ -211,6 +212,29 @@ describe("expireTaughtSkillTeaching", () => {
     await expireTaughtSkillTeaching(deps as never, "skill-1");
     expect(tx.event.create).not.toHaveBeenCalled();
     expect(deps.events.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("completeTeachingSession", () => {
+  it("publishes the stopped event atomically with finalization, once", async () => {
+    const { deps, tx, current } = recordingDeps(skillRow());
+    const bot = { id: "bot-1", thread: { id: "thread-1" }, computer: null };
+    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue(bot);
+    tx.bot.findUnique = vi.fn().mockResolvedValue(bot);
+    const actor = { workspaceId: "workspace-1", userId: "user-1" } as never;
+
+    await completeTeachingSession(deps as never, actor, "skill-1", "stopped");
+    const stoppedEvents = () =>
+      tx.event.create.mock.calls.filter(
+        (call) => (call[0] as { data: { type: string } }).data.type === "skill.teaching.stopped",
+      );
+    expect(current().status).toBe("draft");
+    expect(stoppedEvents()).toHaveLength(1);
+    expect(deps.events.notify).toHaveBeenCalled();
+
+    // A retry after the finalize commit must not lose or duplicate the stopped event.
+    await completeTeachingSession(deps as never, actor, "skill-1", "stopped");
+    expect(stoppedEvents()).toHaveLength(1);
   });
 });
 
