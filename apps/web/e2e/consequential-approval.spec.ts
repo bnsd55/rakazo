@@ -10,7 +10,7 @@ test("actions run by default while optional confirmations live in advanced user 
 
   await sendDestinationWrite(page);
   await waitForRunCompletion(page);
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled({ timeout: 30_000 });
+  await expectComposerReady(page);
   await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
   await captureScreenshot(page, testInfo, "50-actions-run-without-confirmation");
 
@@ -46,24 +46,24 @@ test("actions run by default while optional confirmations live in advanced user 
 
   await page.getByRole("button", { name: "Deny" }).click();
   await expect(page.getByText("Denied", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+  await expectComposerReady(page);
   await captureScreenshot(page, testInfo, "54-action-confirmation-denied");
 
   await requestDestinationWrite(page);
   await page.getByRole("button", { name: "Allow once" }).click();
   await expect(page.getByText("Allowed once", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+  await expectComposerReady(page);
   await captureScreenshot(page, testInfo, "55-action-confirmation-allowed-once");
 
   await requestDestinationWrite(page);
   await page.getByRole("button", { name: "Always allow this tool" }).click();
   await expect(page.getByText("Always allowed", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+  await expectComposerReady(page);
   await captureScreenshot(page, testInfo, "56-action-confirmation-always-allowed");
 
   await sendDestinationWrite(page);
   await waitForRunCompletion(page);
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled({ timeout: 30_000 });
+  await expectComposerReady(page);
   await expect(page.getByRole("button", { name: "Allow once" })).toHaveCount(0);
 });
 
@@ -74,7 +74,7 @@ async function openUserSettings(page: Page) {
 }
 
 async function sendDestinationWrite(page: Page) {
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+  await expectComposerReady(page);
   const composer = page.getByPlaceholder(/Message/);
   await composer.fill("write this to the destination crm as a note");
   const sent = page.waitForResponse(
@@ -82,6 +82,12 @@ async function sendDestinationWrite(page: Page) {
   );
   await page.keyboard.press("Enter");
   await sent;
+}
+
+async function expectComposerReady(page: Page) {
+  const composer = page.getByPlaceholder(/Message/);
+  await expect(composer).toBeVisible();
+  await expect(composer).toBeEnabled();
 }
 
 async function requestDestinationWrite(page: Page) {
