@@ -530,7 +530,7 @@ export function createTaughtSkillsService(deps: TaughtSkillsDeps) {
             button: "left" | "right";
             type: "move" | "down" | "up" | "click";
           },
-    ): Promise<boolean> {
+    ): Promise<"recorded" | "idle" | "stale"> {
       return recordTeachingInputEvent(deps, actor, botId, mapped);
     },
   };

@@ -434,9 +434,9 @@ export async function recordTeachingInputEvent(
         button: "left" | "right";
         type: "move" | "down" | "up" | "click";
       },
-): Promise<boolean> {
+): Promise<"recorded" | "idle" | "stale"> {
   const skill = await getActiveTeachingSession(deps.prisma, actor.workspaceId, botId, actor.userId);
-  if (!skill) return true;
+  if (!skill) return "idle";
   const updated = await appendRecordingEvent(deps, skill.id, {
     at: new Date().toISOString(),
     kind: mapped.kind,
@@ -451,7 +451,7 @@ export async function recordTeachingInputEvent(
             type: mapped.type,
           }),
   });
-  return updated.status === "recording";
+  return updated.status === "recording" ? "recorded" : "stale";
 }
 
 export async function captureTeachingSnapshot(

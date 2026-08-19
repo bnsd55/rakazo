@@ -145,6 +145,6 @@ describe("recordTeachingInputEvent", () => {
       "bot-1",
       { kind: "key", key: "x" },
     );
-    expect(recorded).toBe(false);
+    expect(recorded).toBe("stale");
   });
 });

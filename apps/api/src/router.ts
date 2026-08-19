@@ -916,21 +916,25 @@ export function createRouter(deps: RouterDeps) {
                   type:
                     (input.payload.type as "move" | "down" | "up" | "click" | undefined) ?? "click",
                 };
-        const recorded = await taughtSkills.recordInput(context.actor, bot.id, mapped);
-        if (!recorded) return { ok: true as const };
-        const latest = await deps.prisma.computer.findUnique({ where: { id: computer.id } });
-        if (
-          !latest ||
-          !hasActiveComputerControl(latest) ||
-          latest.controlBotId !== bot.id ||
-          !latest.providerRef
-        ) {
-          return { ok: true as const };
+        const outcome = await taughtSkills.recordInput(context.actor, bot.id, mapped);
+        if (outcome === "stale") return { ok: true as const };
+        let target = computer;
+        if (outcome === "idle") {
+          const latest = await deps.prisma.computer.findUnique({ where: { id: computer.id } });
+          if (
+            !latest ||
+            !hasActiveComputerControl(latest) ||
+            latest.controlBotId !== bot.id ||
+            !latest.providerRef
+          ) {
+            return { ok: true as const };
+          }
+          target = latest;
         }
         await deps.sandbox.sendInput(
-          toComputerRef(latest),
+          toComputerRef(target),
           mapped,
-          { leaseId: latest.controlLeaseId ?? "lease", holder: "user", fence: 0 },
+          { leaseId: target.controlLeaseId ?? "lease", holder: "user", fence: 0 },
           computerContext(context.actor, bot.id, "input"),
         );
         await deps.prisma.computer.updateMany({
