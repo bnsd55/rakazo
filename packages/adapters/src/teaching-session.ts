@@ -14,6 +14,7 @@ import {
   type TeachSnapshot,
 } from "@rakazo/core";
 import {
+  appendEventInTransaction,
   createThreadMessageInTransaction,
   IsolationError,
   type Prisma,
@@ -340,7 +341,7 @@ async function findSkillDraftMessage(
 }
 
 async function hasSkillDraftCreatedEvent(
-  prisma: PrismaClient,
+  prisma: { event: { findMany: PrismaClient["event"]["findMany"] } },
   threadId: string,
   skillId: string,
 ): Promise<boolean> {
@@ -368,35 +369,36 @@ async function emitSkillDraftMessages(
 ): Promise<void> {
   if (skill.status !== "draft" || !bot.thread) return;
   const threadId = bot.thread.id;
-  const created = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  const published = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
-    const existing = await findSkillDraftMessage(tx, threadId, skill.id);
-    if (existing) return { ...existing, inserted: false as const };
-    const blocks = skillDraftBlocks(skill);
-    const message = await createThreadMessageInTransaction(tx, {
+    let created = await findSkillDraftMessage(tx, threadId, skill.id);
+    if (!created) {
+      const blocks = skillDraftBlocks(skill);
+      const message = await createThreadMessageInTransaction(tx, {
+        threadId,
+        role: "bot",
+        blocks,
+      });
+      created = { id: message.id, blocks };
+    }
+    if (await hasSkillDraftCreatedEvent(tx, threadId, skill.id)) return null;
+    await appendEventInTransaction(tx, {
+      workspaceId: actor.workspaceId,
       threadId,
-      role: "bot",
-      blocks,
+      botId: bot.id,
+      type: "thread.message.created",
+      payload: { messageId: created.id, role: "bot", blocks: created.blocks },
     });
-    return { id: message.id, blocks, inserted: true as const };
+    const draftEvent = await appendEventInTransaction(tx, {
+      workspaceId: actor.workspaceId,
+      threadId,
+      botId: bot.id,
+      type: "skill.draft.created",
+      payload: { skillId: skill.id, name: skill.name || skill.goal.slice(0, 80) },
+    });
+    return draftEvent.seq;
   });
-  if (!created.inserted && (await hasSkillDraftCreatedEvent(deps.prisma, threadId, skill.id))) {
-    return;
-  }
-  await deps.events.append({
-    workspaceId: actor.workspaceId,
-    threadId,
-    botId: bot.id,
-    type: "thread.message.created",
-    payload: { messageId: created.id, role: "bot", blocks: created.blocks },
-  });
-  await deps.events.append({
-    workspaceId: actor.workspaceId,
-    threadId,
-    botId: bot.id,
-    type: "skill.draft.created",
-    payload: { skillId: skill.id, name: skill.name || skill.goal.slice(0, 80) },
-  });
+  if (published != null) await deps.events.notify(threadId, published);
 }
 
 export async function completeTeachingSession(
@@ -531,45 +533,42 @@ export async function recordTeachingInputEvent(
               type: mapped.type,
             }),
   };
-  const outcome = await deps.prisma.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
-      const current = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skill.id } });
-      if (current.status !== "recording") return "stale" as const;
-      if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) return "expired" as const;
-      const recording = parseRecording(current.recording);
-      if (
-        !recording.events.some(
-          (existing) => recordingEventKey(existing) === recordingEventKey(event),
-        )
-      ) {
-        recording.events.push(event);
-        await tx.taughtSkill.update({
-          where: { id: skill.id },
-          data: { recording: recording as never },
-        });
-      }
-      const bot = await tx.bot.findUnique({
-        where: { id: botId },
-        include: { computer: true },
+  const outcome = await deps.prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
+    const current = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skill.id } });
+    if (current.status !== "recording") return { status: "stale" as const, computer: null };
+    if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) {
+      return { status: "expired" as const, computer: null };
+    }
+    const recording = parseRecording(current.recording);
+    if (
+      !recording.events.some((existing) => recordingEventKey(existing) === recordingEventKey(event))
+    ) {
+      recording.events.push(event);
+      await tx.taughtSkill.update({
+        where: { id: skill.id },
+        data: { recording: recording as never },
       });
-      if (bot?.computer?.providerRef) {
-        await applyTeachingDesktopInput(
-          deps.sandbox,
-          bot.computer,
-          mapped,
-          computerContext(actor, botId, "input"),
-        );
-      }
-      return "recorded" as const;
-    },
-    { timeout: 15_000 },
-  );
-  if (outcome === "expired") {
+    }
+    const bot = await tx.bot.findUnique({
+      where: { id: botId },
+      include: { computer: true },
+    });
+    return { status: "recorded" as const, computer: bot?.computer ?? null };
+  });
+  if (outcome.status === "expired") {
     await expireTaughtSkillTeaching(deps, skill.id);
     return "stale";
   }
-  return outcome;
+  if (outcome.status === "recorded" && outcome.computer?.providerRef) {
+    await applyTeachingDesktopInput(
+      deps.sandbox,
+      outcome.computer,
+      mapped,
+      computerContext(actor, botId, "input"),
+    );
+  }
+  return outcome.status;
 }
 
 export async function captureTeachingSnapshot(

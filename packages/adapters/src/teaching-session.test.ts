@@ -52,6 +52,18 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
     bot: {
       findUnique: vi.fn(),
     },
+    thread: {
+      update: vi.fn(async () => ({ nextEventSeq: 2 })),
+    },
+    event: {
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+        id: "event-1",
+        seq: 1,
+        createdAt: new Date(),
+        ...data,
+      })),
+    },
   };
   return {
     current: () => current,
@@ -77,7 +89,7 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
           findMany: vi.fn().mockResolvedValue([]),
         },
       },
-      events: { append: vi.fn(), finalizeComputerControlRelease: vi.fn() },
+      events: { append: vi.fn(), notify: vi.fn(), finalizeComputerControlRelease: vi.fn() },
       jobs: { enqueue: vi.fn(), cancel: vi.fn() },
       sandbox: { observe: vi.fn(), setScreenControl: vi.fn(), sendInput: vi.fn(), act: vi.fn() },
       home: {},
@@ -120,7 +132,7 @@ describe("expireTaughtSkillTeaching", () => {
   });
 
   it("retries leftover computer release after the session is already a draft", async () => {
-    const { deps } = recordingDeps(
+    const { deps, tx } = recordingDeps(
       skillRow({
         status: "draft",
         expiresAt: new Date(Date.now() - 1000),
@@ -143,18 +155,23 @@ describe("expireTaughtSkillTeaching", () => {
     deps.prisma.bot.findUnique = vi.fn().mockResolvedValue(bot);
     await expireTaughtSkillTeaching(deps as never, "skill-1");
     expect(deps.jobs.cancel).toHaveBeenCalled();
-    expect(deps.events.append).toHaveBeenCalledWith(
+    expect(tx.event.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "thread.message.created",
-        payload: expect.objectContaining({ messageId: "message-1" }),
+        data: expect.objectContaining({
+          type: "thread.message.created",
+          payload: expect.objectContaining({ messageId: "message-1" }),
+        }),
       }),
     );
-    expect(deps.events.append).toHaveBeenCalledWith(
+    expect(tx.event.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "skill.draft.created",
-        payload: expect.objectContaining({ skillId: "skill-1" }),
+        data: expect.objectContaining({
+          type: "skill.draft.created",
+          payload: expect.objectContaining({ skillId: "skill-1" }),
+        }),
       }),
     );
+    expect(deps.events.notify).toHaveBeenCalled();
   });
 
   it("does not steal a later manual takeover when retrying a draft", async () => {
@@ -183,15 +200,16 @@ describe("expireTaughtSkillTeaching", () => {
   });
 
   it("does not republish draft events once they already exist", async () => {
-    const { deps } = recordingDeps(skillRow({ status: "draft" }));
+    const { deps, tx } = recordingDeps(skillRow({ status: "draft" }));
     deps.prisma.bot.findUnique = vi.fn().mockResolvedValue({
       id: "bot-1",
       thread: { id: "thread-1" },
       computer: null,
     });
-    deps.prisma.event.findMany = vi.fn().mockResolvedValue([{ payload: { skillId: "skill-1" } }]);
+    tx.event.findMany = vi.fn().mockResolvedValue([{ payload: { skillId: "skill-1" } }]);
     await expireTaughtSkillTeaching(deps as never, "skill-1");
-    expect(deps.events.append).not.toHaveBeenCalled();
+    expect(tx.event.create).not.toHaveBeenCalled();
+    expect(deps.events.notify).not.toHaveBeenCalled();
   });
 });
 
@@ -222,7 +240,7 @@ describe("recordTeachingInputEvent", () => {
     expect(current().recording.events).toHaveLength(0);
   });
 
-  it("sends recorded input before the recording transaction commits", async () => {
+  it("persists the recording before applying input to the sandbox", async () => {
     const { deps, current, tx } = recordingDeps(skillRow());
     const computer = {
       id: "computer-1",
@@ -233,7 +251,16 @@ describe("recordTeachingInputEvent", () => {
       controlBotId: "bot-1",
       controlLeaseId: "lease-1",
     };
+    const order: string[] = [];
+    tx.taughtSkill.update = vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      order.push("persist");
+      Object.assign(current(), data);
+      return current();
+    });
     tx.bot.findUnique = vi.fn(async () => ({ id: "bot-1", computer }));
+    deps.sandbox.sendInput = vi.fn(async () => {
+      order.push("send");
+    });
     await expect(
       recordTeachingInputEvent(
         deps as never,
@@ -242,7 +269,7 @@ describe("recordTeachingInputEvent", () => {
         { kind: "pointer", x: 12, y: 40, button: "left", type: "click" },
       ),
     ).resolves.toBe("recorded");
-    expect(deps.sandbox.sendInput).toHaveBeenCalled();
+    expect(order).toEqual(["persist", "send"]);
     expect(current().recording.events).toHaveLength(1);
   });
 });

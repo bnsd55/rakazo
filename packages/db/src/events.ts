@@ -23,6 +23,7 @@ export interface AppendEventInput {
 export interface ThreadEvents {
   answerRunInput(input: AnswerRunInput): Promise<boolean>;
   append(input: AppendEventInput): Promise<ProductEvent>;
+  notify(threadId: string, seq: number): Promise<void>;
   finalizeComputerControlRelease(input: FinalizeComputerControlReleaseInput): Promise<boolean>;
   finalizeRun(input: FinalizeRunInput): Promise<boolean>;
   pauseRunForInput(input: PauseRunForInput): Promise<boolean>;
@@ -80,6 +81,7 @@ export function createThreadEvents(
   return {
     answerRunInput: (input) => answerRunInput(prisma, input, realtime),
     append: (input) => appendEvent(prisma, input, realtime),
+    notify: (threadId, seq) => notifyRealtime(realtime, threadId, seq),
     finalizeComputerControlRelease: (input) =>
       finalizeComputerControlRelease(prisma, input, realtime),
     finalizeRun: (input) => finalizeRun(prisma, input, realtime),
@@ -356,7 +358,10 @@ export async function finalizeRun(
   return true;
 }
 
-async function appendEventInTransaction(tx: Prisma.TransactionClient, input: AppendEventInput) {
+export async function appendEventInTransaction(
+  tx: Prisma.TransactionClient,
+  input: AppendEventInput,
+) {
   const thread = await tx.thread.update({
     where: { id: input.threadId },
     data: { nextEventSeq: { increment: 1 } },
