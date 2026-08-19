@@ -36,7 +36,7 @@ export type ThreadTarget =
     };
 
 const THREAD_MESSAGE_PAGE_SIZE = 100;
-const RUNS_NEEDING_CONTINUE = new Set(["queued", "waiting_input"]);
+const RUNS_NEEDING_CONTINUE = new Set(["queued"]);
 
 function fanoutRunClientNonce(
   clientNonce: string | undefined,
@@ -47,15 +47,23 @@ function fanoutRunClientNonce(
   return multiTarget ? `${clientNonce}:${botId}` : clientNonce;
 }
 
+function sendNonceKeys(clientNonce: string, targetBotIds: string[]): string[] {
+  if (targetBotIds.length <= 1) return [clientNonce];
+  return targetBotIds.map((botId) => `${clientNonce}:${botId}`);
+}
+
 async function findRunsForSendNonce(
   prisma: PrismaClient,
-  workspaceId: string,
+  scope: { workspaceId: string; userId: string; threadId: string },
   clientNonce: string,
+  targetBotIds: string[],
 ) {
   return prisma.run.findMany({
     where: {
-      workspaceId,
-      OR: [{ clientNonce }, { clientNonce: { startsWith: `${clientNonce}:` } }],
+      workspaceId: scope.workspaceId,
+      userId: scope.userId,
+      threadId: scope.threadId,
+      clientNonce: { in: sendNonceKeys(clientNonce, targetBotIds) },
     },
     orderBy: { createdAt: "asc" },
   });
@@ -252,11 +260,25 @@ export async function sendThreadMessage(
     clientNonce?: string;
   },
 ) {
+  const targetBotIdsForNonce =
+    target.kind === "group"
+      ? resolveGroupTargetBotIds({
+          text: input.text ?? "",
+          members: target.members.map((member) => ({ id: member.botId, name: member.name })),
+          explicitMentions: input.mentions,
+        })
+      : [target.botId];
+
   if (input.clientNonce) {
     const existingRuns = await findRunsForSendNonce(
       deps.prisma,
-      actor.workspaceId,
+      {
+        workspaceId: actor.workspaceId,
+        userId: actor.userId,
+        threadId: target.threadId,
+      },
       input.clientNonce,
+      targetBotIdsForNonce,
     );
     if (existingRuns.length > 0) {
       await enqueueRunsNeedingContinue(deps.jobs, existingRuns);
@@ -353,11 +375,7 @@ export async function sendThreadMessage(
   );
   const blocks = buildUserMessageBlocks(input.text, attachmentBlocks);
   const prompt = buildSendPrompt(input.text, artifacts);
-  const targetBotIds = resolveGroupTargetBotIds({
-    text: input.text ?? "",
-    members: target.members.map((member) => ({ id: member.botId, name: member.name })),
-    explicitMentions: input.mentions,
-  });
+  const targetBotIds = targetBotIdsForNonce;
   const fanout = await deps.prisma.$transaction(async (tx) => {
     const message = await createThreadMessageInTransaction(tx, {
       threadId: target.threadId,

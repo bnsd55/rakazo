@@ -1,6 +1,6 @@
 import { runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
-import { type PrismaClient, touchGroupUpdatedAt } from "@rakazo/db";
+import { createThreadMessage, type PrismaClient, touchGroupUpdatedAt } from "@rakazo/db";
 import type { ExecutorDeps } from "./executor.js";
 
 export async function handoffToGroupBot(
