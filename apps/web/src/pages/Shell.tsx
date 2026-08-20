@@ -31,6 +31,23 @@ import {
 } from "@rakazo/core";
 import { BotAvatar, Button } from "@rakazo/ui-web";
 import {
+  ArrowUp,
+  ChevronLeft,
+  Cpu,
+  Gauge,
+  LogOut,
+  Mic,
+  Monitor,
+  Paperclip,
+  Phone,
+  Plus,
+  Puzzle,
+  Settings,
+  Square,
+  Volume2,
+  X,
+} from "lucide-react";
+import {
   type Dispatch,
   lazy,
   memo,
@@ -1060,19 +1077,7 @@ export function ShellPage() {
           className="mx-3 mb-1 flex items-center gap-3 rounded-[11px] px-2.5 py-2 hover:bg-[#131315]"
         >
           <span className="grid h-[30px] w-[30px] place-items-center rounded-full bg-[#17171A] text-[#9A9AA0]">
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M4 7h3a1 1 0 0 0 1-1 1.5 1.5 0 1 1 3 0 1 1 0 0 0 1 1h3v3a1 1 0 0 0 1 1 1.5 1.5 0 1 1 0 3 1 1 0 0 0-1 1v3h-3a1 1 0 0 0-1 1 1.5 1.5 0 1 1-3 0 1 1 0 0 0-1-1H4v-3a1 1 0 0 0-1-1 1.5 1.5 0 1 1 0-3 1 1 0 0 0 1-1z" />
-            </svg>
+            <Puzzle size={15} strokeWidth={1.7} />
           </span>
           <span className="text-[14.5px] text-[#C9C9CE]">Plugins</span>
         </button>
@@ -1087,7 +1092,7 @@ export function ShellPage() {
                 }}
                 className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
               >
-                <span className="text-[#9A9AA0]">⌁</span>
+                <Cpu size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
                 <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Models</span>
               </button>
               <button
@@ -1098,7 +1103,7 @@ export function ShellPage() {
                 }}
                 className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
               >
-                <span className="text-[#9A9AA0]">♫</span>
+                <Volume2 size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
                 <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Voice</span>
               </button>
               <button
@@ -1108,7 +1113,7 @@ export function ShellPage() {
                   setUsage(await rpc.usage.summary());
                 }}
               >
-                <span className="text-[#9A9AA0]">◔</span>
+                <Gauge size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
                 <span className="flex-1 text-left text-[14.5px] text-[#ECECEE]">Weekly usage</span>
               </button>
               {usage ? (
@@ -1121,7 +1126,7 @@ export function ShellPage() {
                 onClick={() => void authClient.signOut().then(() => navigate("/"))}
                 className="flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 hover:bg-[#232327]"
               >
-                <span className="text-[#9A9AA0]">⇤</span>
+                <LogOut size={16} strokeWidth={1.7} className="text-[#9A9AA0]" />
                 <span className="text-[14.5px] text-[#ECECEE]">Log out</span>
               </button>
             </div>
@@ -1170,16 +1175,7 @@ export function ShellPage() {
                 className="grid h-[30px] w-[34px] place-items-center rounded-[9px] hover:bg-[#1B1B1E]"
                 style={{ background: callOpen ? "#1B1B1E" : "transparent" }}
               >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#A8A8AD"
-                  strokeWidth="1.6"
-                >
-                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.35 1.9.66 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.31 1.85.53 2.81.66A2 2 0 0 1 22 16.92z" />
-                </svg>
+                <Phone size={16} strokeWidth={1.6} className="text-[#A8A8AD]" />
               </button>
             ) : null}
             <button
@@ -1189,17 +1185,7 @@ export function ShellPage() {
               className="grid h-[30px] w-[34px] place-items-center rounded-[9px] hover:bg-[#1B1B1E]"
               style={{ background: panel ? "#1B1B1E" : "transparent" }}
             >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#A8A8AD"
-                strokeWidth="1.6"
-              >
-                <rect x="2" y="4" width="20" height="13" rx="2" />
-                <path d="M8 21h8M12 17v4" />
-              </svg>
+              <Monitor size={18} strokeWidth={1.6} className="text-[#A8A8AD]" />
             </button>
           </div>
         </div>
@@ -1274,10 +1260,10 @@ export function ShellPage() {
                     aria-label="Bot settings"
                     onClick={() => setPanel("settings")}
                   >
-                    ⚙
+                    <Settings size={16} strokeWidth={1.7} />
                   </button>
                   <button type="button" aria-label="Close panel" onClick={() => setPanel(null)}>
-                    ✕
+                    <X size={16} strokeWidth={1.8} />
                   </button>
                 </div>
               </div>
@@ -1448,11 +1434,11 @@ export function ShellPage() {
                     onClick={() => setPanel("computer")}
                     className="text-[#9A9AA0]"
                   >
-                    ‹
+                    <ChevronLeft size={18} strokeWidth={1.8} />
                   </button>
                   <div className="text-[15.5px] font-medium text-[#F1F1F2]">Routine</div>
                   <button type="button" onClick={() => setPanel(null)} className="text-[#6C6C70]">
-                    ✕
+                    <X size={16} strokeWidth={1.8} />
                   </button>
                 </div>
                 <label className="text-[14px] text-[#85858A]">
@@ -1749,7 +1735,7 @@ export function ShellPage() {
                 aria-label="Close computer"
                 onClick={() => setComputerOpen(false)}
               >
-                ✕
+                <X size={16} strokeWidth={1.8} />
               </button>
             </div>
           </div>
@@ -1951,7 +1937,7 @@ const Composer = memo(function Composer({
                   className="h-8 w-8 rounded object-cover"
                 />
               ) : (
-                <span>📎</span>
+                <Paperclip size={14} strokeWidth={1.8} />
               )}
               <span className="max-w-[180px] truncate">{attachment.file.name}</span>
               <button
@@ -1960,7 +1946,7 @@ const Composer = memo(function Composer({
                 onClick={() => onRemoveAttachment(attachment)}
                 className="text-[#85858A] hover:text-[#ECECEE]"
               >
-                ✕
+                <X size={13} strokeWidth={2} />
               </button>
             </div>
           ))}
@@ -1980,9 +1966,9 @@ const Composer = memo(function Composer({
           aria-label="Attach file"
           disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
-          className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[18px] text-[#9A9AA0] disabled:opacity-40"
+          className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border border-[#26262A] text-[#9A9AA0] disabled:opacity-40"
         >
-          +
+          <Plus size={17} strokeWidth={1.8} />
         </button>
         <button
           type="button"
@@ -2000,14 +1986,14 @@ const Composer = memo(function Composer({
             onDictateStart((text) => setDraft((current) => `${current} ${text}`.trim()));
           }}
           onTouchEnd={onDictateStop}
-          className={`grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border text-[15px] ${
+          className={`grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full border ${
             dictating
               ? "border-[#4ECB71] bg-[rgba(48,162,75,.16)] text-[#4ECB71]"
               : "border-[#26262A] text-[#9A9AA0]"
           }`}
           title={transcribe ? "Hold to talk" : "Hold to talk (on-device dictation)"}
         >
-          ⌇
+          <Mic size={16} strokeWidth={1.8} />
         </button>
         <input
           value={draft}
@@ -2029,7 +2015,7 @@ const Composer = memo(function Composer({
             onClick={() => void onStop()}
             className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A]"
           >
-            ■
+            <Square size={12} strokeWidth={0} fill="currentColor" />
           </button>
         ) : (
           <button
@@ -2039,7 +2025,7 @@ const Composer = memo(function Composer({
             onClick={send}
             className="grid h-9 w-9 place-items-center rounded-full bg-[#F1F1EF] text-[#17171A] disabled:opacity-50"
           >
-            ↑
+            <ArrowUp size={18} strokeWidth={2} />
           </button>
         )}
       </div>
@@ -2461,7 +2447,7 @@ function CreateBotForm({
       <div className="mb-4 flex items-center justify-between">
         <span className="text-[13.5px] text-[#85858A]">New bot</span>
         <button type="button" onClick={onCancel}>
-          ✕
+          <X size={16} strokeWidth={1.8} />
         </button>
       </div>
       <label className="mt-6 block text-[14px] text-[#85858A]">

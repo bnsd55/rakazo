@@ -1635,30 +1635,53 @@ export function createRouter(deps: RouterDeps) {
         persistVoiceCredential(deps, context.actor, {
           provider: input.provider,
           plaintext: input.apiKey,
-          label: input.label,
           voiceId: input.voiceId,
           signal: context.signal,
         }),
       ),
       setVoice: authed.voice.setVoice.handler(async ({ context, input }) => {
-        const cred = input.provider
-          ? await deps.prisma.userVoiceCredential.findFirst({
-              where: {
-                userId: context.actor.userId,
-                workspaceId: context.actor.workspaceId,
-                provider: input.provider,
-              },
-              orderBy: newestVoiceCredentialOrder,
-            })
-          : await findDefaultVoiceCredential(deps.prisma, context.actor);
-        if (!cred) {
-          throw new ORPCError("BAD_REQUEST", { message: "Connect a voice provider first." });
-        }
-        await deps.prisma.userVoiceCredential.update({
-          where: { id: cred.id },
-          data: { voiceId: input.voiceId },
-        });
-        return toVoiceStatus({ ...cred, voiceId: input.voiceId });
+        const cred = await withSerializableRetry(() =>
+          deps.prisma.$transaction(
+            async (tx) => {
+              const found = input.provider
+                ? await tx.userVoiceCredential.findUnique({
+                    where: {
+                      userId_workspaceId_provider: {
+                        userId: context.actor.userId,
+                        workspaceId: context.actor.workspaceId,
+                        provider: input.provider,
+                      },
+                    },
+                  })
+                : await tx.userVoiceCredential.findFirst({
+                    where: {
+                      userId: context.actor.userId,
+                      workspaceId: context.actor.workspaceId,
+                      isDefault: true,
+                    },
+                    orderBy: newestVoiceCredentialOrder,
+                  });
+              if (!found) {
+                throw new ORPCError("BAD_REQUEST", { message: "Connect a voice provider first." });
+              }
+              // Picking a voice also makes its provider the one speak/transcribe use.
+              await tx.userVoiceCredential.updateMany({
+                where: {
+                  userId: context.actor.userId,
+                  workspaceId: context.actor.workspaceId,
+                  id: { not: found.id },
+                },
+                data: { isDefault: false },
+              });
+              return tx.userVoiceCredential.update({
+                where: { id: found.id },
+                data: { voiceId: input.voiceId, isDefault: true },
+              });
+            },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+          ),
+        );
+        return toVoiceStatus(cred);
       }),
       voices: authed.voice.voices.handler(async ({ context, input }) => {
         const loaded = await loadDefaultVoiceCredential(deps, context.actor);
