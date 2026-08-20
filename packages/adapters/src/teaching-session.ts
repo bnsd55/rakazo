@@ -558,12 +558,6 @@ export async function recordTeachingInputEvent(
     if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) {
       return { kind: "expired" as const };
     }
-    const recording = parseRecording(current.recording);
-    if (
-      recording.events.some((existing) => recordingEventKey(existing) === recordingEventKey(event))
-    ) {
-      return { kind: "duplicate" as const };
-    }
     const bot = await tx.bot.findUnique({
       where: { id: botId },
       include: { computer: true },
@@ -575,7 +569,6 @@ export async function recordTeachingInputEvent(
     return "stale";
   }
   if (prepared.kind === "stale") return "stale";
-  if (prepared.kind === "duplicate") return "recorded";
   if (prepared.computer?.providerRef) {
     await applyTeachingDesktopInput(
       deps.sandbox,
@@ -590,11 +583,6 @@ export async function recordTeachingInputEvent(
     if (current.status !== "recording") return "stale" as const;
     if (current.expiresAt && current.expiresAt.getTime() <= Date.now()) return "expired" as const;
     const recording = parseRecording(current.recording);
-    if (
-      recording.events.some((existing) => recordingEventKey(existing) === recordingEventKey(event))
-    ) {
-      return "recorded" as const;
-    }
     recording.events.push(event);
     await tx.taughtSkill.update({
       where: { id: skill.id },

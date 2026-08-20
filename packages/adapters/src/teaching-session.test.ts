@@ -298,6 +298,47 @@ describe("recordTeachingInputEvent", () => {
     expect(current().recording.events).toHaveLength(1);
   });
 
+  it("records repeated identical inputs in the same millisecond", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      const { deps, current, tx } = recordingDeps(skillRow());
+      tx.bot.findUnique = vi.fn(async () => ({
+        id: "bot-1",
+        computer: {
+          id: "computer-1",
+          homeKey: "bot-1",
+          kind: "e2b",
+          providerRef: "box-1",
+          controlHolder: "user",
+          controlBotId: "bot-1",
+          controlLeaseId: "lease-1",
+        },
+      }));
+      const input = { kind: "key" as const, key: "o" };
+      await expect(
+        recordTeachingInputEvent(
+          deps as never,
+          { workspaceId: "workspace-1", userId: "user-1" } as never,
+          "bot-1",
+          input,
+        ),
+      ).resolves.toBe("recorded");
+      await expect(
+        recordTeachingInputEvent(
+          deps as never,
+          { workspaceId: "workspace-1", userId: "user-1" } as never,
+          "bot-1",
+          input,
+        ),
+      ).resolves.toBe("recorded");
+      expect(deps.sandbox.sendInput).toHaveBeenCalledTimes(2);
+      expect(current().recording.events).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not persist an event when sandbox input fails", async () => {
     const { deps, current, tx } = recordingDeps(skillRow());
     tx.bot.findUnique = vi.fn(async () => ({
