@@ -31,6 +31,7 @@ export interface ThreadEvents {
   clearThread(input: ClearThreadInput): Promise<ClearThreadResult>;
   finalizeComputerControlRelease(input: FinalizeComputerControlReleaseInput): Promise<boolean>;
   finalizeRun(input: FinalizeRunInput): Promise<boolean>;
+  notify(threadId: string, seq: number): Promise<void>;
   pauseRunForInput(input: PauseRunForInput): Promise<boolean>;
   sendUserMessage(input: SendUserMessageInput): Promise<SendUserMessageResult>;
   follow(threadId: string, cursor: number, signal?: AbortSignal): AsyncGenerator<ProductEvent>;
@@ -87,6 +88,7 @@ export interface AnswerRunInput {
   botId: string;
   runId: string;
   messageId: string;
+  answeredByUserId: string;
   answer: string;
 }
 
@@ -123,6 +125,7 @@ export function createThreadEvents(
     finalizeComputerControlRelease: (input) =>
       finalizeComputerControlRelease(prisma, input, realtime),
     finalizeRun: (input) => finalizeRun(prisma, input, realtime),
+    notify: (threadId, seq) => notifyRealtime(realtime, threadId, seq),
     pauseRunForInput: (input) => pauseRunForInput(prisma, input, realtime),
     sendUserMessage: (input) => sendUserMessage(prisma, input, realtime),
     follow: (threadId, cursor, signal) =>
@@ -324,8 +327,8 @@ export async function answerRunInput(
           where: { id: input.runId },
           select: { userId: true },
         });
-        if (!run) return null;
-        approvalUserId = run.userId;
+        if (!run || run.userId !== input.answeredByUserId) return null;
+        approvalUserId = input.answeredByUserId;
       }
     }
 
@@ -614,7 +617,10 @@ export async function finalizeRun(
   return true;
 }
 
-async function appendEventInTransaction(tx: Prisma.TransactionClient, input: AppendEventInput) {
+export async function appendEventInTransaction(
+  tx: Prisma.TransactionClient,
+  input: AppendEventInput,
+) {
   const thread = await tx.thread.update({
     where: { id: input.threadId },
     data: { nextEventSeq: { increment: 1 } },

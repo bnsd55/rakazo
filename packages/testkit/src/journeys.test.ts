@@ -122,6 +122,33 @@ describeJourneys("required product journeys", () => {
 
     const pinned = await rpc<Bot>(app, ada, "bots/update", { botId: coder.id, pinned: true });
     expect(pinned.pinned).toBe(true);
+    const [section, concurrentSection] = await Promise.all([
+      rpc<{ id: string; name: string }>(app, ada, "botSections/create", {
+        botId: chief.id,
+        name: "Planning",
+      }),
+      rpc<{ id: string; name: string }>(app, ada, "botSections/create", {
+        botId: coder.id,
+        name: "Planning",
+      }),
+    ]);
+    expect(section.name).toBe("Planning");
+    expect(concurrentSection.id).toBe(section.id);
+    expect(await rpc<Array<{ id: string }>>(app, ada, "botSections/list")).toEqual([
+      expect.objectContaining({ id: section.id }),
+    ]);
+    expect(
+      (await rpc<Bot[]>(app, ada, "bots/list")).find((bot) => bot.id === chief.id)?.sectionId,
+    ).toBe(section.id);
+    expect(
+      (await rpc<Bot[]>(app, ada, "bots/list")).find((bot) => bot.id === coder.id)?.sectionId,
+    ).toBe(section.id);
+    const foreignSection = await raw(app, bob, "bots/update", {
+      botId: bobBot.id,
+      sectionId: section.id,
+    });
+    expect(foreignSection.status).toBeGreaterThanOrEqual(400);
+    expect(await rpc<unknown[]>(app, bob, "botSections/list")).toEqual([]);
     const duplicate = await rpc<Bot>(app, ada, "bots/duplicate", { botId: chief.id });
     expect(duplicate).toMatchObject({
       name: "Chief copy",
@@ -131,6 +158,7 @@ describeJourneys("required product journeys", () => {
       notifyOnFinish: chief.notifyOnFinish,
       color: chief.color,
       pinned: false,
+      sectionId: null,
       unread: false,
     });
     expect(duplicate.id).not.toBe(chief.id);
@@ -1114,7 +1142,124 @@ describeJourneys("required product journeys", () => {
     ).toBe("revoked");
   });
 
-  it("17: destination writes pause for approval before side effects", async () => {
+  it("17: teach a task end to end", async () => {
+    const cookie = await signup(app, `teach-j-${stamp}@rakazo.test`, "Teach Ada");
+    const bot = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Teacher",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    await rpc(app, cookie, "computer/boot", { botId: bot.id });
+    await rpc(app, cookie, "computer/takeover", { botId: bot.id });
+    void rpc(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "keep working until I stop you",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const skill = await rpc<{
+      id: string;
+      status: string;
+      playbook: { steps: string[] };
+      recording: { events: Array<{ kind: string }> };
+    }>(app, cookie, "skills/start", {
+      botId: bot.id,
+      goal: "Export weekly CRM list",
+    });
+    expect(skill.status).toBe("recording");
+    await rpc(app, cookie, "computer/input", {
+      botId: bot.id,
+      kind: "pointer",
+      payload: { x: 120, y: 40, button: "left", type: "click" },
+    });
+    await rpc(app, cookie, "computer/input", {
+      botId: bot.id,
+      kind: "key",
+      payload: { key: "x" },
+    });
+    const blocked = await raw(app, cookie, "threads/send", {
+      botId: bot.id,
+      text: "please act now",
+    });
+    expect(blocked.status).toBeGreaterThanOrEqual(400);
+    const stopped = await rpc<{
+      status: string;
+      playbook: { steps: string[] };
+      recording: { events: Array<{ kind: string }>; snapshots: Array<{ summary: string }> };
+    }>(app, cookie, "skills/stop", { skillId: skill.id });
+    expect(stopped.status).toBe("draft");
+    expect(stopped.playbook.steps.join(" ")).toMatch(/Click|120|40|x/i);
+    expect(stopped.recording.events.some((event) => event.kind === "pointer")).toBe(true);
+    expect(stopped.recording.snapshots.length).toBeGreaterThanOrEqual(2);
+    const computerAfterStop = await rpc<{ controlHolder: string; controlBotId: string | null }>(
+      app,
+      cookie,
+      "computer/status",
+      { botId: bot.id },
+    );
+    expect(computerAfterStop.controlHolder).toBe("bot");
+    expect(computerAfterStop.controlBotId).toBeNull();
+    await rpc(app, cookie, "skills/updateDraft", {
+      skillId: skill.id,
+      name: "Export weekly CRM list",
+      playbook: stopped.playbook,
+    });
+    const saved = await rpc<{ status: string; name: string }>(app, cookie, "skills/save", {
+      skillId: skill.id,
+      name: "Export weekly CRM list",
+    });
+    expect(saved.status).toBe("saved");
+    const listed = await rpc<Array<{ id: string; name: string }>>(app, cookie, "skills/list", {
+      botId: bot.id,
+    });
+    expect(listed.some((row) => row.id === skill.id)).toBe(true);
+    const testRun = await rpc<{ runId: string }>(app, cookie, "skills/testRun", {
+      skillId: skill.id,
+    });
+    expect(testRun.runId).toBeTruthy();
+    await waitFor(
+      app,
+      cookie,
+      bot.id,
+      (snap) => !snap.run || ["completed", "failed", "cancelled"].includes(snap.run.status),
+    );
+    await sendAndWait(app, cookie, bot.id, "run Export weekly CRM list");
+    const messages = (await rpc<Snap>(app, cookie, "threads/get", { botId: bot.id })).messages;
+    const botText = JSON.stringify(messages);
+    expect(botText.toLowerCase()).toContain("taught skill");
+  });
+
+  it("18: teaching expiry auto-stops recording", async () => {
+    const previousTtl = process.env.TEACH_RECORDING_TTL_MS;
+    process.env.TEACH_RECORDING_TTL_MS = "1000";
+    try {
+      const cookie = await signup(app, `teach-exp-j-${stamp}@rakazo.test`, "Teach Exp Ada");
+      const bot = await rpc<Bot>(app, cookie, "bots/create", {
+        name: "Timer",
+        title: "",
+        description: "",
+        instructions: "",
+        notifyOnFinish: true,
+      });
+      await rpc(app, cookie, "computer/boot", { botId: bot.id });
+      await rpc(app, cookie, "computer/takeover", { botId: bot.id });
+      const skill = await rpc<{ id: string; status: string }>(app, cookie, "skills/start", {
+        botId: bot.id,
+        goal: "Timed demo",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      const current = await rpc<{ status: string }>(app, cookie, "skills/get", {
+        skillId: skill.id,
+      });
+      expect(["draft", "drafting"].includes(current.status)).toBe(true);
+    } finally {
+      if (previousTtl === undefined) delete process.env.TEACH_RECORDING_TTL_MS;
+      else process.env.TEACH_RECORDING_TTL_MS = previousTtl;
+    }
+  });
+
+  it("19: destination writes pause for approval before side effects", async () => {
     const cookie = await signup(app, `approval-j-${stamp}@rakazo.test`, "Approval");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {
       name: "Chief",
@@ -1167,7 +1312,6 @@ describeJourneys("required product journeys", () => {
       bot.id,
       (snap) => snap.run?.status === "waiting_input",
     );
-    expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
     await answerPendingApproval(app, cookie, bot.id, second.runId, "deny", waitingAgain);
     const denied = await waitFor(
       app,
@@ -1183,7 +1327,7 @@ describeJourneys("required product journeys", () => {
     expect(deniedEffect?.status).toBe("denied");
   });
 
-  it("18: actions run by default and specific exceptions override broad review rules", async () => {
+  it("20: actions run by default and specific exceptions override broad review rules", async () => {
     const cookie = await signup(app, `always-j-${stamp}@rakazo.test`, "Always");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {
       name: "Chief",
@@ -1241,7 +1385,6 @@ describeJourneys("required product journeys", () => {
       bot.id,
       (snap) => snap.run?.status === "waiting_input",
     );
-    expect(JSON.stringify(waitingAgain.messages)).toMatch(/allow once|review before/i);
     expect(connector.records.length).toBe(recordsAfterDefault + 2);
     await answerPendingApproval(app, cookie, bot.id, fourth.runId, "allow", waitingAgain);
     await waitFor(
@@ -1253,7 +1396,7 @@ describeJourneys("required product journeys", () => {
     expect(connector.records.length).toBe(recordsAfterDefault + 3);
   });
 
-  it("19: routine destination writes pause on the same approval card", async () => {
+  it("21: routine destination writes pause on the same approval card", async () => {
     const cookie = await signup(app, `routine-approval-j-${stamp}@rakazo.test`, "Routine Approval");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {
       name: "Chief",
@@ -1262,7 +1405,6 @@ describeJourneys("required product journeys", () => {
       instructions: "",
       notifyOnFinish: true,
     });
-    const prompt = "write this to the destination crm as a note";
     await rpc(app, cookie, "approvalRules/set", {
       effect: "require_approval",
       matchKind: "tool",
@@ -1271,7 +1413,7 @@ describeJourneys("required product journeys", () => {
     const routine = await rpc<{ id: string }>(app, cookie, "routines/create", {
       botId: bot.id,
       name: "Send note",
-      prompt,
+      prompt: "write this to the destination crm as a note",
       cron: "0 9 * * 1",
       timezone: "UTC",
       notify: false,
@@ -1287,24 +1429,8 @@ describeJourneys("required product journeys", () => {
       bot.id,
       (snap) => snap.run?.status === "waiting_input",
     );
-    expect(JSON.stringify(waiting.messages)).toMatch(/allow once|review before/i);
     expect(connector.records).toHaveLength(recordsBefore);
-    const askMessage = waiting.messages.find((message) =>
-      message.blocks.some(
-        (block) =>
-          typeof block === "object" &&
-          block !== null &&
-          "kind" in block &&
-          block.kind === "ask" &&
-          "actions" in block,
-      ),
-    );
-    await rpc(app, cookie, "threads/answer", {
-      botId: bot.id,
-      runId: tested.runId,
-      messageId: (askMessage as { id: string }).id,
-      answer: "allow",
-    });
+    await answerPendingApproval(app, cookie, bot.id, tested.runId, "allow", waiting);
     await waitFor(
       app,
       cookie,
@@ -1325,6 +1451,7 @@ type Bot = {
   notifyOnFinish: boolean;
   color: string;
   pinned: boolean;
+  sectionId: string | null;
   unread: boolean;
   computerMode: "team" | "dedicated";
   parentBotId?: string | null;

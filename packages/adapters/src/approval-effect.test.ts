@@ -6,6 +6,7 @@ import {
   claimIntendedEffect,
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
+  settleUncertainEffect,
 } from "./approval-effect.js";
 
 describe("approvalEffectKey", () => {
@@ -59,6 +60,13 @@ describe("resolveDuplicateEffectGate", () => {
       toolName: "destination.write",
     });
   });
+
+  it("returns a previously reconciled uncertain result", () => {
+    const result = { error: "outcome unknown", uncertain: true };
+    expect(
+      resolveDuplicateEffectGate({ status: "uncertain", result }, "destination.write"),
+    ).toEqual({ action: "return", result });
+  });
 });
 
 describe("claimApprovedEffect", () => {
@@ -100,14 +108,20 @@ describe("approved effect resume", () => {
     initialStatus: "approved" | "executing" | "completed" = "approved",
   ) {
     const effectId = "effect-1";
-    let status = initialStatus;
+    let status: "approved" | "executing" | "completed" | "uncertain" = initialStatus;
     let destinationWrites = 0;
     const storedResult = { ok: true, written: true };
+    let effectResult: unknown;
     const store = {
       externalEffect: {
         updateMany: vi.fn(async ({ where, data }) => {
           if (where.id === effectId && where.status === "approved" && status === "approved") {
-            status = data.status;
+            status = data.status as typeof status;
+            return { count: 1 };
+          }
+          if (where.id === effectId && where.status === "executing" && status === "executing") {
+            status = data.status as typeof status;
+            effectResult = data.result;
             return { count: 1 };
           }
           return { count: 0 };
@@ -115,7 +129,7 @@ describe("approved effect resume", () => {
         findUnique: vi.fn(async (_args: { where: { id: string } }) => ({
           id: effectId,
           status,
-          result: status === "completed" ? storedResult : undefined,
+          result: status === "completed" ? storedResult : effectResult,
         })),
       },
     };
@@ -126,7 +140,10 @@ describe("approved effect resume", () => {
       const gate = resolveDuplicateEffectGate(effect, toolName);
       if (gate.action === "return") return { executed: false, result: gate.result };
       if (gate.action === "uncertain") {
-        throw new Error(`tool ${toolName} has an earlier execution with an uncertain outcome`);
+        return {
+          executed: false,
+          result: await settleUncertainEffect(store, effectId, toolName),
+        };
       }
       if (!(await claimApprovedEffect(store, effectId))) {
         const current = await store.externalEffect.findUnique({ where: { id: effectId } });
@@ -135,6 +152,12 @@ describe("approved effect resume", () => {
         }
         const retryGate = resolveDuplicateEffectGate(current, toolName);
         if (retryGate.action === "return") return { executed: false, result: retryGate.result };
+        if (retryGate.action === "uncertain") {
+          return {
+            executed: false,
+            result: await settleUncertainEffect(store, effectId, toolName),
+          };
+        }
         throw new Error(`tool ${toolName} has an earlier execution with an uncertain outcome`);
       }
       destinationWrites += 1;
@@ -152,16 +175,18 @@ describe("approved effect resume", () => {
     };
   }
 
-  it("runs the connector write only once when a worker dies before completeEffect", async () => {
+  it("records an unknown outcome without replaying after interruption", async () => {
     const harness = createApprovedEffectStore();
 
     const first = await harness.resumeApprovedTool("destination.write", { complete: false });
-    await expect(harness.resumeApprovedTool("destination.write")).rejects.toThrow(
-      /uncertain outcome/,
-    );
+    const second = await harness.resumeApprovedTool("destination.write");
 
     expect(first).toEqual({ executed: true, result: { ok: true, written: true } });
-    expect(harness.getStatus()).toBe("executing");
+    expect(second).toEqual({
+      executed: false,
+      result: expect.objectContaining({ uncertain: true }),
+    });
+    expect(harness.getStatus()).toBe("uncertain");
     expect(harness.getDestinationWrites()).toBe(1);
   });
 

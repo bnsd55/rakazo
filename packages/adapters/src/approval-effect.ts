@@ -51,6 +51,9 @@ export function resolveDuplicateEffectGate(
   if (effect.status === "executing") {
     return { action: "uncertain", toolName };
   }
+  if (effect.status === "uncertain") {
+    return { action: "return", result: effect.result ?? uncertainEffectResult(toolName) };
+  }
   if (effect.status === "approved") {
     return { action: "execute" };
   }
@@ -58,6 +61,43 @@ export function resolveDuplicateEffectGate(
     return { action: "paused" };
   }
   return { action: "uncertain", toolName };
+}
+
+export type UncertainEffectResult = { error: string; uncertain: true };
+
+export function uncertainEffectResult(toolName: string): UncertainEffectResult {
+  return {
+    error: `The earlier ${toolName} execution was interrupted, so its outcome is unknown. It was not replayed to avoid a duplicate side effect. Verify the destination before proposing another action.`,
+    uncertain: true,
+  };
+}
+
+export async function settleUncertainEffect(
+  store: {
+    externalEffect: {
+      updateMany: (args: {
+        where: { id: string; status: string };
+        data: { status: string; result: UncertainEffectResult };
+      }) => Promise<{ count: number }>;
+      findUnique: (args: {
+        where: { id: string };
+      }) => Promise<{ status: string; result?: unknown } | null>;
+    };
+  },
+  effectId: string,
+  toolName: string,
+): Promise<unknown> {
+  const result = uncertainEffectResult(toolName);
+  const settled = await store.externalEffect.updateMany({
+    where: { id: effectId, status: "executing" },
+    data: { status: "uncertain", result },
+  });
+  if (settled.count === 1) return result;
+
+  const current = await store.externalEffect.findUnique({ where: { id: effectId } });
+  if (!current) return result;
+  const gate = resolveDuplicateEffectGate(current, toolName);
+  return gate.action === "return" ? gate.result : result;
 }
 
 export async function claimApprovedEffect(

@@ -89,7 +89,7 @@ describeIntegration("run executor lifecycle", () => {
     ).resolves.toMatchObject({ status });
   });
 
-  it("fails closed when a retried external effect was already executing", async () => {
+  it("records an uncertain result without replaying an interrupted external effect", async () => {
     const prompt = "write this to the destination crm as a note";
     const seeded = await seedRun("uncertain-effect", prompt);
     const args = { collection: "notes", title: "Rakazo result", body: prompt };
@@ -113,15 +113,12 @@ describeIntegration("run executor lifecycle", () => {
       handles.prisma.attempt.findFirstOrThrow({ where: { runId: seeded.run.id } }),
       handles.prisma.externalEffect.findUniqueOrThrow({ where: { idempotencyKey: executionId } }),
     ]);
-    expect(run).toMatchObject({
-      status: "failed",
-      error: expect.stringMatching(/uncertain outcome/),
+    expect(run).toMatchObject({ status: "completed", error: null });
+    expect(attempt).toMatchObject({ status: "completed", error: null });
+    expect(effect).toMatchObject({
+      status: "uncertain",
+      result: expect.objectContaining({ uncertain: true }),
     });
-    expect(attempt).toMatchObject({
-      status: "failed",
-      error: expect.stringMatching(/uncertain outcome/),
-    });
-    expect(effect.status).toBe("executing");
     expect(handles.connector.records).toHaveLength(recordsBefore);
     expect(
       await handles.prisma.event.count({

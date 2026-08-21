@@ -286,6 +286,7 @@ describe("answerRunInput", () => {
           botId: "bot-1",
           runId: "run-1",
           messageId: "message-1",
+          answeredByUserId: "user-1",
           answer: "Paris",
         },
         fanout,
@@ -364,6 +365,7 @@ describe("answerRunInput", () => {
           botId: "bot-1",
           runId: "run-1",
           messageId: "message-1",
+          answeredByUserId: "user-1",
           answer: "allow",
         },
         fanout,
@@ -443,6 +445,7 @@ describe("answerRunInput", () => {
           botId: "bot-1",
           runId: "run-1",
           messageId: "message-1",
+          answeredByUserId: "user-1",
           answer: "always",
         },
         fanout,
@@ -473,6 +476,58 @@ describe("answerRunInput", () => {
       },
       update: {},
     });
+  });
+
+  it("does not let another workspace member create an always-allow rule for the run owner", async () => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+      message: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "message-1",
+          blocks: [
+            {
+              kind: "ask",
+              approvalEffectId: "effect-1",
+              text: "Review before writing",
+              status: "pending",
+              actions: [
+                { id: "allow", label: "Allow once" },
+                { id: "always", label: "Always allow" },
+                { id: "deny", label: "Deny" },
+              ],
+            },
+          ],
+        }),
+      },
+      run: {
+        findUnique: vi.fn().mockResolvedValue({ userId: "run-owner" }),
+        updateMany: vi.fn(),
+      },
+      externalEffect: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ id: "effect-1", status: "intended", kind: "destination.write" }),
+      },
+      actionApprovalRule: { upsert: vi.fn() },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      answerRunInput(prisma, {
+        workspaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        messageId: "message-1",
+        answeredByUserId: "other-member",
+        answer: "always",
+      }),
+    ).resolves.toBe(false);
+
+    expect(tx.run.updateMany).not.toHaveBeenCalled();
+    expect(tx.actionApprovalRule.upsert).not.toHaveBeenCalled();
   });
 
   it("does not queue a run when an approval card has no matching effect", async () => {
@@ -509,6 +564,7 @@ describe("answerRunInput", () => {
         botId: "bot-1",
         runId: "run-1",
         messageId: "message-1",
+        answeredByUserId: "user-1",
         answer: "allow",
       }),
     ).resolves.toBe(false);
@@ -549,6 +605,7 @@ describe("answerRunInput", () => {
         botId: "bot-1",
         runId: "run-1",
         messageId: "message-1",
+        answeredByUserId: "user-1",
         answer: "always",
       }),
     ).resolves.toBe(false);
@@ -578,6 +635,7 @@ describe("answerRunInput", () => {
         botId: "bot-1",
         runId: "run-1",
         messageId: "message-1",
+        answeredByUserId: "user-1",
         answer: "Rome",
       }),
     ).resolves.toBe(false);

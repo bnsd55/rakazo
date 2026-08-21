@@ -14,8 +14,7 @@ Rakazo is in beta. Learn more at [rakazo.com](https://rakazo.com).
 ## Features
 
 - Persistent bots with their own conversations, memory, routines, and history
-- Chat attachments, artifacts, and workspace search
-- Approval prompts (allow once, always allow, or deny) for consequential actions
+- Voice mode: speak replies, dictate, and call a bot. Bring your own ElevenLabs, OpenAI, or Cartesia key
 - Shared Team Computers and isolated Private computers
 - Browser, terminal, file, and graphical desktop access
 - Bots that can delegate to peer bots or short-lived subagents
@@ -97,6 +96,16 @@ Common checks:
 ```bash
 pnpm lint
 pnpm check
+pnpm test
+pnpm test:integration
+pnpm test:e2e
+```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and test matrix.
+
+## Documentation
+
+```bash
 pnpm test              # unit, property, and in-process contract tests
 pnpm test:integration  # Postgres journeys, Graphile jobs, LISTEN/NOTIFY
 pnpm test:e2e          # Playwright against the emulated stack
@@ -109,14 +118,6 @@ pnpm test:canary       # live OpenRouter / E2B / Box canaries
 COMPUTER_E2E_MODEL=<vision-capable-openrouter-model-id> pnpm test:computer
 ```
 
-The Playwright workflow can also be started manually with **Sandbox provider** set to `e2b`, `daytona`, or `box`.
-Those options require `E2B_API_KEY`, `DAYTONA_API_KEY`, or `BOX_API_KEY`, keep the deterministic scripted agent runtime, and destroy
-the provider machines after the run. The default and all automatic runs remain on `fake`.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and test matrix.
-
-## Documentation
-
 - [Self-hosting](./docs/self-host.md)
 - [Computer runtime and isolation](./docs/computer-runtime.md)
 - [Mobile releases](./docs/mobile-release.md)
@@ -124,6 +125,9 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and test m
 
 ## Contributing
 
+The Playwright workflow can also be started manually with **Sandbox provider** set to `e2b`, `daytona`, or `box`.
+Those options require `E2B_API_KEY`, `DAYTONA_API_KEY`, or `BOX_API_KEY`, keep the deterministic scripted agent runtime, and destroy
+the provider machines after the run. The default and all automatic runs remain on `fake`.
 Contributions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull
 request. For security vulnerabilities, follow [SECURITY.md](./SECURITY.md) instead of filing a public
 issue.

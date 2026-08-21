@@ -6,11 +6,13 @@ import type {
 } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  computerPanelAutoBoot,
   isThreadSnapshotEvent,
   mergeThreadSnapshot,
   prependThreadMessagePage,
   reduceComputerStatus,
   reduceThreadSnapshot,
+  userHoldsComputerControl,
 } from "./thread-events.js";
 
 describe("thread event reduction", () => {
@@ -278,14 +280,22 @@ describe("computer event reduction", () => {
       computer({ state: "suspended", controlHolder: "bot" }),
       event({ type: "computer.takeover.granted", payload: {} }),
     );
-    expect(granted).toMatchObject({ state: "suspended", controlHolder: "user" });
+    expect(granted).toMatchObject({
+      state: "suspended",
+      controlHolder: "user",
+      controlBotId: "bot-1",
+    });
     expect(
       reduceComputerStatus(granted, event({ type: "computer.takeover.granted", payload: {} })),
     ).toBe(granted);
   });
 
   it("applies the authoritative holder when a takeover is released or expires", () => {
-    const initial = computer({ state: "running", controlHolder: "user" });
+    const initial = computer({
+      state: "running",
+      controlHolder: "user",
+      controlBotId: "bot-1",
+    });
     const expired = reduceComputerStatus(
       initial,
       event({
@@ -300,8 +310,40 @@ describe("computer event reduction", () => {
         payload: { holder: "bot", reason: "released" },
       }),
     );
-    expect(expired).toMatchObject({ state: "running", controlHolder: "none" });
-    expect(released).toMatchObject({ state: "running", controlHolder: "bot" });
+    expect(expired).toMatchObject({
+      state: "running",
+      controlHolder: "none",
+      controlBotId: null,
+    });
+    expect(released).toMatchObject({
+      state: "running",
+      controlHolder: "bot",
+      controlBotId: null,
+    });
+  });
+
+  it("fills in controlBotId when a grant arrives after controlHolder is already user", () => {
+    const granted = reduceComputerStatus(
+      computer({ state: "running", controlHolder: "user", controlBotId: null }),
+      event({ type: "computer.takeover.granted", payload: {} }),
+    );
+    expect(granted).toMatchObject({
+      state: "running",
+      controlHolder: "user",
+      controlBotId: "bot-1",
+    });
+    expect(userHoldsComputerControl(granted, "bot-1")).toBe(true);
+    expect(userHoldsComputerControl(granted, "bot-2")).toBe(false);
+  });
+
+  it("auto-boots stopped computers and recovers a running screen that has no URL", () => {
+    expect(computerPanelAutoBoot("stopped")).toBe("boot");
+    expect(computerPanelAutoBoot("error")).toBe("boot");
+    expect(computerPanelAutoBoot(undefined)).toBe("boot");
+    expect(computerPanelAutoBoot("running", "https://screen.example")).toBe("wait");
+    expect(computerPanelAutoBoot("running", null)).toBe("recover-screen");
+    expect(computerPanelAutoBoot("booting")).toBe("wait");
+    expect(computerPanelAutoBoot("suspended")).toBe("wait");
   });
 });
 
@@ -326,6 +368,8 @@ function computer(overrides: Partial<ComputerStatus> = {}): ComputerStatus {
     controlHolder: "none",
     controlBotId: null,
     screenAvailable: false,
+    screenWidth: 1280,
+    screenHeight: 800,
     homeRevision: null,
     busyBotName: null,
     ...overrides,
