@@ -23,6 +23,7 @@ import {
   pickFromLibrary,
   takePhoto,
 } from "../lib/pick-attachments";
+import { playMpeg, speakUtterance } from "../lib/voice";
 
 type PendingAttachment = PickedAttachment & { threadKey: string };
 
@@ -491,6 +492,18 @@ export default function Thread() {
                 onOpenBot={(id, botName) =>
                   router.push({ pathname: "/thread", params: { botId: id, name: botName } })
                 }
+                onSpeak={
+                  message.role === "bot"
+                    ? () =>
+                        void speakMessage(botId ?? snap?.members?.[0]?.botId ?? "", message).catch(
+                          (err) =>
+                            Alert.alert(
+                              "Could not speak",
+                              err instanceof Error ? err.message : "Try again.",
+                            ),
+                        )
+                    : undefined
+                }
               />
             </View>
           </View>
@@ -561,7 +574,7 @@ export default function Thread() {
                   )
                 }
               >
-                <Text style={{ color: "#85858A" }}>✕</Text>
+                <NativeSymbol ios="xmark" android="close" size={14} color="#85858A" />
               </Pressable>
             </View>
           ))}
@@ -651,18 +664,33 @@ function memberName(
   return members.find((member) => member.botId === botId)?.name;
 }
 
+async function speakMessage(botId: string, message: MobileMessage) {
+  const text = blockText(message);
+  if (!text.trim()) return;
+  const prepared = await rpc<{ ready: boolean; utterances: string[] }>("voice/prepare", {
+    text,
+    botId,
+  });
+  if (!prepared.ready) throw new Error("Add a voice provider in Voice settings.");
+  for (const utterance of prepared.utterances) {
+    await playMpeg(await speakUtterance(utterance, { botId }));
+  }
+}
+
 function MessageBubble({
   botId,
   message,
   members,
   replyPreview,
   onOpenBot,
+  onSpeak,
 }: {
   botId: string;
   message: MobileMessage;
   members?: MobileSnapshot["members"];
   replyPreview?: MobileMessage;
   onOpenBot: (botId: string, name: string) => void;
+  onSpeak?: () => void;
 }) {
   const handoff = message.blocks.find((block) => block.kind === "handoff");
   if (handoff) {
@@ -880,9 +908,16 @@ function MessageBubble({
           {blockText(message)}
         </Text>
       ) : (
-        <ChatMarkdown streaming={message.id.startsWith("progress:")}>
-          {blockText(message)}
-        </ChatMarkdown>
+        <>
+          <ChatMarkdown streaming={message.id.startsWith("progress:")}>
+            {blockText(message)}
+          </ChatMarkdown>
+          {onSpeak ? (
+            <Pressable onPress={onSpeak} hitSlop={8} style={{ marginTop: 8 }}>
+              <Text style={{ color: "#85858A", fontSize: 13 }}>Speak</Text>
+            </Pressable>
+          ) : null}
+        </>
       )}
     </View>
   );

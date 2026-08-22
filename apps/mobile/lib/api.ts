@@ -1,4 +1,11 @@
-import type { Bot, ComputerMode, Me, ModelCatalogEntry, ModelCredential } from "@rakazo/contracts";
+import type {
+  Bot,
+  BotSection,
+  ComputerMode,
+  Me,
+  ModelCatalogEntry,
+  ModelCredential,
+} from "@rakazo/contracts";
 import {
   mergeThreadHistory,
   prependThreadHistoryPage,
@@ -140,12 +147,15 @@ export type MobileBot = Pick<
   | "title"
   | "color"
   | "pinned"
+  | "sectionId"
   | "archivedAt"
   | "unread"
   | "updatedAt"
   | "computerMode"
 > &
   Partial<Pick<Bot, "parentBotId">>;
+
+export type MobileBotSection = BotSection;
 
 export type MobileMe = Pick<
   Me,

@@ -1,4 +1,5 @@
 import type { SearchHit } from "@rakazo/contracts";
+import { groupBotsForSidebar } from "@rakazo/core";
 import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -14,8 +15,16 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BotAvatar } from "../components/bot-avatar";
+import { BotOrganizeModal } from "../components/bot-organize-modal";
 import { NativeSymbol } from "../components/native-symbol";
-import { loadSessionToken, type MobileBot, type MobileGroup, type MobileMe, rpc } from "../lib/api";
+import {
+  loadSessionToken,
+  type MobileBot,
+  type MobileBotSection,
+  type MobileGroup,
+  type MobileMe,
+  rpc,
+} from "../lib/api";
 import { botTag, filterBots, formatThreadTime, userInitials } from "../lib/inbox";
 import { native } from "../lib/native";
 import { previewSnippet } from "../lib/preview";
@@ -25,9 +34,16 @@ import { mobileSearchDestination } from "../lib/search-destination";
 
 const FALLBACK_COLOR = "#9B5CF6";
 
+type InboxItem =
+  | { type: "bot"; bot: MobileBot }
+  | { type: "group"; group: MobileGroup }
+  | { type: "search"; hit: SearchHit }
+  | { type: "heading"; key: string; title: string };
+
 export default function Home() {
   const [bots, setBots] = useState<MobileBot[]>([]);
   const [groups, setGroups] = useState<MobileGroup[]>([]);
+  const [botSections, setBotSections] = useState<MobileBotSection[]>([]);
   const [me, setMe] = useState<MobileMe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -37,15 +53,18 @@ export default function Home() {
   const [searching, setSearching] = useState(false);
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [organizeBotId, setOrganizeBotId] = useState<string | null>(null);
 
   const loadBots = useCallback(async () => {
     setError(null);
     try {
-      const [nextBots, nextGroups] = await Promise.all([
+      const [nextBots, nextSections, nextGroups] = await Promise.all([
         rpc<MobileBot[]>("bots/list"),
+        rpc<MobileBotSection[]>("botSections/list"),
         rpc<MobileGroup[]>("groups/list"),
       ]);
       setBots(nextBots);
+      setBotSections(nextSections);
       setGroups(nextGroups);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load bots");
@@ -110,11 +129,21 @@ export default function Home() {
   }, [query, searching]);
 
   const visible = useMemo(() => filterBots(bots, query), [bots, query]);
-  const listData = useMemo((): Array<MobileBot | MobileGroup | SearchHit> => {
-    if (query.trim() && searching) return searchHits;
-    return [...groups, ...visible];
-  }, [groups, query, searching, searchHits, visible]);
+  const listData = useMemo((): InboxItem[] => {
+    if (query.trim() && searching) {
+      return searchHits.map((hit) => ({ type: "search", hit }));
+    }
+    const items: InboxItem[] = groupBotsForSidebar(visible, botSections).flatMap((group) => [
+      ...(group.title ? [{ type: "heading" as const, key: group.key, title: group.title }] : []),
+      ...group.bots.map((bot) => ({ type: "bot" as const, bot })),
+    ]);
+    for (const group of groups) {
+      items.push({ type: "group", group });
+    }
+    return items;
+  }, [botSections, groups, query, searching, searchHits, visible]);
   const initials = userInitials(me?.name ?? "");
+  const organizeBot = bots.find((bot) => bot.id === organizeBotId) ?? null;
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -179,15 +208,15 @@ export default function Home() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <FlatList<MobileBot | MobileGroup | SearchHit>
+      <FlatList<InboxItem>
         data={listData}
-        keyExtractor={(item) =>
-          "kind" in item
-            ? `${item.kind}-${item.botId}-${item.messageId ?? item.artifactId ?? item.routineId ?? item.url}`
-            : "members" in item
-              ? `group-${item.id}`
-              : item.id
-        }
+        keyExtractor={(item) => {
+          if (item.type === "heading") return `heading-${item.key}`;
+          if (item.type === "bot") return item.bot.id;
+          if (item.type === "group") return `group-${item.group.id}`;
+          const hit = item.hit;
+          return `${hit.kind}-${hit.botId}-${hit.messageId ?? hit.artifactId ?? hit.routineId ?? hit.url}`;
+        }}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         indicatorStyle="white"
@@ -215,22 +244,39 @@ export default function Home() {
           </Text>
         }
         renderItem={({ item }) =>
-          "kind" in item ? (
+          item.type === "search" ? (
             <SearchRow
-              hit={item}
+              hit={item.hit}
               onPress={() => {
                 setQuery("");
                 setSearchHits([]);
-                router.push(mobileSearchDestination(item));
+                router.push(mobileSearchDestination(item.hit));
               }}
             />
-          ) : "members" in item ? (
-            <GroupRow group={item} />
+          ) : item.type === "heading" ? (
+            <Text style={styles.sectionHeading}>{item.title}</Text>
+          ) : item.type === "group" ? (
+            <GroupRow group={item.group} />
           ) : (
-            <BotRow bot={item} />
+            <BotRow bot={item.bot} onLongPress={() => setOrganizeBotId(item.bot.id)} />
           )
         }
       />
+      {organizeBot ? (
+        <BotOrganizeModal
+          bot={organizeBot}
+          sections={botSections}
+          onClose={() => setOrganizeBotId(null)}
+          onUpdate={async (update) => {
+            await rpc("bots/update", { botId: organizeBot.id, ...update });
+            await loadBots();
+          }}
+          onCreateSection={async (name) => {
+            await rpc("botSections/create", { botId: organizeBot.id, name });
+            await loadBots();
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -280,7 +326,7 @@ function SearchRow({ hit, onPress }: { hit: SearchHit; onPress: () => void }) {
   );
 }
 
-function BotRow({ bot }: { bot: MobileBot }) {
+function BotRow({ bot, onLongPress }: { bot: MobileBot; onLongPress: () => void }) {
   const router = useRouter();
   const preview = previewSnippet(bot.preview, 40) || bot.title || "No messages yet";
   const time = bot.updatedAt ? formatThreadTime(bot.updatedAt) : "";
@@ -292,9 +338,11 @@ function BotRow({ bot }: { bot: MobileBot }) {
   return (
     <Pressable
       accessibilityLabel={label}
+      accessibilityHint="Long press to pin or move to a section"
       onPress={() =>
         router.push({ pathname: "/thread", params: { botId: bot.id, name: bot.name } })
       }
+      onLongPress={onLongPress}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
     >
       <BotAvatar color={bot.color || FALLBACK_COLOR} />
@@ -497,6 +545,14 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#8B5CF6",
+  },
+  sectionHeading: {
+    color: native.secondaryLabel,
+    fontSize: 14,
+    fontWeight: "600",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
   },
   groupAvatar: {
     width: 48,

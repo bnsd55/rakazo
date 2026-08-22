@@ -1,7 +1,12 @@
 import { type JobPublisher, runContinueJob } from "@rakazo/adapter-kit";
 import { toComputerRef } from "@rakazo/adapters";
 import type { Actor, ComputerStatus, GroupMember, ThreadSnapshot } from "@rakazo/contracts";
-import { ACTIVE_RUN_STATUSES, projectMessages, resolveGroupTargetBotIds } from "@rakazo/core";
+import {
+  ACTIVE_RUN_STATUSES,
+  computerScreenSize,
+  projectMessages,
+  resolveGroupTargetBotIds,
+} from "@rakazo/core";
 import {
   createGroupRepos,
   createRepos,
@@ -561,6 +566,7 @@ function toComputerStatus(
           computer?.state === "error"
         ? computer.state
         : "stopped";
+  const screen = computerScreenSize(computer?.kind);
   return {
     botId,
     mode: computer?.scope === "dedicated" ? "dedicated" : "team",
@@ -569,6 +575,8 @@ function toComputerStatus(
     controlHolder: (computer?.controlHolder ?? "none") as ComputerStatus["controlHolder"],
     controlBotId: computer?.controlBotId ?? null,
     screenAvailable: state === "running" || state === "booting",
+    screenWidth: screen.width,
+    screenHeight: screen.height,
     homeRevision: computer?.homeRevision ?? null,
     busyBotName: null,
   };

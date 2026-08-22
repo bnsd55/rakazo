@@ -20,10 +20,12 @@ import {
   blocksToAgentHistoryText,
   containsSecret,
   createStreamingRedactor,
+  formatSkillRunPrompt,
   inferAttachmentMimeType,
   isTerminal,
   nextCronDate,
   nextFence,
+  promptInvokesSkill,
   redactSecrets,
   sandboxCommandTimeoutMs,
   userTurnBlocksForRun,
@@ -88,6 +90,7 @@ import {
   searchSupermemory,
   supermemoryContainerTag,
 } from "./supermemory-client.js";
+import { getActiveTeachingSession, parsePlaybook } from "./teaching-session.js";
 import {
   attachWorkspaceFileToThread,
   currentTurnFilesInstruction,
@@ -337,7 +340,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
 
       const runSecrets = [...deps.secrets];
       try {
-        const [bot, thread, messages, task, storedConnections, credential, settings] =
+        const [bot, thread, messages, task, storedConnections, credential, settings, savedSkills] =
           await Promise.all([
             deps.prisma.bot.findUniqueOrThrow({
               where: { id: run.botId },
@@ -357,6 +360,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
             }),
             findDefaultModelCredential(deps.prisma, run),
             deps.prisma.deploymentSettings.findUnique({ where: { id: "default" } }),
+            deps.prisma.taughtSkill.findMany({
+              where: { botId: run.botId, workspaceId: run.workspaceId, status: "saved" },
+            }),
           ]);
         runAbortController = new AbortController();
         if (!leaseValid) runAbortController.abort();
@@ -519,11 +525,17 @@ export function createRunExecutor(deps: ExecutorDeps) {
             return result;
           };
           if (name === "computer_observe") {
+            if (await getActiveTeachingSession(deps.prisma, run.workspaceId, run.botId)) {
+              return { error: "Teaching is in progress. Stop teaching before using the computer." };
+            }
             return computerScreenToolResult(async () =>
               formatObservation(await deps.sandbox.observe(computer, context)),
             );
           }
           if (name === "computer_act") {
+            if (await getActiveTeachingSession(deps.prisma, run.workspaceId, run.botId)) {
+              return { error: "Teaching is in progress. Stop teaching before using the computer." };
+            }
             return computerScreenToolResult(async () => {
               const result = await deps.sandbox.act(
                 computer,
@@ -850,6 +862,29 @@ export function createRunExecutor(deps: ExecutorDeps) {
           connectedPlugins.length > 0
             ? `Connected plugins: ${connectedPlugins.map((row) => `${row.displayName} (${row.provider})`).join(", ")}. Use those plugin tools when the user asks about those apps.`
             : "No plugins are connected yet.";
+        const taughtSkillIndex = savedSkills.slice(0, 20);
+        const taughtSkillsLine =
+          taughtSkillIndex.length > 0
+            ? `Saved taught skills:\n${taughtSkillIndex
+                .map((skill) => {
+                  const playbook = parsePlaybook(skill.playbook);
+                  const name = skill.name || skill.goal.slice(0, 80);
+                  return `- ${name}: ${playbook.whenToUse || skill.goal}`;
+                })
+                .join(
+                  "\n",
+                )}\nWhen the user asks to run a taught skill by name, follow that skill's playbook exactly. The full playbook is included in the user task when they invoke it.`
+            : undefined;
+        const taskPrompt = [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n");
+        const invokedSkill = savedSkills.find((skill) =>
+          promptInvokesSkill(taskPrompt, skill.name || skill.goal),
+        );
+        const prompt = invokedSkill
+          ? `${formatSkillRunPrompt(
+              invokedSkill.name || invokedSkill.goal.slice(0, 80),
+              parsePlaybook(invokedSkill.playbook),
+            )}\n\n${taskPrompt}`
+          : taskPrompt;
 
         try {
           for await (const event of deps.runtime.run(
@@ -857,7 +892,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               botId: bot.id,
               threadId: thread.id,
               runId,
-              prompt: [task.prompt, attachedFilesPrompt].filter(Boolean).join("\n\n"),
+              prompt,
               instructions: [
                 bot.instructions || `${bot.name}: ${bot.title}\n${bot.description}`,
                 groupContext,
@@ -870,6 +905,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 "run_subagent is a short helper inside this turn only. It is not a bot, has no thread, and does not show in the list. Use it for parallel work you will summarize here.",
                 "archive_bot safely archives a bot this bot created, and only that bot. Use it when the user asks to remove that bot or when it is finished and unused. The user can restore it or permanently delete it later. confirm_name must exactly match its name.",
                 pluginLine,
+                taughtSkillsLine,
                 "Never print API keys, access tokens, or secret values. Prefer tools over claiming you already did the work.",
               ]
                 .filter((instruction): instruction is string => Boolean(instruction))

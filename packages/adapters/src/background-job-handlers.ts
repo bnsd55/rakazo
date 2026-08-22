@@ -10,6 +10,7 @@ import { expireComputerControl } from "./computer-control.js";
 import { scheduleComputerSleep, sleepComputerIfIdle } from "./computer-idle.js";
 import type { createRunExecutor } from "./executor.js";
 import { compactHistory } from "./history-compaction.js";
+import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 export function createBackgroundJobHandlers(deps: {
   executor: ReturnType<typeof createRunExecutor>;
@@ -36,6 +37,9 @@ export function createBackgroundJobHandlers(deps: {
       if (await expireComputerControl(deps, payload.computerId, payload.leaseId)) {
         scheduleComputerSleep(deps.jobs, payload.computerId);
       }
+    },
+    "skill.teaching-expire": async (payload) => {
+      await expireTaughtSkillTeaching(deps, payload.skillId);
     },
     "history.compact": async (payload) => {
       await compactHistory(

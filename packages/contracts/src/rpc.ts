@@ -6,6 +6,7 @@ import {
   ArtifactSchema,
   ArtifactWithContentSchema,
   BotSchema,
+  BotSectionSchema,
   CapabilityInstallSchema,
   ComputerModeSchema,
   ComputerStatusSchema,
@@ -23,11 +24,18 @@ import {
   ModelCatalogEntrySchema,
   ModelCredentialSchema,
   RoutineSchema,
+  SkillPlaybookSchema,
+  TaughtSkillSchema,
+  TeachRecordingEventSchema,
   ThreadMessagePageSchema,
   ThreadSnapshotSchema,
   UpdateBotInput,
   UpdateGroupInput,
   UsageRecordSchema,
+  VoiceCatalogEntrySchema,
+  VoiceCredentialSchema,
+  VoiceInfoSchema,
+  VoiceStatusSchema,
 } from "./domain.js";
 import { ProductEventSchema } from "./events.js";
 import { Id } from "./ids.js";
@@ -167,6 +175,12 @@ export const appContract = {
     update: oc.input(UpdateGroupInput).output(GroupSchema),
     remove: oc.input(groupId).output(z.object({ ok: z.literal(true) })),
   },
+  botSections: {
+    list: oc.output(z.array(BotSectionSchema)),
+    create: oc
+      .input(z.object({ botId: Id, name: z.string().trim().min(1).max(60) }))
+      .output(BotSectionSchema),
+  },
   threads: {
     get: oc.input(threadTarget).output(ThreadSnapshotSchema),
     messages: oc
@@ -252,7 +266,7 @@ export const appContract = {
       .input(
         z.object({
           botId: Id,
-          kind: z.enum(["key", "pointer", "clipboard"]),
+          kind: z.enum(["key", "pointer", "clipboard", "scroll"]),
           payload: z.record(z.string(), z.unknown()),
         }),
       )
@@ -295,6 +309,34 @@ export const appContract = {
       .output(RoutineSchema),
     remove: oc.input(z.object({ routineId: Id })).output(z.object({ ok: z.literal(true) })),
     testRun: oc.input(z.object({ routineId: Id })).output(z.object({ runId: Id })),
+  },
+  skills: {
+    list: oc.input(botId).output(z.array(TaughtSkillSchema)),
+    get: oc.input(z.object({ skillId: Id })).output(TaughtSkillSchema),
+    start: oc
+      .input(z.object({ botId: Id, goal: z.string().min(1).max(4000) }))
+      .output(TaughtSkillSchema),
+    appendEvent: oc
+      .input(z.object({ skillId: Id, event: TeachRecordingEventSchema }))
+      .output(TaughtSkillSchema),
+    snapshot: oc.input(z.object({ skillId: Id })).output(TaughtSkillSchema),
+    stop: oc.input(z.object({ skillId: Id })).output(TaughtSkillSchema),
+    updateDraft: oc
+      .input(
+        z.object({
+          skillId: Id,
+          name: z.string().optional(),
+          playbook: SkillPlaybookSchema,
+        }),
+      )
+      .output(TaughtSkillSchema),
+    save: oc
+      .input(z.object({ skillId: Id, name: z.string().optional() }))
+      .output(TaughtSkillSchema),
+    testRun: oc
+      .input(z.object({ skillId: Id, prompt: z.string().optional() }))
+      .output(z.object({ runId: Id })),
+    remove: oc.input(z.object({ skillId: Id })).output(z.object({ ok: z.literal(true) })),
   },
   capabilities: {
     list: oc.output(z.array(CapabilityInstallSchema)),
@@ -357,6 +399,35 @@ export const appContract = {
   },
   search: {
     query: oc.input(z.object({ q: z.string().max(200) })).output(SearchQueryOutputSchema),
+  },
+  voice: {
+    catalog: oc.output(z.array(VoiceCatalogEntrySchema)),
+    status: oc.output(VoiceStatusSchema),
+    credentials: oc.output(z.array(VoiceCredentialSchema)),
+    connect: oc
+      .input(
+        z.object({
+          provider: z.string(),
+          apiKey: z.string().min(8),
+          voiceId: z.string().max(120).optional(),
+        }),
+      )
+      .output(VoiceCredentialSchema),
+    setVoice: oc
+      .input(z.object({ voiceId: z.string().min(1).max(120), provider: z.string().optional() }))
+      .output(VoiceStatusSchema),
+    voices: oc
+      .input(z.object({ provider: z.string().optional() }))
+      .output(z.array(VoiceInfoSchema)),
+    prepare: oc
+      .input(
+        z.object({
+          text: z.string().max(20000),
+          voiceId: z.string().max(120).optional(),
+          botId: Id.optional(),
+        }),
+      )
+      .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
   },
 };
 
