@@ -81,6 +81,7 @@ import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
 import { rpc } from "../lib/rpc";
 import {
+  activeThreadRuns,
   computerPanelAutoBoot,
   isComputerStatusEvent,
   isThreadSnapshotEvent,
@@ -822,7 +823,12 @@ export function ShellPage() {
     replyTarget && activeSnapshot?.messages.some((message) => message.id === replyTarget.id)
       ? replyTarget
       : null;
+  const currentRuns = activeThreadRuns(activeSnapshot);
   const answerableAskMessageId = latestAnswerableAskMessageId(activeSnapshot);
+  const transcriptRunning = currentRuns.some((run) =>
+    ["running", "queued", "leased"].includes(run.status),
+  );
+  const composerRunning = currentRuns.some((run) => isActive(run.status));
   const transcriptArtifactTarget = useMemo<ArtifactTarget>(
     () => (inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }),
     [active?.id, groupId, inGroup],
@@ -1563,10 +1569,7 @@ export function ShellPage() {
           olderCursor={activeSnapshot?.olderCursor ?? null}
           loadingOlder={loadingOlder}
           answerableAskMessageId={answerableAskMessageId}
-          running={Boolean(
-            activeSnapshot?.run &&
-              ["running", "queued", "leased"].includes(activeSnapshot.run.status),
-          )}
+          running={transcriptRunning}
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
           onAnswer={answerMessage}
@@ -1586,7 +1589,7 @@ export function ShellPage() {
         <Composer
           key={inGroup ? `group:${groupId}` : `bot:${active?.id}`}
           activeName={inGroup ? (activeGroup?.name ?? activeSnapshot?.groupName) : active?.name}
-          running={Boolean(activeSnapshot?.run && isActive(activeSnapshot.run.status))}
+          running={composerRunning}
           disabled={Boolean(recordingSkill)}
           pendingAttachments={activePendingAttachments}
           attachmentNotice={attachmentNotice}

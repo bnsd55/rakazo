@@ -21,6 +21,12 @@ const computerStates: ReadonlySet<unknown> = new Set<ComputerStatus["state"]>([
   "error",
 ]);
 
+export function activeThreadRuns(
+  snapshot: ThreadSnapshot | null,
+): NonNullable<ThreadSnapshot["activeRuns"]> {
+  return snapshot?.activeRuns ?? (snapshot?.run ? [snapshot.run] : []);
+}
+
 export function mergeThreadSnapshot(
   prev: ThreadSnapshot | null,
   next: ThreadSnapshot,

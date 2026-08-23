@@ -6,6 +6,7 @@ import type {
 } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  activeThreadRuns,
   computerPanelAutoBoot,
   isThreadSnapshotEvent,
   mergeThreadSnapshot,
@@ -259,6 +260,11 @@ describe("thread event reduction", () => {
     expect(waiting?.activeRuns?.find((run) => run.id === "run-waiting")?.status).toBe(
       "waiting_input",
     );
+    expect(activeThreadRuns(waiting)).toEqual([
+      newerRun,
+      expect.objectContaining({ id: "run-waiting", status: "waiting_input" }),
+    ]);
+    expect(activeThreadRuns({ ...initial, activeRuns: undefined })).toEqual([newerRun]);
   });
 
   it("replaces an ask message when its durable prompt state changes", () => {
