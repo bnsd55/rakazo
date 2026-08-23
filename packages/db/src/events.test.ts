@@ -371,7 +371,6 @@ describe("answerRunInput", () => {
         {
           workspaceId: "workspace-1",
           threadId: "thread-1",
-          botId: "bot-1",
           runId: "run-1",
           messageId: "message-1",
           answeredByUserId: "user-1",
@@ -452,7 +451,6 @@ describe("answerRunInput", () => {
         {
           workspaceId: "workspace-1",
           threadId: "thread-1",
-          botId: "bot-1",
           runId: "run-1",
           messageId: "message-1",
           answeredByUserId: "user-1",
@@ -529,7 +527,6 @@ describe("answerRunInput", () => {
       answerRunInput(prisma, {
         workspaceId: "workspace-1",
         threadId: "thread-1",
-        botId: "bot-1",
         runId: "run-1",
         messageId: "message-1",
         answeredByUserId: "other-member",
@@ -575,7 +572,6 @@ describe("answerRunInput", () => {
       answerRunInput(prisma, {
         workspaceId: "workspace-1",
         threadId: "thread-1",
-        botId: "bot-1",
         runId: "run-1",
         messageId: "message-1",
         answeredByUserId: "user-1",
@@ -619,7 +615,6 @@ describe("answerRunInput", () => {
       answerRunInput(prisma, {
         workspaceId: "workspace-1",
         threadId: "thread-1",
-        botId: "bot-1",
         runId: "run-1",
         messageId: "message-1",
         answeredByUserId: "user-1",
