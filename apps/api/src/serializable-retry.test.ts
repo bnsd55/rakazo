@@ -45,6 +45,14 @@ describe("withSerializableRetry", () => {
     expect(operation).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry unrelated driver-adapter errors", async () => {
+    const error = Object.assign(new Error("external connector error"), { code: "P2039" });
+    const operation = vi.fn<() => Promise<never>>().mockRejectedValue(error);
+
+    await expect(withSerializableRetry(operation)).rejects.toBe(error);
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows the final serialization conflict after the bounded retry limit", async () => {
     const error = serializationConflict();
     const operation = vi.fn<() => Promise<never>>().mockRejectedValue(error);
