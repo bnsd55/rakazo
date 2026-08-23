@@ -62,9 +62,6 @@ export function CreateGroupForm({
           );
         })}
       </div>
-      <p className="mt-3 text-[12.5px] text-[#6C6C70]">
-        @everyone is available in the composer — use sparingly.
-      </p>
       <Button
         className="mt-5 w-full"
         disabled={

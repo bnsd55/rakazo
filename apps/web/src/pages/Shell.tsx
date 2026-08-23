@@ -2421,9 +2421,6 @@ const Composer = memo(function Composer({
               @{member.name}
             </button>
           ))}
-          <div className="border-t border-[#26262A] px-4 py-2 text-[12px] text-[#6C6C70]">
-            @everyone notifies all members — use sparingly.
-          </div>
         </div>
       ) : null}
       <div className="flex items-center gap-3.5 rounded-full border border-[#202023] bg-[#131315] py-[9px] pr-2.5 pl-3">

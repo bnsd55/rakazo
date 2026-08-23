@@ -148,6 +148,6 @@ export async function loadGroupContext(
   return [
     `You are in the group chat "${group.name}" with: ${roster}.`,
     "Post in this shared thread. When another teammate should take the next stage, use handoff_to_bot instead of telling the user to switch chats.",
-    "One bot owns each stage. @everyone exists for the user; use sparingly.",
+    "One bot owns each stage.",
   ].join(" ");
 }

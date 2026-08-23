@@ -683,18 +683,6 @@ export default function Thread() {
               <Text style={{ color: "#ECECEE", fontSize: 14 }}>@{member.name}</Text>
             </Pressable>
           ))}
-          <Text
-            style={{
-              borderTopWidth: 1,
-              borderTopColor: "#26262A",
-              color: "#6C6C70",
-              fontSize: 12,
-              paddingHorizontal: 14,
-              paddingVertical: 8,
-            }}
-          >
-            @everyone notifies all members — use sparingly.
-          </Text>
         </View>
       ) : null}
       <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
