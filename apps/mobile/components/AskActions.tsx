@@ -13,10 +13,12 @@ export function AskActions({
   onAnswer: (answer: string) => Promise<void>;
 }) {
   const [submitting, setSubmitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
 
   async function submit(answer: string) {
     if (disabled || submitting) return;
     setSubmitting(true);
+    setPendingAction(answer);
     try {
       await onAnswer(answer);
     } catch (error) {
@@ -26,6 +28,7 @@ export function AskActions({
       );
     } finally {
       setSubmitting(false);
+      setPendingAction(null);
     }
   }
 
@@ -54,7 +57,7 @@ export function AskActions({
               fontWeight: action.id === "allow" || action.id === "always" ? "600" : "400",
             }}
           >
-            {submitting ? "Sending…" : action.label}
+            {pendingAction === action.id ? "Sending…" : action.label}
           </Text>
         </Pressable>
       ))}

@@ -16,6 +16,7 @@ export function AskCard({
   const [editing, setEditing] = useState(false);
   const [answer, setAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const approvalActions = block.actions?.length ? block.actions : undefined;
 
@@ -23,6 +24,7 @@ export function AskCard({
     const text = value.trim();
     if (!text || submitting) return;
     setSubmitting(true);
+    setPendingAction(text);
     setError(null);
     try {
       await onAnswer(text);
@@ -30,6 +32,7 @@ export function AskCard({
       setError(err instanceof Error ? err.message : "Could not submit this answer");
     } finally {
       setSubmitting(false);
+      setPendingAction(null);
     }
   }
 
@@ -73,7 +76,7 @@ export function AskCard({
                   : "rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14.5px] text-[#C9C9CE] disabled:opacity-50"
               }
             >
-              {submitting ? "Sending…" : action.label}
+              {pendingAction === action.id ? "Sending…" : action.label}
             </button>
           ))}
         </div>

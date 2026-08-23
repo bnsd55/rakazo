@@ -1,8 +1,10 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
+import type { MessageBlock } from "@rakazo/contracts";
 import {
   abortableDelay,
   attachmentsForThread,
   hasMentionToken,
+  isRunTerminalEvent,
   latestAnswerableAskMessageId,
 } from "@rakazo/core";
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
@@ -331,11 +333,13 @@ export default function Thread() {
               retryMs = 250;
               if (
                 event.type === "thread.progress" ||
+                event.type === "agent.tool.called" ||
                 event.type === "thread.message.created" ||
                 event.type === "thread.message.updated" ||
                 event.type === "thread.subagent" ||
                 event.type === "thread.cleared" ||
-                event.type === "run.waiting_input"
+                event.type === "run.waiting_input" ||
+                isRunTerminalEvent(event)
               ) {
                 if (event.type === "thread.cleared") {
                   expandedHistoryThread.current = null;
@@ -348,7 +352,7 @@ export default function Thread() {
                 readVisibleTarget.current = null;
                 markReadIfVisible();
               }
-              if (event.type === "run.completed") {
+              if (isRunTerminalEvent(event)) {
                 void refresh().catch(() => undefined);
               }
             },
@@ -773,8 +777,7 @@ export default function Thread() {
 
 function previewMessageText(message: MobileMessage): string {
   const text = message.blocks
-    .filter((block) => block.kind === "text" && block.text)
-    .map((block) => block.text)
+    .flatMap((block) => (block.kind === "text" && block.text ? [block.text] : []))
     .join(" ")
     .trim();
   if (text) return text;
@@ -830,7 +833,8 @@ function MessageBubble({
 }) {
   const artifactTarget: MobileArtifactTarget = groupId ? { groupId } : { botId };
   const ask = message.blocks.find(
-    (block) => block.kind === "ask" && !(Array.isArray(block.actions) && block.actions.length > 0),
+    (block): block is Extract<MessageBlock, { kind: "ask" }> =>
+      block.kind === "ask" && !(Array.isArray(block.actions) && block.actions.length > 0),
   );
   if (ask) return <AskBlock ask={ask} canAnswer={canAnswer} onAnswer={onAnswer} />;
   const handoff = message.blocks.find((block) => block.kind === "handoff");
@@ -982,8 +986,7 @@ function MessageBubble({
     (block) => block.kind === "image" || block.kind === "file",
   );
   const caption = message.blocks
-    .filter((block) => block.kind === "text" && block.text)
-    .map((block) => block.text)
+    .flatMap((block) => (block.kind === "text" && block.text ? [block.text] : []))
     .join("\n");
   if (attachments.length > 0) {
     const speaker = message.role === "bot" ? memberName(members, message.botId) : undefined;
@@ -1127,7 +1130,7 @@ function AskBlock({
   canAnswer,
   onAnswer,
 }: {
-  ask: MobileMessage["blocks"][number];
+  ask: Extract<MobileMessage["blocks"][number], { kind: "ask" }>;
   canAnswer: boolean;
   onAnswer: (answer: string) => Promise<void>;
 }) {
