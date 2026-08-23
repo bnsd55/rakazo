@@ -249,6 +249,13 @@ describe("destroyBot", () => {
   it("dissolves groups with fewer than two active members after deleting the bot", async () => {
     const deleteGroups = vi.fn().mockResolvedValue({ count: 1 });
     const deleteMemberships = vi.fn().mockResolvedValue({ count: 1 });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const releaseScreen = vi.fn().mockResolvedValue(undefined);
+    const cancelRuns = vi.fn().mockResolvedValue({ count: 1 });
+    const cancelAttempts = vi.fn().mockResolvedValue({ count: 1 });
+    const cancelTasks = vi.fn().mockResolvedValue({ count: 1 });
+    const deleteExecutionLeases = vi.fn().mockResolvedValue({ count: 1 });
+    const clearExecution = vi.fn().mockResolvedValue({ count: 1 });
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
         $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }, { id: "group-2" }]),
@@ -256,6 +263,7 @@ describe("destroyBot", () => {
           findMany: vi.fn().mockResolvedValue([
             {
               id: "group-1",
+              thread: { id: "thread-1" },
               members: [
                 { botId: "bot-1", bot: { archivedAt: null } },
                 { botId: "bot-2", bot: { archivedAt: null } },
@@ -263,6 +271,7 @@ describe("destroyBot", () => {
             },
             {
               id: "group-2",
+              thread: { id: "thread-2" },
               members: [
                 { botId: "bot-1", bot: { archivedAt: null } },
                 { botId: "bot-2", bot: { archivedAt: null } },
@@ -271,6 +280,7 @@ describe("destroyBot", () => {
             },
             {
               id: "group-3",
+              thread: { id: "thread-3" },
               members: [
                 { botId: "bot-1", bot: { archivedAt: null } },
                 { botId: "bot-2", bot: { archivedAt: new Date() } },
@@ -280,13 +290,28 @@ describe("destroyBot", () => {
           ]),
           deleteMany: deleteGroups,
         },
+        run: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: "group-run",
+              taskId: "group-task",
+              botId: "bot-2",
+              bot: {
+                computer: { homeKey: "team-home", kind: "fake", providerRef: "screen-1" },
+              },
+            },
+          ]),
+          updateMany: cancelRuns,
+        },
+        attempt: { updateMany: cancelAttempts },
+        task: { updateMany: cancelTasks },
         chatGroupMember: { deleteMany: deleteMemberships },
         artifact: {
           findMany: vi.fn().mockResolvedValue([]),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         },
-        computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
-        computer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+        computerExecutionLease: { deleteMany: deleteExecutionLeases },
+        computer: { updateMany: clearExecution },
         $executeRaw: vi.fn(),
         botDeletion: { create: vi.fn() },
         bot: { delete: vi.fn() },
@@ -306,9 +331,9 @@ describe("destroyBot", () => {
     await destroyBot(
       {
         prisma,
-        sandbox: {} as SandboxProvider,
+        sandbox: { releaseScreen } as unknown as SandboxProvider,
         home: {} as AgentHomeStore,
-        jobs: { cancel: vi.fn() } as unknown as JobPublisher,
+        jobs: { cancel } as unknown as JobPublisher,
       },
       { id: "bot-1", workspaceId: "workspace-1", name: "Researcher", archivedAt: null },
       context,
@@ -319,6 +344,42 @@ describe("destroyBot", () => {
     expect(deleteMemberships).toHaveBeenCalledWith({
       where: { botId: "bot-1", groupId: { in: ["group-2"] } },
     });
+    expect(cancelRuns).toHaveBeenCalledWith({
+      where: { id: { in: ["group-run"] } },
+      data: {
+        status: "cancelled",
+        completedAt: expect.any(Date),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    });
+    expect(cancelAttempts).toHaveBeenCalledWith({
+      where: { runId: { in: ["group-run"] }, status: "running" },
+      data: { status: "cancelled", finishedAt: expect.any(Date) },
+    });
+    expect(cancelTasks).toHaveBeenCalledWith({
+      where: { id: { in: ["group-task"] } },
+      data: { status: "cancelled" },
+    });
+    expect(deleteExecutionLeases).toHaveBeenCalledWith({
+      where: { runId: { in: ["group-run"] } },
+    });
+    expect(clearExecution).toHaveBeenCalledWith({
+      where: { executionRunId: { in: ["group-run"] } },
+      data: {
+        executionRunId: null,
+        executionBotId: null,
+        executionLeaseExpiresAt: null,
+      },
+    });
+    expect(cancel).toHaveBeenCalledWith("run:group-run");
+    expect(releaseScreen).toHaveBeenCalledWith(
+      { id: "screen-1", botId: "team-home", kind: "fake", providerRef: "screen-1" },
+      expect.objectContaining({
+        operationId: "destroy-group-run:bot-2",
+        botId: "bot-2",
+      }),
+    );
   });
 
   it("surfaces transaction failures instead of reporting deletion success", async () => {

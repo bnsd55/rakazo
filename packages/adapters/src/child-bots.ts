@@ -353,7 +353,7 @@ export async function destroyBot(
   if (dedicated?.providerRef) {
     await deps.sandbox.destroy(toComputerRef(dedicated), context).catch(() => undefined);
   }
-  const removedArtifactKeys = await deps.prisma.$transaction(async (tx) => {
+  const deletion = await deps.prisma.$transaction(async (tx) => {
     await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM bots
@@ -367,7 +367,7 @@ export async function destroyBot(
     await tx.artifact.deleteMany({
       where: { botId: bot.id, groupId: null, workspaceId: bot.workspaceId },
     });
-    const groupArtifactKeys = await detachBotFromGroups(tx, bot.id);
+    const groupCleanup = await detachBotFromGroups(tx, bot.id);
     await tx.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
     await tx.computer.updateMany({
       where: {
@@ -398,8 +398,37 @@ export async function destroyBot(
     });
     await tx.bot.delete({ where: { id: bot.id } });
     if (dedicated) await tx.computer.delete({ where: { id: dedicated.id } });
-    return [...botArtifacts.map((artifact) => artifact.storageKey), ...groupArtifactKeys];
+    return {
+      artifactKeys: [
+        ...botArtifacts.map((artifact) => artifact.storageKey),
+        ...groupCleanup.artifactKeys,
+      ],
+      cancelledGroupRuns: groupCleanup.cancelledRuns,
+    };
   });
+  await Promise.allSettled(
+    deletion.cancelledGroupRuns.map((run) => deps.jobs.cancel(runJobKey(run.id))),
+  );
+  const stoppedGroupBots = [
+    ...new Map(
+      deletion.cancelledGroupRuns.map((run) => [
+        run.botId,
+        { id: run.botId, computer: run.computer },
+      ]),
+    ).values(),
+  ];
+  await Promise.all(
+    stoppedGroupBots.map(async (stoppedBot) => {
+      if (!stoppedBot.computer?.providerRef) return;
+      await deps.sandbox
+        .releaseScreen?.(toComputerRef(stoppedBot.computer), {
+          ...context,
+          operationId: `destroy-group-run:${stoppedBot.id}`,
+          botId: stoppedBot.id,
+        })
+        .catch(() => undefined);
+    }),
+  );
   if (dedicated) {
     await rm(resolveAgentHomePath(deps.home, dedicated.homeKey, deps.dataDir ?? "./data"), {
       recursive: true,
@@ -408,7 +437,7 @@ export async function destroyBot(
   }
   const artifactStore = deps.artifacts;
   if (artifactStore) {
-    await removeStoredArtifacts(artifactStore, removedArtifactKeys, context);
+    await removeStoredArtifacts(artifactStore, deletion.artifactKeys, context);
   }
 }
 
@@ -427,6 +456,7 @@ async function detachBotFromGroups(tx: Prisma.TransactionClient, botId: string) 
       members: {
         select: { botId: true, bot: { select: { archivedAt: true } } },
       },
+      thread: { select: { id: true } },
     },
   });
   const dissolvedGroupIds: string[] = [];
@@ -438,6 +468,58 @@ async function detachBotFromGroups(tx: Prisma.TransactionClient, botId: string) 
     (activeMembersAfterDeletion < GROUP_MEMBER_MIN ? dissolvedGroupIds : retainedGroupIds).push(
       group.id,
     );
+  }
+  const dissolvedGroupIdSet = new Set(dissolvedGroupIds);
+  const dissolvedThreadIds = affectedGroups
+    .filter((group) => dissolvedGroupIdSet.has(group.id))
+    .flatMap((group) => (group.thread ? [group.thread.id] : []));
+  const activeRuns = dissolvedThreadIds.length
+    ? await tx.run.findMany({
+        where: {
+          threadId: { in: dissolvedThreadIds },
+          status: { in: [...ACTIVE_RUN_STATUSES] },
+        },
+        select: {
+          id: true,
+          taskId: true,
+          botId: true,
+          bot: {
+            select: {
+              computer: { select: { homeKey: true, kind: true, providerRef: true } },
+            },
+          },
+        },
+      })
+    : [];
+  if (activeRuns.length) {
+    const now = new Date();
+    const runIds = activeRuns.map((run) => run.id);
+    await tx.run.updateMany({
+      where: { id: { in: runIds } },
+      data: {
+        status: "cancelled",
+        completedAt: now,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    });
+    await tx.attempt.updateMany({
+      where: { runId: { in: runIds }, status: "running" },
+      data: { status: "cancelled", finishedAt: now },
+    });
+    await tx.task.updateMany({
+      where: { id: { in: activeRuns.map((run) => run.taskId) } },
+      data: { status: "cancelled" },
+    });
+    await tx.computerExecutionLease.deleteMany({ where: { runId: { in: runIds } } });
+    await tx.computer.updateMany({
+      where: { executionRunId: { in: runIds } },
+      data: {
+        executionRunId: null,
+        executionBotId: null,
+        executionLeaseExpiresAt: null,
+      },
+    });
   }
   const groupArtifacts = dissolvedGroupIds.length
     ? await tx.artifact.findMany({
@@ -453,7 +535,14 @@ async function detachBotFromGroups(tx: Prisma.TransactionClient, botId: string) 
       where: { botId, groupId: { in: retainedGroupIds } },
     });
   }
-  return groupArtifacts.map((artifact) => artifact.storageKey);
+  return {
+    artifactKeys: groupArtifacts.map((artifact) => artifact.storageKey),
+    cancelledRuns: activeRuns.map((run) => ({
+      id: run.id,
+      botId: run.botId,
+      computer: run.bot.computer,
+    })),
+  };
 }
 
 async function removeStoredArtifacts(

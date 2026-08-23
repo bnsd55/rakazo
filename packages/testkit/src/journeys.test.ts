@@ -1689,6 +1689,10 @@ describeJourneys("required product journeys", () => {
     expect(
       await prisma.run.findUniqueOrThrow({ where: { id: archivedMemberSend.runId } }),
     ).toMatchObject({ botId: archivePartner.id });
+    await waitForDatabase(async () => {
+      const run = await prisma.run.findUnique({ where: { id: archivedMemberSend.runId } });
+      return Boolean(run && ["completed", "failed", "cancelled"].includes(run.status));
+    });
     await rpc(app, ada, "bots/restore", { botId: archiveMember.id });
     const restoredArchiveGroup = await rpc<
       Array<{ id: string; members: Array<{ botId: string }> }>
@@ -1711,8 +1715,30 @@ describeJourneys("required product journeys", () => {
       botIds: [archiveMember.id, archivePartner.id, archiveThird.id],
     });
     await rpc(app, ada, "bots/archive", { botId: archiveMember.id });
+    const dissolvingTask = await prisma.task.create({
+      data: {
+        workspaceId: archivePartner.workspaceId,
+        botId: archivePartner.id,
+        threadId: archiveThread.id,
+        userId: adaMe.userId,
+        prompt: "fake active work while deleting a group member",
+        status: "running",
+      },
+    });
+    const dissolvingRun = await prisma.run.create({
+      data: {
+        workspaceId: archivePartner.workspaceId,
+        botId: archivePartner.id,
+        threadId: archiveThread.id,
+        taskId: dissolvingTask.id,
+        userId: adaMe.userId,
+        status: "running",
+        trigger: "user",
+      },
+    });
     await rpc(app, ada, "bots/remove", { botId: archiveThird.id, deleteMemories: true });
     expect(await prisma.chatGroup.findUnique({ where: { id: archiveGroup.id } })).toBeNull();
+    expect(await prisma.run.findUnique({ where: { id: dissolvingRun.id } })).toBeNull();
     await rpc(app, ada, "bots/restore", { botId: archiveMember.id });
     expect(await prisma.chatGroup.findUnique({ where: { id: archiveGroup.id } })).toBeNull();
 

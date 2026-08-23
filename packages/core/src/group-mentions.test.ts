@@ -17,6 +17,8 @@ describe("hasMentionToken", () => {
     expect(hasMentionToken("Ask @Ann to review", "Ann")).toBe(true);
     expect(hasMentionToken("Ask @Ann, then continue", "Ann")).toBe(true);
     expect(hasMentionToken("Ask @Anna to review", "Ann")).toBe(false);
+    expect(hasMentionToken("name@Ann", "Ann")).toBe(false);
+    expect(hasMentionToken("contact@everyone", "everyone")).toBe(false);
   });
 
   it("supports multi-word and Unicode member names", () => {

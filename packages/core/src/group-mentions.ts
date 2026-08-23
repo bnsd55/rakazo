@@ -12,7 +12,10 @@ function escapeRegExp(value: string): string {
 export function hasMentionToken(text: string, name: string): boolean {
   const normalized = name.trim();
   if (!normalized) return false;
-  return new RegExp(`@${escapeRegExp(normalized)}(?![\\p{L}\\p{N}_-])`, "iu").test(text);
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{N}_-])@${escapeRegExp(normalized)}(?![\\p{L}\\p{N}_-])`,
+    "iu",
+  ).test(text);
 }
 
 export function parseMentionNames(text: string): string[] {
