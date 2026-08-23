@@ -246,7 +246,7 @@ describe("destroyBot", () => {
     expect(removeArtifact).toHaveBeenCalledWith("stored-artifact", context);
   });
 
-  it("dissolves two-member groups before deleting the bot", async () => {
+  it("dissolves groups with fewer than two active members after deleting the bot", async () => {
     const deleteGroups = vi.fn().mockResolvedValue({ count: 1 });
     const deleteMemberships = vi.fn().mockResolvedValue({ count: 1 });
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
@@ -254,8 +254,29 @@ describe("destroyBot", () => {
         $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }, { id: "group-2" }]),
         chatGroup: {
           findMany: vi.fn().mockResolvedValue([
-            { id: "group-1", _count: { members: 2 } },
-            { id: "group-2", _count: { members: 3 } },
+            {
+              id: "group-1",
+              members: [
+                { botId: "bot-1", bot: { archivedAt: null } },
+                { botId: "bot-2", bot: { archivedAt: null } },
+              ],
+            },
+            {
+              id: "group-2",
+              members: [
+                { botId: "bot-1", bot: { archivedAt: null } },
+                { botId: "bot-2", bot: { archivedAt: null } },
+                { botId: "bot-3", bot: { archivedAt: null } },
+              ],
+            },
+            {
+              id: "group-3",
+              members: [
+                { botId: "bot-1", bot: { archivedAt: null } },
+                { botId: "bot-2", bot: { archivedAt: new Date() } },
+                { botId: "bot-3", bot: { archivedAt: null } },
+              ],
+            },
           ]),
           deleteMany: deleteGroups,
         },
@@ -294,7 +315,7 @@ describe("destroyBot", () => {
       { deleteMemories: true },
     );
 
-    expect(deleteGroups).toHaveBeenCalledWith({ where: { id: { in: ["group-1"] } } });
+    expect(deleteGroups).toHaveBeenCalledWith({ where: { id: { in: ["group-1", "group-3"] } } });
     expect(deleteMemberships).toHaveBeenCalledWith({
       where: { botId: "bot-1", groupId: { in: ["group-2"] } },
     });

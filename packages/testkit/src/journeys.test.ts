@@ -1620,11 +1620,19 @@ describeJourneys("required product journeys", () => {
     });
     expect(Buffer.from(downloaded.contentBase64, "base64").toString()).toBe(attachmentText);
 
+    const artifactOwnerId = (
+      await prisma.artifact.findUniqueOrThrow({ where: { id: artifact.id } })
+    ).botId;
+    if (!artifactOwnerId) throw new Error("Group artifact is missing its uploader");
+    const remainingGroupBotIds = [botA.id, botC.id, botD.id].filter(
+      (botId) => botId !== artifactOwnerId,
+    );
+    expect(remainingGroupBotIds).toHaveLength(2);
     await rpc(app, ada, "groups/update", {
       groupId: group.id,
-      botIds: [botC.id, botD.id],
+      botIds: remainingGroupBotIds,
     });
-    await rpc(app, ada, "bots/remove", { botId: botA.id, deleteMemories: true });
+    await rpc(app, ada, "bots/remove", { botId: artifactOwnerId, deleteMemories: true });
     expect(await prisma.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({
       botId: null,
       groupId: group.id,
@@ -1691,6 +1699,22 @@ describeJourneys("required product journeys", () => {
         expect.objectContaining({ botId: archivePartner.id }),
       ]),
     );
+    const archiveThird = await rpc<Bot>(app, ada, "bots/create", {
+      name: "Archive Third",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    await rpc(app, ada, "groups/update", {
+      groupId: archiveGroup.id,
+      botIds: [archiveMember.id, archivePartner.id, archiveThird.id],
+    });
+    await rpc(app, ada, "bots/archive", { botId: archiveMember.id });
+    await rpc(app, ada, "bots/remove", { botId: archiveThird.id, deleteMemories: true });
+    expect(await prisma.chatGroup.findUnique({ where: { id: archiveGroup.id } })).toBeNull();
+    await rpc(app, ada, "bots/restore", { botId: archiveMember.id });
+    expect(await prisma.chatGroup.findUnique({ where: { id: archiveGroup.id } })).toBeNull();
 
     const deletionPartner = await rpc<Bot>(app, ada, "bots/create", {
       name: "Deletion Partner",
@@ -1713,14 +1737,13 @@ describeJourneys("required product journeys", () => {
     const remainingBotIds = (await rpc<Bot[]>(app, ada, "bots/list")).map((bot) => bot.id);
     expect(remainingBotIds).toEqual(
       expect.arrayContaining([
-        botC.id,
-        botD.id,
+        ...remainingGroupBotIds,
         deletionPartner.id,
         archiveMember.id,
         archivePartner.id,
       ]),
     );
-    expect(remainingBotIds).not.toContain(botA.id);
+    expect(remainingBotIds).not.toContain(artifactOwnerId);
   });
 
   it("17: teach a task end to end", async () => {

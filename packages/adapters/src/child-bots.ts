@@ -7,7 +7,7 @@ import type {
   SandboxProvider,
 } from "@rakazo/adapter-kit";
 import { routineJobKey, runContinueJob, runJobKey } from "@rakazo/adapter-kit";
-import type { Actor, Bot } from "@rakazo/contracts";
+import { type Actor, type Bot, GROUP_MEMBER_MIN } from "@rakazo/contracts";
 import { ACTIVE_RUN_STATUSES } from "@rakazo/core";
 import {
   computerScopeKey,
@@ -423,14 +423,22 @@ async function detachBotFromGroups(tx: Prisma.TransactionClient, botId: string) 
   `;
   const affectedGroups = await tx.chatGroup.findMany({
     where: { members: { some: { botId } } },
-    include: { _count: { select: { members: true } } },
+    include: {
+      members: {
+        select: { botId: true, bot: { select: { archivedAt: true } } },
+      },
+    },
   });
-  const dissolvedGroupIds = affectedGroups
-    .filter((group) => group._count.members <= 2)
-    .map((group) => group.id);
-  const retainedGroupIds = affectedGroups
-    .filter((group) => group._count.members > 2)
-    .map((group) => group.id);
+  const dissolvedGroupIds: string[] = [];
+  const retainedGroupIds: string[] = [];
+  for (const group of affectedGroups) {
+    const activeMembersAfterDeletion = group.members.filter(
+      (member) => member.botId !== botId && member.bot.archivedAt === null,
+    ).length;
+    (activeMembersAfterDeletion < GROUP_MEMBER_MIN ? dissolvedGroupIds : retainedGroupIds).push(
+      group.id,
+    );
+  }
   const groupArtifacts = dissolvedGroupIds.length
     ? await tx.artifact.findMany({
         where: { groupId: { in: dissolvedGroupIds } },
