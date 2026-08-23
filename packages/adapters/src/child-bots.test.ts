@@ -256,6 +256,16 @@ describe("destroyBot", () => {
     const cancelTasks = vi.fn().mockResolvedValue({ count: 1 });
     const deleteExecutionLeases = vi.fn().mockResolvedValue({ count: 1 });
     const clearExecution = vi.fn().mockResolvedValue({ count: 1 });
+    const findRuns = vi.fn().mockResolvedValue([
+      {
+        id: "group-run",
+        taskId: "group-task",
+        botId: "bot-2",
+        bot: {
+          computer: { homeKey: "team-home", kind: "fake", providerRef: "screen-1" },
+        },
+      },
+    ]);
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
         $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }, { id: "group-2" }]),
@@ -291,16 +301,7 @@ describe("destroyBot", () => {
           deleteMany: deleteGroups,
         },
         run: {
-          findMany: vi.fn().mockResolvedValue([
-            {
-              id: "group-run",
-              taskId: "group-task",
-              botId: "bot-2",
-              bot: {
-                computer: { homeKey: "team-home", kind: "fake", providerRef: "screen-1" },
-              },
-            },
-          ]),
+          findMany: findRuns,
           updateMany: cancelRuns,
         },
         attempt: { updateMany: cancelAttempts },
@@ -344,6 +345,13 @@ describe("destroyBot", () => {
     expect(deleteMemberships).toHaveBeenCalledWith({
       where: { botId: "bot-1", groupId: { in: ["group-2"] } },
     });
+    expect(findRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          threadId: { in: ["thread-1", "thread-3"] },
+        }),
+      }),
+    );
     expect(cancelRuns).toHaveBeenCalledWith({
       where: { id: { in: ["group-run"] } },
       data: {
