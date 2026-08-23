@@ -8,6 +8,10 @@ import {
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AppState, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  MarkdownArtifactPreview,
+  type MarkdownArtifactPreviewTarget,
+} from "../components/markdown-artifact-preview";
 import { NativeSymbol } from "../components/native-symbol";
 import {
   applyMobileThreadEvent,
@@ -21,7 +25,7 @@ import {
   shouldApplyMobileThreadRefresh,
   subscribeThread,
 } from "../lib/api";
-import { openMobileArtifact } from "../lib/artifact-open";
+import { type MobileArtifactTarget, openMobileArtifact } from "../lib/artifact-open";
 import { confirmDeleteBot } from "../lib/bot-lifecycle";
 import {
   type PickedAttachment,
@@ -61,6 +65,11 @@ export default function Thread() {
   activeGroupId.current = groupId;
   const readVisibleTarget = useRef<string | null>(null);
   const threadKey = groupId ?? botId;
+  const artifactTarget: MobileArtifactTarget | undefined = groupId
+    ? { groupId }
+    : botId
+      ? { botId }
+      : undefined;
   const [snap, setSnap] = useState<MobileSnapshot | null>(null);
   const [draft, setDraft] = useState("");
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -73,6 +82,9 @@ export default function Thread() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [markdownPreview, setMarkdownPreview] = useState<MarkdownArtifactPreviewTarget | null>(
+    null,
+  );
   const activePendingAttachments = attachmentsForThread(pendingAttachments, threadKey);
   const mentionOptions =
     inGroup && mentionQuery !== null
@@ -581,6 +593,7 @@ export default function Thread() {
                 onOpenBot={(id, botName) =>
                   router.push({ pathname: "/thread", params: { botId: id, name: botName } })
                 }
+                onPreviewMarkdown={setMarkdownPreview}
                 onSpeak={
                   message.role === "bot"
                     ? () =>
@@ -753,6 +766,13 @@ export default function Thread() {
           </Pressable>
         </Link>
       ) : null}
+      {markdownPreview && artifactTarget ? (
+        <MarkdownArtifactPreview
+          threadTarget={artifactTarget}
+          target={markdownPreview}
+          onClose={() => setMarkdownPreview(null)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -800,6 +820,7 @@ function MessageBubble({
   canAnswer,
   onAnswer,
   onOpenBot,
+  onPreviewMarkdown,
   onSpeak,
 }: {
   botId: string;
@@ -810,8 +831,10 @@ function MessageBubble({
   canAnswer: boolean;
   onAnswer: (answer: string) => Promise<void>;
   onOpenBot: (botId: string, name: string) => void;
+  onPreviewMarkdown: (target: MarkdownArtifactPreviewTarget) => void;
   onSpeak?: () => void;
 }) {
+  const artifactTarget: MobileArtifactTarget = groupId ? { groupId } : { botId };
   const ask = message.blocks.find((block) => block.kind === "ask");
   if (ask) return <AskBlock ask={ask} canAnswer={canAnswer} onAnswer={onAnswer} />;
   const handoff = message.blocks.find((block) => block.kind === "handoff");
@@ -949,7 +972,7 @@ function MessageBubble({
               onPress={() =>
                 attachment.artifactId
                   ? void openMobileArtifact(
-                      groupId ? { groupId } : { botId },
+                      artifactTarget,
                       attachment.artifactId,
                       attachment.name ?? "Image",
                       attachment.mimeType ?? "image/png",
@@ -973,17 +996,23 @@ function MessageBubble({
               key={`${attachment.artifactId ?? attachment.name ?? "file"}-${index}`}
               onPress={() =>
                 attachment.artifactId
-                  ? void openMobileArtifact(
-                      groupId ? { groupId } : { botId },
-                      attachment.artifactId,
-                      attachment.name ?? "File",
-                      attachment.mimeType ?? "text/plain",
-                    ).catch((err) =>
-                      Alert.alert(
-                        "Could not open file",
-                        err instanceof Error ? err.message : "Try again.",
-                      ),
-                    )
+                  ? attachment.mimeType === "text/markdown"
+                    ? onPreviewMarkdown({
+                        artifactId: attachment.artifactId,
+                        name: attachment.name ?? "Markdown file",
+                        mimeType: attachment.mimeType,
+                      })
+                    : void openMobileArtifact(
+                        artifactTarget,
+                        attachment.artifactId,
+                        attachment.name ?? "File",
+                        attachment.mimeType ?? "text/plain",
+                      ).catch((err) =>
+                        Alert.alert(
+                          "Could not open file",
+                          err instanceof Error ? err.message : "Try again.",
+                        ),
+                      )
                   : undefined
               }
             >

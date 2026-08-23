@@ -104,6 +104,17 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await page.getByRole("button", { name: "Send answer" }).click();
   await expect(page.getByText("Answered: Paris", { exact: true })).toBeVisible({ timeout: 30_000 });
 
+  await composer.fill(
+    "@Researcher write path notes/group-preview.md and attach it to the thread says # Group artifact",
+  );
+  await composer.press("Enter");
+  const groupMarkdown = page.getByRole("button", { name: "Preview group-preview.md" });
+  await expect(groupMarkdown).toBeVisible({ timeout: 30_000 });
+  await groupMarkdown.click();
+  const markdownDialog = page.getByRole("dialog", { name: "group-preview.md" });
+  await expect(markdownDialog.getByRole("heading", { name: "Group artifact" })).toBeVisible();
+  await markdownDialog.getByRole("button", { name: "Close preview" }).click();
+
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
   expect((await transcript.boundingBox())?.width).toBeGreaterThan(350);

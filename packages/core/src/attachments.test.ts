@@ -49,6 +49,9 @@ describe("attachment helpers", () => {
   it("infers attachment mime types from extensions", () => {
     expect(inferAttachmentMimeType("photo.JPG", "")).toBe("image/jpeg");
     expect(inferAttachmentMimeType("notes.pdf", "")).toBe("application/pdf");
+    expect(inferAttachmentMimeType("notes.md", "")).toBe("text/markdown");
+    expect(inferAttachmentMimeType("notes.markdown", "text/plain")).toBe("text/markdown");
+    expect(inferAttachmentMimeType("notes.md", "application/pdf")).toBe("application/pdf");
     expect(inferAttachmentMimeType("archive.zip", "")).toBeNull();
   });
 
