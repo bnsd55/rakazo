@@ -1,8 +1,18 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type { ThreadMessage } from "@rakazo/contracts";
+import { isApprovalAskBlock } from "@rakazo/core";
 import { useState } from "react";
 
 export type AskBlock = Extract<ThreadMessage["blocks"][number], { kind: "ask" }>;
+
+function formatAnsweredState(answer: string | undefined, approval: boolean): string {
+  if (!answer) return "Answered";
+  if (!approval) return `Answered: ${answer}`;
+  if (answer === "allow") return "Allowed once";
+  if (answer === "always") return "Always allowed";
+  if (answer === "deny") return "Denied";
+  return `Answered: ${answer}`;
+}
 
 export function AskCard({
   block,
@@ -15,15 +25,14 @@ export function AskCard({
 }) {
   const [editing, setEditing] = useState(false);
   const [answer, setAnswer] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const approvalActions = block.actions?.length ? block.actions : undefined;
+  const submitting = pendingAction !== null;
+  const approvalActions = isApprovalAskBlock(block) ? block.actions : undefined;
 
   async function submitAnswer(value: string) {
     const text = value.trim();
     if (!text || submitting) return;
-    setSubmitting(true);
     setPendingAction(text);
     setError(null);
     try {
@@ -31,7 +40,6 @@ export function AskCard({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not submit this answer");
     } finally {
-      setSubmitting(false);
       setPendingAction(null);
     }
   }
@@ -48,17 +56,7 @@ export function AskCard({
       ) : null}
       {block.status === "answered" ? (
         <div className="mt-3.5 text-[13.5px] font-medium text-[#4ECB71]">
-          {block.answer
-            ? approvalActions
-              ? block.answer === "allow"
-                ? "Allowed once"
-                : block.answer === "always"
-                  ? "Always allowed"
-                  : block.answer === "deny"
-                    ? "Denied"
-                    : `Answered: ${block.answer}`
-              : `Answered: ${block.answer}`
-            : "Answered"}
+          {formatAnsweredState(block.answer, Boolean(approvalActions))}
         </div>
       ) : !canAnswer ? (
         <div className="mt-3.5 text-[13.5px] font-medium text-[#85858A]">No longer active</div>

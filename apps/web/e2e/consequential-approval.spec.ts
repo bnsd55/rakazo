@@ -46,18 +46,21 @@ test("actions run by default while optional confirmations live in advanced user 
 
   await page.getByRole("button", { name: "Deny" }).click();
   await expect(page.getByText("Denied", { exact: true })).toBeVisible();
+  await waitForRunCompletion(page);
   await expectComposerReady(page);
   await captureScreenshot(page, testInfo, "54-action-confirmation-denied");
 
   await requestDestinationWrite(page);
   await page.getByRole("button", { name: "Allow once" }).click();
   await expect(page.getByText("Allowed once", { exact: true })).toBeVisible();
+  await waitForRunCompletion(page);
   await expectComposerReady(page);
   await captureScreenshot(page, testInfo, "55-action-confirmation-allowed-once");
 
   await requestDestinationWrite(page);
   await page.getByRole("button", { name: "Always allow this tool" }).click();
   await expect(page.getByText("Always allowed", { exact: true })).toBeVisible();
+  await waitForRunCompletion(page);
   await expectComposerReady(page);
   await captureScreenshot(page, testInfo, "56-action-confirmation-always-allowed");
 

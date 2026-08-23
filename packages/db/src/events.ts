@@ -355,7 +355,7 @@ export async function answerRunInput(
         threadId: input.threadId,
         status: "waiting_input",
       },
-      select: { botId: true },
+      select: { botId: true, userId: true },
     });
     if (!run) return null;
     const message = await tx.message.findFirst({
@@ -388,11 +388,7 @@ export async function answerRunInput(
       });
       if (!approvalEffect) return null;
       if (input.answer === "always") {
-        const run = await tx.run.findUnique({
-          where: { id: input.runId },
-          select: { userId: true },
-        });
-        if (!run || run.userId !== input.answeredByUserId) return null;
+        if (run.userId !== input.answeredByUserId) return null;
         approvalUserId = input.answeredByUserId;
       }
     }

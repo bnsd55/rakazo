@@ -1,3 +1,5 @@
+import type { ActionApprovalRule as StoredActionApprovalRule } from "@rakazo/contracts";
+
 const APPROVAL_EXEMPT_TOOLS = new Set([
   "computer_observe",
   "computer_act",
@@ -23,14 +25,10 @@ const COMPOUND_CONNECTOR_ACTION_PATTERN = /_(and|or|then)_/i;
 const EMAIL_CONNECTOR_SLUGS = new Set(["gmail", "outlook", "microsoft_outlook"]);
 const PURCHASE_CONNECTOR_SLUGS = new Set(["stripe", "shopify", "paypal", "square"]);
 
-export type ActionApprovalEffect = "always_allow" | "require_approval";
-export type ActionApprovalMatchKind = "tool" | "connector" | "category";
-
-export type ActionApprovalRule = {
-  effect: ActionApprovalEffect;
-  matchKind: ActionApprovalMatchKind;
-  matchValue: string;
-};
+export type ActionApprovalRule = Pick<
+  StoredActionApprovalRule,
+  "effect" | "matchKind" | "matchValue"
+>;
 
 export function connectorKindFromToolName(toolName: string, connectorKinds: string[] = []): string {
   const normalizedTool = toolName.toLowerCase();
@@ -99,7 +97,6 @@ function ruleSpecificity(rule: ActionApprovalRule): number {
 
 export function resolveActionApproval(input: {
   toolName: string;
-  viaConnector: boolean;
   connectorKind?: string;
   rules: ActionApprovalRule[];
 }): "ask" | "allow" {

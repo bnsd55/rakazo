@@ -4,6 +4,7 @@ import {
   approvalPausedToolResult,
   claimApprovedEffect,
   claimIntendedEffect,
+  completeExternalEffect,
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
   settleUncertainEffect,
@@ -99,6 +100,25 @@ describe("claimIntendedEffect", () => {
     expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
       where: { id: "effect-1", status: "intended" },
       data: { status: "executing" },
+    });
+  });
+});
+
+describe("completeExternalEffect", () => {
+  it("does not let a stale worker overwrite a reconciled effect", async () => {
+    const store = {
+      externalEffect: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const result = { written: true };
+
+    await expect(completeExternalEffect(store, "effect-1", "executing", result)).resolves.toBe(
+      false,
+    );
+    expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
+      where: { id: "effect-1", status: "executing" },
+      data: { status: "completed", result },
     });
   });
 });

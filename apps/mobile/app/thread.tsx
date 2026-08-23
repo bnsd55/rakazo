@@ -4,6 +4,7 @@ import {
   abortableDelay,
   attachmentsForThread,
   hasMentionToken,
+  isApprovalAskBlock,
   isRunTerminalEvent,
   latestAnswerableAskMessageId,
 } from "@rakazo/core";
@@ -39,6 +40,14 @@ import {
 import { playMpeg, speakUtterance } from "../lib/voice";
 
 type PendingAttachment = PickedAttachment & { threadKey: string };
+
+function formatApprovalAnswer(answer: string | undefined): string {
+  if (!answer) return "Answered";
+  if (answer === "allow") return "Allowed once";
+  if (answer === "always") return "Always allowed";
+  if (answer === "deny") return "Denied";
+  return `Answered: ${answer}`;
+}
 
 export default function Thread() {
   const navigation = useNavigation();
@@ -834,7 +843,7 @@ function MessageBubble({
   const artifactTarget: MobileArtifactTarget = groupId ? { groupId } : { botId };
   const ask = message.blocks.find(
     (block): block is Extract<MessageBlock, { kind: "ask" }> =>
-      block.kind === "ask" && !(Array.isArray(block.actions) && block.actions.length > 0),
+      block.kind === "ask" && !isApprovalAskBlock(block),
   );
   if (ask) return <AskBlock ask={ask} canAnswer={canAnswer} onAnswer={onAnswer} />;
   const handoff = message.blocks.find((block) => block.kind === "handoff");
@@ -930,9 +939,7 @@ function MessageBubble({
       </Pressable>
     );
   }
-  const askBlock = message.blocks.find(
-    (block) => block.kind === "ask" && Array.isArray(block.actions) && block.actions.length > 0,
-  );
+  const askBlock = message.blocks.find(isApprovalAskBlock);
   if (askBlock?.kind === "ask" && askBlock.actions?.length) {
     return (
       <View
@@ -964,15 +971,7 @@ function MessageBubble({
         ) : null}
         {askBlock.status === "answered" ? (
           <Text style={{ color: "#4ECB71", marginTop: 12, fontSize: 13.5, fontWeight: "600" }}>
-            {askBlock.answer === "allow"
-              ? "Allowed once"
-              : askBlock.answer === "always"
-                ? "Always allowed"
-                : askBlock.answer === "deny"
-                  ? "Denied"
-                  : askBlock.answer
-                    ? `Answered: ${askBlock.answer}`
-                    : "Answered"}
+            {formatApprovalAnswer(askBlock.answer)}
           </Text>
         ) : canAnswer && onAnswer ? (
           <AskActions actions={askBlock.actions} onAnswer={onAnswer} />

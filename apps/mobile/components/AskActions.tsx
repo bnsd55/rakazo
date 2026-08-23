@@ -12,12 +12,11 @@ export function AskActions({
   disabled?: boolean;
   onAnswer: (answer: string) => Promise<void>;
 }) {
-  const [submitting, setSubmitting] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const submitting = pendingAction !== null;
 
   async function submit(answer: string) {
     if (disabled || submitting) return;
-    setSubmitting(true);
     setPendingAction(answer);
     try {
       await onAnswer(answer);
@@ -27,7 +26,6 @@ export function AskActions({
         error instanceof Error ? error.message : "Please try again.",
       );
     } finally {
-      setSubmitting(false);
       setPendingAction(null);
     }
   }

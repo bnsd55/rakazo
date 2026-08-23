@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  ComposioEmulator,
   DesktopSandboxProvider,
   FakeSandboxProvider,
   handoffToGroupBot,
@@ -118,6 +119,7 @@ describeJourneys("required product journeys", () => {
       dataDir,
       sandboxProvider: "fake",
       agentRuntime: "scripted",
+      composio: new ComposioEmulator(),
     });
     app = handles.app;
     stop = handles.stop;

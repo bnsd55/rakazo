@@ -105,7 +105,6 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "destination.write",
-        viaConnector: false,
         rules: alwaysAllowDestination,
       }),
     ).toBe("allow");
@@ -115,7 +114,6 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "gmail_send_email",
-        viaConnector: true,
         rules: [...alwaysAllowDestination, ...requireEmail],
       }),
     ).toBe("ask");
@@ -125,7 +123,6 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "gmail_list_threads",
-        viaConnector: true,
         rules: requireEmail,
       }),
     ).toBe("allow");
@@ -135,7 +132,6 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "read_file",
-        viaConnector: false,
         rules: [{ effect: "require_approval", matchKind: "tool", matchValue: "read_file" }],
       }),
     ).toBe("allow");
@@ -145,7 +141,6 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "destination.write",
-        viaConnector: false,
         rules: [...alwaysAllowDestination, ...requireDestination],
       }),
     ).toBe("ask");
@@ -155,14 +150,12 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "list_files",
-        viaConnector: false,
         rules: [],
       }),
     ).toBe("allow");
     expect(
       resolveActionApproval({
         toolName: "destination.write",
-        viaConnector: false,
         rules: [],
       }),
     ).toBe("allow");
@@ -172,7 +165,6 @@ describe("resolveActionApproval", () => {
     expect(
       resolveActionApproval({
         toolName: "gmail_send_email",
-        viaConnector: true,
         rules: [
           ...requireEmail,
           { effect: "always_allow", matchKind: "tool", matchValue: "gmail_send_email" },

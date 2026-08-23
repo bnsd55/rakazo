@@ -121,3 +121,23 @@ export async function claimIntendedEffect(
   });
   return claimed.count === 1;
 }
+
+export async function completeExternalEffect(
+  store: {
+    externalEffect: {
+      updateMany: (args: {
+        where: { id: string; status: string };
+        data: { status: string; result: never };
+      }) => Promise<{ count: number }>;
+    };
+  },
+  effectId: string,
+  expectedStatus: "intended" | "executing",
+  result: unknown,
+): Promise<boolean> {
+  const completed = await store.externalEffect.updateMany({
+    where: { id: effectId, status: expectedStatus },
+    data: { status: "completed", result: result as never },
+  });
+  return completed.count === 1;
+}

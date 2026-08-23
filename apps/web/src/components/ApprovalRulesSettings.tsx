@@ -36,14 +36,24 @@ export function ApprovalRulesSettings() {
   }, []);
 
   async function setPreset(matchValue: "email" | "purchase") {
+    if (
+      rules.some(
+        (rule) =>
+          rule.effect === "require_approval" &&
+          rule.matchKind === "category" &&
+          rule.matchValue === matchValue,
+      )
+    ) {
+      return;
+    }
     setError(null);
     try {
-      await rpc.approvalRules.set({
+      const saved = await rpc.approvalRules.set({
         effect: "require_approval",
         matchKind: "category",
         matchValue,
       });
-      await refresh();
+      setRules((current) => [...current, saved]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save rule");
     }
@@ -53,7 +63,7 @@ export function ApprovalRulesSettings() {
     setError(null);
     try {
       await rpc.approvalRules.remove({ id });
-      await refresh();
+      setRules((current) => current.filter((rule) => rule.id !== id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove rule");
     }

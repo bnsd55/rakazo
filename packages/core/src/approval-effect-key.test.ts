@@ -5,6 +5,24 @@ describe("stableJsonValue", () => {
   it("sorts object keys", () => {
     expect(stableJsonValue({ b: 1, a: 2 })).toBe('{"a":2,"b":1}');
   });
+
+  it("rejects values that cannot be represented uniquely as JSON", () => {
+    const sparse = Array(1);
+
+    for (const value of [undefined, [undefined], sparse, { value: undefined }, Number.NaN]) {
+      expect(() => stableJsonValue(value)).toThrow("only JSON values");
+    }
+    expect(stableJsonValue([])).toBe("[]");
+    expect(stableJsonValue([null])).toBe("[null]");
+  });
+
+  it("rejects cyclic and non-plain objects", () => {
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+
+    expect(() => stableJsonValue(cyclic)).toThrow("only JSON values");
+    expect(() => stableJsonValue(new Date(0))).toThrow("only JSON values");
+  });
 });
 
 describe("approvalEffectKey", () => {
