@@ -7,6 +7,7 @@ import {
   mergeMobileSnapshot,
   prependMobileMessagePage,
   rpc,
+  shouldApplyMobileThreadRefresh,
   signIn,
   signOut,
   subscribeThread,
@@ -123,7 +124,7 @@ describe("mobile thread subscription", () => {
     vi.stubGlobal("fetch", fetchMock);
     const onEvent = vi.fn();
 
-    await subscribeThread("bot-1", 3, onEvent, new AbortController().signal);
+    await subscribeThread({ botId: "bot-1" }, 3, onEvent, new AbortController().signal);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:3100/rpc/threads/subscribe",
@@ -149,7 +150,7 @@ describe("mobile thread subscription", () => {
       vi.fn(async () => new Response(null, { status: 503 })),
     );
     await expect(
-      subscribeThread("bot-1", -1, vi.fn(), new AbortController().signal),
+      subscribeThread({ botId: "bot-1" }, -1, vi.fn(), new AbortController().signal),
     ).rejects.toThrow("rpc threads/subscribe failed (503)");
 
     vi.stubGlobal(
@@ -157,8 +158,47 @@ describe("mobile thread subscription", () => {
       vi.fn(async () => new Response(null, { status: 200 })),
     );
     await expect(
-      subscribeThread("bot-1", -1, vi.fn(), new AbortController().signal),
+      subscribeThread({ botId: "bot-1" }, -1, vi.fn(), new AbortController().signal),
     ).rejects.toThrow("rpc threads/subscribe failed (200)");
+  });
+});
+
+describe("mobile thread refresh targeting", () => {
+  it("drops a deferred group A refresh after navigation to group B", async () => {
+    let activeGroupId: string | undefined = "group-a";
+    let currentEpoch = 1;
+    let resolveRequest!: (snapshot: MobileSnapshot) => void;
+    const request = new Promise<MobileSnapshot>((resolve) => {
+      resolveRequest = resolve;
+    });
+    let applied: MobileSnapshot | null = null;
+    const refresh = request.then((snapshot) => {
+      if (
+        shouldApplyMobileThreadRefresh({
+          requestEpoch: 1,
+          currentEpoch,
+          targetBotId: undefined,
+          targetGroupId: "group-a",
+          activeBotId: undefined,
+          activeGroupId,
+        })
+      ) {
+        applied = snapshot;
+      }
+    });
+
+    activeGroupId = "group-b";
+    currentEpoch += 1;
+    resolveRequest({
+      groupId: "group-a",
+      threadId: "thread-a",
+      messages: [],
+      olderCursor: null,
+      run: null,
+    });
+    await refresh;
+
+    expect(applied).toBeNull();
   });
 });
 
@@ -288,6 +328,28 @@ describe("mobile thread event reduction", () => {
       runId: "run-1",
       blocks: [askBlock],
     });
+  });
+
+  it("updates a waiting group run without replacing the newer active run", () => {
+    const initial: MobileSnapshot = {
+      ...snapshot(),
+      run: { id: "run-newer", status: "running" },
+      activeRuns: [
+        { id: "run-newer", status: "running" },
+        { id: "run-waiting", status: "running" },
+      ],
+    };
+
+    const waiting = applyMobileThreadEvent(initial, {
+      type: "run.waiting_input",
+      runId: "run-waiting",
+    });
+
+    expect(waiting?.run).toEqual({ id: "run-newer", status: "running" });
+    expect(waiting?.activeRuns).toEqual([
+      { id: "run-newer", status: "running" },
+      { id: "run-waiting", status: "waiting_input" },
+    ]);
   });
 
   it("leaves the snapshot unchanged for unrelated events", () => {

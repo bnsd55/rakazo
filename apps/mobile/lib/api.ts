@@ -172,6 +172,8 @@ export type MobileMessage = {
   seq?: number;
   runId?: string;
   role: "user" | "bot" | "system";
+  botId?: string;
+  replyToMessageId?: string;
   blocks: Array<{
     kind: string;
     text?: string;
@@ -185,6 +187,8 @@ export type MobileMessage = {
     result?: string;
     answer?: string;
     botId?: string;
+    fromBotId?: string;
+    toBotId?: string;
     title?: string;
     agentId?: string;
     actions?: Array<{ id: string; label: string }>;
@@ -194,14 +198,27 @@ export type MobileMessage = {
   }>;
 };
 
+export type MobileGroup = {
+  id: string;
+  name: string;
+  preview: string;
+  unread: boolean;
+  updatedAt: string;
+  members: Array<{ botId: string; name: string; color: string }>;
+};
+
 export type MobileSnapshot = {
-  botId: string;
+  botId?: string;
+  groupId?: string;
+  groupName?: string;
   threadId: string;
   cursor?: number;
   messages: MobileMessage[];
   olderCursor: number | null;
   run: { id: string; status: string } | null;
-  computer: {
+  activeRuns?: Array<{ id: string; status: string }>;
+  members?: MobileGroup["members"];
+  computer?: {
     state: string;
     controlHolder: string;
     screenAvailable: boolean;
@@ -209,6 +226,21 @@ export type MobileSnapshot = {
     busyBotName: string | null;
   };
 };
+
+export function shouldApplyMobileThreadRefresh(input: {
+  requestEpoch: number;
+  currentEpoch: number;
+  targetBotId: string | undefined;
+  targetGroupId: string | undefined;
+  activeBotId: string | undefined;
+  activeGroupId: string | undefined;
+}) {
+  return (
+    input.requestEpoch === input.currentEpoch &&
+    input.targetBotId === input.activeBotId &&
+    input.targetGroupId === input.activeGroupId
+  );
+}
 
 export type MobileMessagePage = ThreadHistory<MobileMessage>;
 
@@ -248,6 +280,7 @@ export function blockText(message: MobileMessage) {
 
 type ThreadEvent = {
   id?: string;
+  botId?: string;
   type: string;
   seq?: number;
   runId?: string;
@@ -255,7 +288,7 @@ type ThreadEvent = {
 };
 
 export async function subscribeThread(
-  botId: string,
+  target: { botId: string } | { groupId: string },
   cursor: number,
   onEvent: (event: ThreadEvent) => void,
   signal: AbortSignal,
@@ -268,7 +301,7 @@ export async function subscribeThread(
       origin: "rakazo://",
       ...(await authHeaders()),
     },
-    body: JSON.stringify({ json: { botId, cursor } }),
+    body: JSON.stringify({ json: { ...target, cursor } }),
     signal,
   });
   if (!res.ok || !res.body) throw new Error(`rpc threads/subscribe failed (${res.status})`);
@@ -304,11 +337,30 @@ export function applyMobileThreadEvent(
 ): MobileSnapshot | null {
   if (!prev) return prev;
   if (event.type === "thread.cleared") {
-    return { ...prev, cursor: event.seq, messages: [], olderCursor: null, run: null };
+    return {
+      ...prev,
+      cursor: event.seq,
+      messages: [],
+      olderCursor: null,
+      run: null,
+      activeRuns: [],
+    };
   }
   if (event.type === "run.waiting_input") {
-    if (!prev.run || prev.run.status === "waiting_input") return prev;
-    return { ...prev, run: { ...prev.run, status: "waiting_input" } };
+    const runChanged = Boolean(
+      prev.run && prev.run.id === event.runId && prev.run.status !== "waiting_input",
+    );
+    const activeRunChanged = prev.activeRuns?.some(
+      (candidate) => candidate.id === event.runId && candidate.status !== "waiting_input",
+    );
+    if (!runChanged && !activeRunChanged) return prev;
+    const run = runChanged && prev.run ? { ...prev.run, status: "waiting_input" } : prev.run;
+    const activeRuns = activeRunChanged
+      ? prev.activeRuns?.map((candidate) =>
+          candidate.id === event.runId ? { ...candidate, status: "waiting_input" } : candidate,
+        )
+      : prev.activeRuns;
+    return { ...prev, run, activeRuns };
   }
   if (event.type === "thread.progress") {
     const progressId = progressMessageId(event);
@@ -362,6 +414,10 @@ export function applyMobileThreadEvent(
       runId: event.runId ? String(event.runId) : undefined,
       role: (event.payload?.role as MobileMessage["role"]) ?? "bot",
       blocks: (event.payload?.blocks as MobileMessage["blocks"]) ?? [],
+      botId: event.botId ?? (event.payload?.botId ? String(event.payload.botId) : undefined),
+      replyToMessageId: event.payload?.replyToMessageId
+        ? String(event.payload.replyToMessageId)
+        : undefined,
     };
     return {
       ...prev,
