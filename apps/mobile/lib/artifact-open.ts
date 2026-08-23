@@ -4,12 +4,15 @@ import { rpc } from "./api";
 import { artifactCacheFileName } from "./artifact-file";
 
 export async function openMobileArtifact(
-  botId: string,
+  target: { botId: string } | { groupId: string },
   artifactId: string,
   name: string,
   mimeType: string,
 ): Promise<void> {
-  const artifact = await rpc<{ contentBase64: string }>("artifacts/get", { botId, artifactId });
+  const artifact = await rpc<{ contentBase64: string }>("artifacts/get", {
+    ...target,
+    artifactId,
+  });
   const file = new File(Paths.cache, artifactCacheFileName(artifactId, mimeType));
   file.create({ overwrite: true });
   file.write(artifact.contentBase64, { encoding: "base64" });

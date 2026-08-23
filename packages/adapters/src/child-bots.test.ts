@@ -23,6 +23,18 @@ const context = {
   signal: new AbortController().signal,
 } satisfies AdapterContext;
 
+function noGroupMemberships() {
+  return {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    chatGroup: {
+      findMany: vi.fn().mockResolvedValue([]),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    chatGroupMember: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    artifact: { findMany: vi.fn().mockResolvedValue([]) },
+  };
+}
+
 describe("spawned bot creation", () => {
   it("returns the existing child when a spawn is retried", async () => {
     const findUnique = vi.fn().mockResolvedValue({
@@ -113,6 +125,7 @@ describe("spawned bot archival", () => {
       routine: { findMany: vi.fn().mockResolvedValue([]) },
       $transaction: vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
         callback({
+          ...noGroupMemberships(),
           run: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
           task: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
           routine: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -153,10 +166,12 @@ describe("destroyBot", () => {
     const removeArtifact = vi.fn().mockResolvedValue(undefined);
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
+        $queryRaw: vi.fn().mockResolvedValue([]),
         chatGroup: {
           findMany: vi.fn().mockResolvedValue([]),
-          delete: vi.fn().mockResolvedValue(undefined),
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         },
+        artifact: { findMany: vi.fn().mockResolvedValue([]) },
         computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         computer: { updateMany: releaseComputers },
         $executeRaw: executeRaw,
@@ -221,16 +236,20 @@ describe("destroyBot", () => {
   });
 
   it("dissolves two-member groups before deleting the bot", async () => {
-    const deleteGroup = vi.fn().mockResolvedValue(undefined);
+    const deleteGroups = vi.fn().mockResolvedValue({ count: 1 });
+    const deleteMemberships = vi.fn().mockResolvedValue({ count: 1 });
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
+        $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }, { id: "group-2" }]),
         chatGroup: {
           findMany: vi.fn().mockResolvedValue([
             { id: "group-1", _count: { members: 2 } },
             { id: "group-2", _count: { members: 3 } },
           ]),
-          delete: deleteGroup,
+          deleteMany: deleteGroups,
         },
+        chatGroupMember: { deleteMany: deleteMemberships },
+        artifact: { findMany: vi.fn().mockResolvedValue([]) },
         computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         computer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
         $executeRaw: vi.fn(),
@@ -261,8 +280,10 @@ describe("destroyBot", () => {
       { deleteMemories: true },
     );
 
-    expect(deleteGroup).toHaveBeenCalledOnce();
-    expect(deleteGroup).toHaveBeenCalledWith({ where: { id: "group-1" } });
+    expect(deleteGroups).toHaveBeenCalledWith({ where: { id: { in: ["group-1"] } } });
+    expect(deleteMemberships).toHaveBeenCalledWith({
+      where: { botId: "bot-1", groupId: { in: ["group-2"] } },
+    });
   });
 
   it("surfaces transaction failures instead of reporting deletion success", async () => {
@@ -304,6 +325,7 @@ describe("archiveBot", () => {
     const disableRoutines = vi.fn().mockResolvedValue({ count: 2 });
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
+        ...noGroupMemberships(),
         run: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
         task: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
         routine: { updateMany: disableRoutines },
@@ -354,6 +376,7 @@ describe("archiveBot", () => {
     const updateComputer = vi.fn().mockResolvedValue({});
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
+        ...noGroupMemberships(),
         run: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
         task: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
         routine: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -418,6 +441,7 @@ describe("archiveBot", () => {
     const running = { ...booting, providerRef: "provider-1", state: "running" };
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
+        ...noGroupMemberships(),
         run: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
         task: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
         routine: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },

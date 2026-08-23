@@ -55,6 +55,7 @@ describe("attachment helpers", () => {
   it("scopes current-turn images to user-triggered runs", () => {
     const messages = [
       {
+        id: "message-old",
         role: "user",
         runId: "run-old",
         blocks: [
@@ -67,6 +68,7 @@ describe("attachment helpers", () => {
         ],
       },
       {
+        id: "message-new",
         role: "user",
         runId: "run-new",
         blocks: [{ kind: "text" as const, text: "routine time" }],
@@ -75,6 +77,9 @@ describe("attachment helpers", () => {
     expect(userTurnBlocksForRun("routine", "run-new", messages)).toBeUndefined();
     expect(userTurnBlocksForRun("user", "run-old", messages)).toEqual(messages[0]?.blocks);
     expect(userTurnBlocksForRun("user", "run-new", messages)).toEqual(messages[1]?.blocks);
+    expect(userTurnBlocksForRun("user", "run-fanout", messages, "message-old")).toEqual(
+      messages[0]?.blocks,
+    );
   });
 
   it("selects pending attachments only for their originating bot", () => {

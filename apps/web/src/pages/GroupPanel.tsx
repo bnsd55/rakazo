@@ -1,4 +1,4 @@
-import type { Bot, Group } from "@rakazo/contracts";
+import { type Bot, GROUP_MEMBER_MAX, GROUP_MEMBER_MIN, type Group } from "@rakazo/contracts";
 import { BotAvatar, Button } from "@rakazo/ui-web";
 import { useMemo, useState } from "react";
 
@@ -18,7 +18,7 @@ export function CreateGroupForm({
   function toggle(botId: string) {
     setSelected((current) => {
       if (current.includes(botId)) return current.filter((id) => id !== botId);
-      if (current.length >= 6) return current;
+      if (current.length >= GROUP_MEMBER_MAX) return current;
       return [...current, botId];
     });
   }
@@ -40,7 +40,9 @@ export function CreateGroupForm({
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
-      <div className="mt-5 text-[14px] text-[#85858A]">Members (pick 2–6)</div>
+      <div className="mt-5 text-[14px] text-[#85858A]">
+        Members (pick {GROUP_MEMBER_MIN}–{GROUP_MEMBER_MAX})
+      </div>
       <div className="mt-2 max-h-[280px] space-y-1 overflow-y-auto">
         {selectable.map((bot) => {
           const checked = selected.includes(bot.id);
@@ -65,7 +67,9 @@ export function CreateGroupForm({
       </p>
       <Button
         className="mt-5 w-full"
-        disabled={!name.trim() || selected.length < 2 || selected.length > 6}
+        disabled={
+          !name.trim() || selected.length < GROUP_MEMBER_MIN || selected.length > GROUP_MEMBER_MAX
+        }
         onClick={() => onCreate({ name: name.trim(), botIds: selected })}
       >
         Create group
@@ -92,7 +96,7 @@ export function GroupSettings({
   function toggle(botId: string) {
     setSelected((current) => {
       if (current.includes(botId)) return current.filter((id) => id !== botId);
-      if (current.length >= 6) return current;
+      if (current.length >= GROUP_MEMBER_MAX) return current;
       return [...current, botId];
     });
   }
@@ -110,7 +114,9 @@ export function GroupSettings({
           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
         />
       </label>
-      <div className="mt-5 text-[14px] text-[#85858A]">Members (2–6)</div>
+      <div className="mt-5 text-[14px] text-[#85858A]">
+        Members ({GROUP_MEMBER_MIN}–{GROUP_MEMBER_MAX})
+      </div>
       <div className="mt-2 max-h-[240px] space-y-1 overflow-y-auto">
         {selectable.map((bot) => {
           const checked = selected.includes(bot.id);
@@ -132,7 +138,9 @@ export function GroupSettings({
       </div>
       <Button
         className="mt-5 w-full"
-        disabled={!name.trim() || selected.length < 2 || selected.length > 6}
+        disabled={
+          !name.trim() || selected.length < GROUP_MEMBER_MIN || selected.length > GROUP_MEMBER_MAX
+        }
         onClick={() =>
           onSave({
             name: name.trim() !== group.name ? name.trim() : undefined,

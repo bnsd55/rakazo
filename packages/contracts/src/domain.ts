@@ -37,6 +37,9 @@ export const GroupMemberSchema = z.object({
 });
 export type GroupMember = z.infer<typeof GroupMemberSchema>;
 
+export const GROUP_MEMBER_MIN = 2;
+export const GROUP_MEMBER_MAX = 6;
+
 export const GroupSchema = z.object({
   id: Id,
   workspaceId: Id,
@@ -52,14 +55,14 @@ export type Group = z.infer<typeof GroupSchema>;
 
 export const CreateGroupInput = z.object({
   name: z.string().min(1).max(80),
-  botIds: z.array(Id).min(2).max(6),
+  botIds: z.array(Id).min(GROUP_MEMBER_MIN).max(GROUP_MEMBER_MAX),
 });
 export type CreateGroupInput = z.infer<typeof CreateGroupInput>;
 
 export const UpdateGroupInput = z.object({
   groupId: Id,
   name: z.string().min(1).max(80).optional(),
-  botIds: z.array(Id).min(2).max(6).optional(),
+  botIds: z.array(Id).min(GROUP_MEMBER_MIN).max(GROUP_MEMBER_MAX).optional(),
 });
 export type UpdateGroupInput = z.infer<typeof UpdateGroupInput>;
 
@@ -228,7 +231,8 @@ export type CapabilityInstall = z.infer<typeof CapabilityInstallSchema>;
 
 export const ArtifactSchema = z.object({
   id: Id,
-  botId: Id,
+  botId: Id.nullable(),
+  groupId: Id.nullable(),
   runId: Id.nullable(),
   name: z.string(),
   mimeType: z.string(),

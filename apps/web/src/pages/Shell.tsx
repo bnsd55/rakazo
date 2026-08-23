@@ -29,6 +29,7 @@ import {
   groupBotsForSidebar,
   inferAttachmentMimeType,
   isActive,
+  latestAnswerableAskMessageId,
   presetFromCron,
   speechFromBlocks,
 } from "@rakazo/core";
@@ -39,6 +40,7 @@ import {
   Cpu,
   Gauge,
   LogOut,
+  Menu,
   Mic,
   Monitor,
   Paperclip,
@@ -69,7 +71,7 @@ import { SkillDraftCard } from "../components/teach/SkillDraftCard";
 import { TeachCaptureOverlay } from "../components/teach/TeachCaptureOverlay";
 import { TeachComputerSection } from "../components/teach/TeachComputerSection";
 import { TeachRecordingChrome, TeachStopButton } from "../components/teach/TeachRecordingChrome";
-import { decodeArtifactBase64, openArtifact } from "../lib/artifact-open";
+import { type ArtifactTarget, decodeArtifactBase64, openArtifact } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
 import { dictation } from "../lib/dictation";
@@ -164,6 +166,7 @@ export function ShellPage() {
   const [dictating, setDictating] = useState(false);
   const [dictationError, setDictationError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [botMenu, setBotMenu] = useState<{
     botId: string;
@@ -208,6 +211,7 @@ export function ShellPage() {
     olderCursor: number | null;
   } | null>(null);
   const manuallyUnread = useRef(new Set<string>());
+  const readVisibleGroups = useRef(new Set<string>());
   const computerVisible = useRef(false);
   computerVisible.current = panel === "computer" || computerOpen;
   const autoSpoken = useRef<string | null>(null);
@@ -434,7 +438,7 @@ export function ShellPage() {
         setBotSections(bootstrap.botSections);
         setArchivedBots(bootstrap.archivedBots);
         setInitialBotsLoaded(true);
-        if (bootstrap.thread) {
+        if (!groupId && bootstrap.thread) {
           bootstrappedThread.current = bootstrap.thread;
           setSnapshot(bootstrap.thread);
           setComputer(bootstrap.thread.computer ?? null);
@@ -448,7 +452,7 @@ export function ShellPage() {
           return;
         }
         const selectedBotId = bootstrap.thread?.botId ?? bootstrap.bots[0]?.id;
-        if (selectedBotId && selectedBotId !== botId) {
+        if (!groupId && selectedBotId && selectedBotId !== botId) {
           navigate(`/app/${selectedBotId}`, { replace: true });
         }
       })
@@ -611,14 +615,29 @@ export function ShellPage() {
   useEffect(() => {
     if (!groupId || !activeGroup) return;
     manuallyUnread.current.delete(activeGroup.id);
+    readVisibleGroups.current.delete(groupId);
     const markVisibleGroupRead = () => {
-      if (document.visibilityState === "visible" && document.hasFocus()) {
-        void rpc.threads.markRead({ groupId }).then(() => {
-          setGroups((current) =>
-            current.map((group) => (group.id === groupId ? { ...group, unread: false } : group)),
-          );
+      if (
+        document.visibilityState !== "visible" ||
+        !document.hasFocus() ||
+        readVisibleGroups.current.has(groupId)
+      )
+        return;
+      readVisibleGroups.current.add(groupId);
+      void rpc.threads
+        .markRead({ groupId })
+        .then(() => {
+          setGroups((current) => {
+            const group = current.find((candidate) => candidate.id === groupId);
+            if (!group?.unread) return current;
+            return current.map((candidate) =>
+              candidate.id === groupId ? { ...candidate, unread: false } : candidate,
+            );
+          });
+        })
+        .catch(() => {
+          readVisibleGroups.current.delete(groupId);
         });
-      }
     };
     markVisibleGroupRead();
     window.addEventListener("focus", markVisibleGroupRead);
@@ -639,6 +658,7 @@ export function ShellPage() {
             retryMs = 250;
             applyThreadEvent(event, setSnapshot, setComputer);
             if (event.type === "thread.message.created" && event.payload.role === "bot") {
+              readVisibleGroups.current.delete(groupId);
               markVisibleGroupRead();
             }
             if (event.type === "run.completed") {
@@ -808,15 +828,20 @@ export function ShellPage() {
   const openBot = useCallback((id: string) => navigate(`/app/${id}`), [navigate]);
   const loadOlder = useCallback(() => loadOlderMessagesRef.current(), []);
   const answerMessage = useCallback(async (message: ThreadMessage, text: string) => {
-    const id = activeBotId.current;
-    if (!id) return;
+    const botId = activeBotId.current;
+    const groupId = activeGroupId.current;
+    if (!botId && !groupId) return;
     await rpc.threads.answer({
-      botId: id,
+      ...(groupId ? { groupId } : { botId: botId! }),
       runId: message.runId ?? "",
       messageId: message.id,
       answer: text,
     });
-    await refreshThreadRef.current(id);
+    if (groupId && activeGroupId.current === groupId) {
+      await refreshGroupThreadRef.current(groupId);
+    } else if (botId && activeBotId.current === botId) {
+      await refreshThreadRef.current(botId);
+    }
   }, []);
   const onAttachmentPick = useCallback(
     async (files: FileList | null) => {
@@ -857,7 +882,7 @@ export function ShellPage() {
     setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id));
   }, []);
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, mentions?: string[]) => {
       const botTarget = activeBotId.current;
       const groupTarget = activeGroupId.current;
       if ((!botTarget && !groupTarget) || sending) return;
@@ -868,27 +893,24 @@ export function ShellPage() {
       setSendError(null);
       try {
         const artifactIds: string[] = [];
-        const uploadBotId =
-          botTarget ?? snapshot?.members?.[0]?.botId ?? activeGroup?.members[0]?.botId;
-        if (!uploadBotId) throw new Error("No bot available for attachments");
         for (const pending of attachments) {
           const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
           if (!mimeType) {
             throw new Error(`Unsupported file type: ${pending.file.name}`);
           }
           const contentBase64 = await readFileAsBase64(pending.file);
-          const artifact = await rpc.artifacts.create({
-            botId: uploadBotId,
-            name: pending.file.name,
-            mimeType,
-            contentBase64,
-          });
+          const artifact = await rpc.artifacts.create(
+            groupTarget
+              ? { groupId: groupTarget, name: pending.file.name, mimeType, contentBase64 }
+              : { botId: botTarget!, name: pending.file.name, mimeType, contentBase64 },
+          );
           artifactIds.push(artifact.id);
         }
         if (groupTarget) {
           await rpc.threads.send({
             groupId: groupTarget,
             text: trimmed || undefined,
+            mentions: mentions?.length ? mentions : undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
             replyToMessageId: replyTarget?.id,
           });
@@ -919,7 +941,7 @@ export function ShellPage() {
         setSending(false);
       }
     },
-    [activeGroup?.members, pendingAttachments, replyTarget?.id, sending, snapshot?.members],
+    [pendingAttachments, replyTarget?.id, sending],
   );
   const followUpMessage = useCallback(async (text: string) => {
     const id = activeBotId.current;
@@ -1140,7 +1162,19 @@ export function ShellPage() {
       {bootstrapMe !== undefined ? (
         <HostComputerPrompt initialMe={bootstrapMe ?? undefined} />
       ) : null}
-      <aside className="flex w-[316px] shrink-0 flex-col border-r border-[#171719] bg-[#0B0B0C]">
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setMobileSidebarOpen(false)}
+          className="absolute inset-0 z-30 bg-black/60 md:hidden"
+        />
+      ) : null}
+      <aside
+        className={`absolute inset-y-0 left-0 z-40 flex w-[calc(100%-48px)] max-w-[316px] shrink-0 flex-col border-r border-[#171719] bg-[#0B0B0C] transition-transform md:static md:z-auto md:w-[316px] md:translate-x-0 ${
+          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div className="app-drag flex items-center justify-between px-[18px] pb-3 pt-4">
           <WindowChrome />
           <div className="relative">
@@ -1206,7 +1240,10 @@ export function ShellPage() {
                   <button
                     key={bot.id}
                     type="button"
-                    onClick={() => navigate(`/app/${bot.id}`)}
+                    onClick={() => {
+                      setMobileSidebarOpen(false);
+                      navigate(`/app/${bot.id}`);
+                    }}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       setBotMenu({
@@ -1258,7 +1295,10 @@ export function ShellPage() {
                 <button
                   key={group.id}
                   type="button"
-                  onClick={() => navigate(`/app/g/${group.id}`)}
+                  onClick={() => {
+                    setMobileSidebarOpen(false);
+                    navigate(`/app/g/${group.id}`);
+                  }}
                   className="flex gap-3 rounded-xl px-2.5 py-[11px] text-left"
                   style={{
                     background: inGroup && activeGroup?.id === group.id ? "#161618" : "transparent",
@@ -1405,28 +1445,38 @@ export function ShellPage() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col bg-[#0D0D0E]">
-        <div className="flex items-center justify-between border-b border-[#141416] px-[22px] py-[17px]">
-          <button
-            type="button"
-            data-testid="bot-settings-trigger"
-            onClick={() => setPanel(inGroup ? "group-settings" : "settings")}
-            className="flex min-w-0 items-center gap-3"
-          >
-            {inGroup ? (
-              <span className="grid h-[26px] w-[26px] place-items-center rounded-full bg-[#232326] text-[11px] text-[#C9C9CE]">
-                G
+        <div className="flex items-center justify-between border-b border-[#141416] px-3 py-[17px] md:px-[22px]">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              aria-label="Open navigation"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#A8A8AD] hover:bg-[#1B1B1E] md:hidden"
+            >
+              <Menu size={19} strokeWidth={1.7} />
+            </button>
+            <button
+              type="button"
+              data-testid="bot-settings-trigger"
+              onClick={() => setPanel(inGroup ? "group-settings" : "settings")}
+              className="flex min-w-0 items-center gap-3"
+            >
+              {inGroup ? (
+                <span className="grid h-[26px] w-[26px] place-items-center rounded-full bg-[#232326] text-[11px] text-[#C9C9CE]">
+                  G
+                </span>
+              ) : active ? (
+                <BotAvatar color={active.color} size={26} />
+              ) : null}
+              <span className="min-w-0">
+                <span className="block truncate text-[16px] font-medium text-[#ECECEE]">
+                  {inGroup
+                    ? (activeGroup?.name ?? snapshot?.groupName ?? "Group")
+                    : (active?.name ?? "Select a bot")}
+                </span>
               </span>
-            ) : active ? (
-              <BotAvatar color={active.color} size={26} />
-            ) : null}
-            <span className="min-w-0">
-              <span className="block truncate text-[16px] font-medium text-[#ECECEE]">
-                {inGroup
-                  ? (activeGroup?.name ?? snapshot?.groupName ?? "Group")
-                  : (active?.name ?? "Select a bot")}
-              </span>
-            </span>
-          </button>
+            </button>
+          </div>
           <div className="flex items-center gap-1">
             {!inGroup && active ? (
               <button
@@ -1461,7 +1511,7 @@ export function ShellPage() {
         </div>
         <Transcript
           scrollRef={messageScroll}
-          botId={inGroup ? (groupId ?? "") : (active?.id ?? "")}
+          artifactTarget={inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }}
           messages={snapshot?.messages ?? []}
           olderCursor={snapshot?.olderCursor ?? null}
           loadingOlder={loadingOlder}
@@ -1525,14 +1575,14 @@ export function ShellPage() {
       <aside
         data-testid="side-panel"
         data-panel={panel ?? "closed"}
-        className={`relative z-20 flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#0A0A0B] transition-[width] duration-150 ease-out ${
+        className={`absolute inset-y-0 right-0 z-20 flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#0A0A0B] transition-[width] duration-150 ease-out md:relative ${
           panel && (active || activeGroup)
-            ? "w-[384px] border-l border-[#141416]"
+            ? "w-full max-w-[384px] border-l border-[#141416] md:w-[384px] md:max-w-none"
             : "pointer-events-none w-0"
         }`}
       >
         {panel && (active || activeGroup) ? (
-          <div className="rk-scroll h-full w-[384px] overflow-y-auto px-5 py-[17px]">
+          <div className="rk-scroll h-full w-full overflow-y-auto px-5 py-[17px] md:w-[384px]">
             {panel !== "routine" &&
             panel !== "create" &&
             panel !== "create-group" &&
@@ -2115,7 +2165,7 @@ export function ShellPage() {
 
 const Transcript = memo(function Transcript({
   scrollRef,
-  botId,
+  artifactTarget,
   messages,
   olderCursor,
   loadingOlder,
@@ -2133,7 +2183,7 @@ const Transcript = memo(function Transcript({
   onSpeak,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
-  botId: string;
+  artifactTarget: ArtifactTarget;
   messages: ThreadMessage[];
   olderCursor: number | null;
   loadingOlder: boolean;
@@ -2158,7 +2208,7 @@ const Transcript = memo(function Transcript({
     <div
       ref={scrollRef}
       data-testid="transcript"
-      className="rk-scroll flex flex-1 flex-col gap-[13px] overflow-y-auto px-7 py-6"
+      className="rk-scroll flex flex-1 flex-col gap-[13px] overflow-y-auto px-4 py-5 md:px-7 md:py-6"
     >
       {olderCursor != null ? (
         <button
@@ -2181,7 +2231,7 @@ const Transcript = memo(function Transcript({
             Reply
           </button>
           <MessageView
-            botId={botId}
+            artifactTarget={artifactTarget}
             message={message}
             canAnswer={message.id === answerableAskMessageId}
             onOpenBot={onOpenBot}
@@ -2246,7 +2296,7 @@ const Composer = memo(function Composer({
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAttachmentPick: (files: FileList | null) => void | Promise<void>;
   onRemoveAttachment: (attachment: PendingAttachment) => void;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, mentions?: string[]) => Promise<void>;
   onStop: () => Promise<void>;
   replyTarget?: ThreadMessage | null;
   onClearReply?: () => void;
@@ -2258,16 +2308,27 @@ const Composer = memo(function Composer({
 }) {
   const [draft, setDraft] = useState("");
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [selectedMentions, setSelectedMentions] = useState<Array<{ botId: string; name: string }>>(
+    [],
+  );
   const canSend = draft.trim().length > 0 || pendingAttachments.length > 0;
 
   function updateDraft(value: string) {
     setDraft(value);
+    setSelectedMentions((current) => current.filter((member) => value.includes(`@${member.name}`)));
     const match = /(?:^|\s)@([\w-]*)$/.exec(value);
     setMentionQuery(match ? (match[1] ?? "") : null);
   }
 
-  function insertMention(name: string) {
-    setDraft((current) => current.replace(/@([\w-]*)$/, `@${name} `));
+  function insertMention(member: { botId: string; name: string }) {
+    setDraft((current) => current.replace(/@([\w-]*)$/, `@${member.name} `));
+    if (member.botId !== "everyone") {
+      setSelectedMentions((current) =>
+        current.some((selected) => selected.botId === member.botId)
+          ? current
+          : [...current, member],
+      );
+    }
     setMentionQuery(null);
   }
 
@@ -2286,11 +2347,13 @@ const Composer = memo(function Composer({
     const text = draft;
     setDraft("");
     setMentionQuery(null);
-    void onSend(text);
+    const mentions = selectedMentions.map((member) => member.botId);
+    setSelectedMentions([]);
+    void onSend(text, mentions);
   }
 
   return (
-    <div className="px-6 pb-6 pt-3">
+    <div className="px-3 pb-4 pt-3 md:px-6 md:pb-6">
       {sendError || dictationError ? (
         <div className="mb-3 rounded-[14px] border border-[#5A2A2A] bg-[#2A1717] px-4 py-2 text-[13px] text-[#F1A8A8]">
           {sendError ?? dictationError}
@@ -2352,7 +2415,7 @@ const Composer = memo(function Composer({
             <button
               key={member.botId}
               type="button"
-              onClick={() => insertMention(member.name)}
+              onClick={() => insertMention(member)}
               className="block w-full px-4 py-2 text-left text-[14px] text-[#ECECEE] hover:bg-[#1F1F22]"
             >
               @{member.name}
@@ -2473,20 +2536,8 @@ function applyThreadEvent(
   }
 }
 
-function latestAnswerableAskMessageId(snapshot: ThreadSnapshot | null): string | null {
-  if (snapshot?.run?.status !== "waiting_input") return null;
-  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
-    const message = snapshot.messages[index];
-    if (message?.runId !== snapshot.run.id) continue;
-    if (message.blocks.some((block) => block.kind === "ask" && block.status !== "answered")) {
-      return message.id;
-    }
-  }
-  return null;
-}
-
 const MessageView = memo(function MessageView({
-  botId,
+  artifactTarget,
   canAnswer,
   message,
   onAnswer,
@@ -2500,7 +2551,7 @@ const MessageView = memo(function MessageView({
   speaking,
   onSpeak,
 }: {
-  botId: string;
+  artifactTarget: ArtifactTarget;
   canAnswer: boolean;
   message: ThreadMessage;
   onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
@@ -2638,7 +2689,11 @@ const MessageView = memo(function MessageView({
               key={i}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              <ArtifactImage botId={botId} artifactId={block.artifactId} name={block.name} />
+              <ArtifactImage
+                target={artifactTarget}
+                artifactId={block.artifactId}
+                name={block.name}
+              />
             </div>
           );
         }
@@ -2651,7 +2706,7 @@ const MessageView = memo(function MessageView({
               <button
                 type="button"
                 onClick={() =>
-                  void openArtifact(botId, block.artifactId, block.name, block.mimeType)
+                  void openArtifact(artifactTarget, block.artifactId, block.name, block.mimeType)
                 }
                 className="rounded-[20px] border border-[#26262A] bg-[#17171A] px-4 py-3 text-left text-[14px] text-[#DFDFE2] hover:bg-[#1F1F22]"
               >
@@ -3463,11 +3518,11 @@ function computerLabel(mode: ComputerStatus["mode"] | undefined, botName: string
 }
 
 function ArtifactImage({
-  botId,
+  target,
   artifactId,
   name,
 }: {
-  botId: string;
+  target: ArtifactTarget;
   artifactId: string;
   name: string;
 }) {
@@ -3475,6 +3530,8 @@ function ArtifactImage({
   const [open, setOpen] = useState(false);
   const [visible, setVisible] = useState(false);
   const container = useRef<HTMLDivElement>(null);
+  const targetBotId = "botId" in target ? target.botId : undefined;
+  const targetGroupId = "groupId" in target ? target.groupId : undefined;
 
   useEffect(() => {
     const element = container.current;
@@ -3501,7 +3558,11 @@ function ArtifactImage({
     let objectUrl: string | null = null;
     setSrc(null);
     void rpc.artifacts
-      .get({ botId, artifactId })
+      .get(
+        targetBotId
+          ? { botId: targetBotId, artifactId }
+          : { groupId: targetGroupId ?? "", artifactId },
+      )
       .then((artifact) => {
         const bytes = decodeArtifactBase64(artifact.contentBase64);
         objectUrl = URL.createObjectURL(
@@ -3515,7 +3576,7 @@ function ArtifactImage({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [artifactId, botId, visible]);
+  }, [artifactId, targetBotId, targetGroupId, visible]);
 
   return (
     <div ref={container}>

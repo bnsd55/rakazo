@@ -1,6 +1,13 @@
 import { runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
-import { createThreadMessage, type PrismaClient, touchGroupUpdatedAt } from "@rakazo/db";
+import {
+  appendEventInTransaction,
+  createThreadMessageInTransaction,
+  IsolationError,
+  lockOwnedGroup,
+  type PrismaClient,
+  touchGroupUpdatedAt,
+} from "@rakazo/db";
 import type { ExecutorDeps } from "./executor.js";
 
 export async function handoffToGroupBot(
@@ -15,73 +22,112 @@ export async function handoffToGroupBot(
   groupId: string,
   input: { bot_id?: string; confirm_name?: string; message: string },
 ) {
-  const members = await deps.prisma.chatGroupMember.findMany({
-    where: { groupId },
-    include: { bot: { select: { id: true, name: true } } },
-    orderBy: { createdAt: "asc" },
-  });
-  let targetId = input.bot_id?.trim();
-  if (!targetId && input.confirm_name?.trim()) {
-    const name = input.confirm_name.trim().toLowerCase();
-    targetId = members.find((member) => member.bot.name.toLowerCase() === name)?.bot.id;
-  }
-  if (!targetId) return { error: "handoff target bot is required" };
-  if (targetId === run.botId) return { error: "cannot hand off to yourself" };
-  if (!members.some((member) => member.bot.id === targetId)) {
-    return { error: "handoff target is not a group member" };
-  }
+  const committed = await deps.prisma.$transaction(async (tx) => {
+    try {
+      await lockOwnedGroup(tx, run, groupId);
+    } catch (error) {
+      if (error instanceof IsolationError)
+        return { error: "group is no longer available" } as const;
+      throw error;
+    }
+    const [group, activeSource] = await Promise.all([
+      tx.chatGroup.findFirst({
+        where: { id: groupId, thread: { id: run.threadId } },
+        include: {
+          members: {
+            include: { bot: { select: { id: true, name: true } } },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      }),
+      tx.run.findFirst({
+        where: {
+          id: run.id,
+          workspaceId: run.workspaceId,
+          threadId: run.threadId,
+          botId: run.botId,
+          userId: run.userId,
+          status: "running",
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!group || !activeSource) return { error: "source run is no longer active" } as const;
+    if (!group.members.some((member) => member.bot.id === run.botId)) {
+      return { error: "source bot is no longer a group member" } as const;
+    }
 
-  const handoffBlock: MessageBlock = {
-    kind: "handoff",
-    fromBotId: run.botId,
-    toBotId: targetId,
-    text: input.message,
-  };
-  const message = await createThreadMessage(deps.prisma, {
-    threadId: run.threadId,
-    role: "bot",
-    blocks: [handoffBlock],
-    botId: run.botId,
-    runId: run.id,
-  });
-  await deps.events.append({
-    workspaceId: run.workspaceId,
-    threadId: run.threadId,
-    botId: run.botId,
-    type: "group.handoff",
-    runId: run.id,
-    payload: {
-      messageId: message.id,
+    let targetId = input.bot_id?.trim();
+    if (!targetId && input.confirm_name?.trim()) {
+      const name = input.confirm_name.trim().toLowerCase();
+      targetId = group.members.find((member) => member.bot.name.toLowerCase() === name)?.bot.id;
+    }
+    if (!targetId) return { error: "handoff target bot is required" } as const;
+    if (targetId === run.botId) return { error: "cannot hand off to yourself" } as const;
+    if (!group.members.some((member) => member.bot.id === targetId)) {
+      return { error: "handoff target is not a group member" } as const;
+    }
+
+    const handoffBlock: MessageBlock = {
+      kind: "handoff",
       fromBotId: run.botId,
       toBotId: targetId,
       text: input.message,
-    },
-  });
-  await touchGroupUpdatedAt(deps.prisma, groupId);
-
-  const task = await deps.prisma.task.create({
-    data: {
-      workspaceId: run.workspaceId,
-      botId: targetId,
+    };
+    const message = await createThreadMessageInTransaction(tx, {
       threadId: run.threadId,
-      userId: run.userId,
-      prompt: input.message,
-      status: "queued",
-    },
-  });
-  const nextRun = await deps.prisma.run.create({
-    data: {
+      role: "bot",
+      blocks: [handoffBlock],
+      botId: run.botId,
+      runId: run.id,
+    });
+    const task = await tx.task.create({
+      data: {
+        workspaceId: run.workspaceId,
+        botId: targetId,
+        threadId: run.threadId,
+        userId: run.userId,
+        prompt: input.message,
+        status: "queued",
+      },
+    });
+    const nextRun = await tx.run.create({
+      data: {
+        workspaceId: run.workspaceId,
+        botId: targetId,
+        threadId: run.threadId,
+        taskId: task.id,
+        userId: run.userId,
+        status: "queued",
+        trigger: "user",
+        sourceMessageId: message.id,
+      },
+    });
+    const event = await appendEventInTransaction(tx, {
       workspaceId: run.workspaceId,
-      botId: targetId,
       threadId: run.threadId,
-      taskId: task.id,
-      userId: run.userId,
-      status: "queued",
-      trigger: "user",
-    },
+      botId: run.botId,
+      type: "group.handoff",
+      runId: run.id,
+      payload: {
+        messageId: message.id,
+        fromBotId: run.botId,
+        toBotId: targetId,
+        text: input.message,
+      },
+    });
+    await touchGroupUpdatedAt(tx, groupId);
+    return { ok: true, botId: targetId, runId: nextRun.id, eventSeq: event.seq } as const;
   });
-  await deps.jobs.enqueue(runContinueJob(nextRun.id));
-  return { ok: true, botId: targetId, runId: nextRun.id };
+  if ("error" in committed) return committed;
+  await deps.events.notify(run.threadId, committed.eventSeq).catch((error) => {
+    console.error("group handoff realtime notification", error);
+  });
+  await deps.jobs.enqueue(runContinueJob(committed.runId)).catch((error) => {
+    // The queued run is durable and the job reconciler will repair a missed immediate wake.
+    console.error("group handoff enqueue", error);
+  });
+  return { ok: true, botId: committed.botId, runId: committed.runId };
 }
 
 export async function loadGroupContext(

@@ -53,15 +53,32 @@ export function reduceThreadSnapshot(
 ): ThreadSnapshot | null {
   if (!prev) return prev;
   if (event.type === "thread.cleared") {
-    return { ...prev, cursor: event.seq, messages: [], olderCursor: null, run: null };
-  }
-  if (event.type === "run.waiting_input") {
-    const run = prev.run;
-    if (!run || run.id !== event.runId || run.status === "waiting_input") return prev;
     return {
       ...prev,
       cursor: event.seq,
-      run: { ...run, status: "waiting_input" },
+      messages: [],
+      olderCursor: null,
+      run: null,
+      activeRuns: [],
+    };
+  }
+  if (event.type === "run.waiting_input") {
+    const runChanged = Boolean(
+      prev.run && prev.run.id === event.runId && prev.run.status !== "waiting_input",
+    );
+    const activeRunChanged = prev.activeRuns?.some(
+      (candidate) => candidate.id === event.runId && candidate.status !== "waiting_input",
+    );
+    if (!runChanged && !activeRunChanged) return prev;
+    return {
+      ...prev,
+      cursor: event.seq,
+      run: runChanged && prev.run ? { ...prev.run, status: "waiting_input" } : prev.run,
+      activeRuns: activeRunChanged
+        ? prev.activeRuns?.map((candidate) =>
+            candidate.id === event.runId ? { ...candidate, status: "waiting_input" } : candidate,
+          )
+        : prev.activeRuns,
     };
   }
   if (event.type === "thread.progress") {

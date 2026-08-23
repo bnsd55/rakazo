@@ -1,3 +1,4 @@
+import { GROUP_MEMBER_MAX, GROUP_MEMBER_MIN } from "@rakazo/contracts";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, Text, TextInput } from "react-native";
@@ -35,7 +36,7 @@ export default function GroupSettingsScreen() {
   function toggle(botId: string) {
     setSelected((current) => {
       if (current.includes(botId)) return current.filter((id) => id !== botId);
-      if (current.length >= 6) return current;
+      if (current.length >= GROUP_MEMBER_MAX) return current;
       return [...current, botId];
     });
   }
@@ -100,7 +101,9 @@ export default function GroupSettingsScreen() {
             fontSize: 16,
           }}
         />
-        <Text style={{ color: "#85858A", fontSize: 14, marginTop: 20 }}>Members (2–6)</Text>
+        <Text style={{ color: "#85858A", fontSize: 14, marginTop: 20 }}>
+          Members ({GROUP_MEMBER_MIN}–{GROUP_MEMBER_MAX})
+        </Text>
         {bots.map((bot) => {
           const checked = selected.includes(bot.id);
           return (
@@ -118,12 +121,22 @@ export default function GroupSettingsScreen() {
         {error ? <Text style={{ color: "#FF6B6B", marginTop: 12 }}>{error}</Text> : null}
         <Pressable
           onPress={() => void save()}
-          disabled={!name.trim() || selected.length < 2 || selected.length > 6 || pending}
+          disabled={
+            !name.trim() ||
+            selected.length < GROUP_MEMBER_MIN ||
+            selected.length > GROUP_MEMBER_MAX ||
+            pending
+          }
           style={{
             marginTop: 24,
             backgroundColor: "#8B5CF6",
             opacity:
-              !name.trim() || selected.length < 2 || selected.length > 6 || pending ? 0.5 : 1,
+              !name.trim() ||
+              selected.length < GROUP_MEMBER_MIN ||
+              selected.length > GROUP_MEMBER_MAX ||
+              pending
+                ? 0.5
+                : 1,
             borderRadius: 11,
             padding: 14,
             alignItems: "center",

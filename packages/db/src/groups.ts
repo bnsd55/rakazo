@@ -1,9 +1,12 @@
-import type { Actor, Group, GroupMember } from "@rakazo/contracts";
-import type { PrismaClient } from "./client.js";
+import {
+  type Actor,
+  GROUP_MEMBER_MAX,
+  GROUP_MEMBER_MIN,
+  type Group,
+  type GroupMember,
+} from "@rakazo/contracts";
+import type { Prisma, PrismaClient } from "./client.js";
 import { IsolationError } from "./scope.js";
-
-const GROUP_MEMBER_MIN = 2;
-const GROUP_MEMBER_MAX = 6;
 
 type GroupRecord = {
   id: string;
@@ -64,7 +67,9 @@ async function assertOwnedBots(
 ): Promise<GroupMember[]> {
   const unique = [...new Set(botIds)];
   if (unique.length < GROUP_MEMBER_MIN || unique.length > GROUP_MEMBER_MAX) {
-    throw new IsolationError("Groups require 2 to 6 distinct bots");
+    throw new IsolationError(
+      `Groups require ${GROUP_MEMBER_MIN} to ${GROUP_MEMBER_MAX} distinct bots`,
+    );
   }
   const bots = await prisma.bot.findMany({
     where: {
@@ -91,6 +96,14 @@ const groupInclude = {
   },
 } as const;
 
+const groupTargetInclude = {
+  thread: { select: { id: true } },
+  members: {
+    include: { bot: { select: { id: true, name: true, color: true } } },
+    orderBy: { createdAt: "asc" as const },
+  },
+} as const;
+
 export function createGroupRepos(prisma: PrismaClient) {
   return {
     async listGroups(actor: Actor): Promise<Group[]> {
@@ -109,6 +122,15 @@ export function createGroupRepos(prisma: PrismaClient) {
       });
       if (!group) throw new IsolationError();
       return group as GroupRecord;
+    },
+
+    async getGroupTarget(actor: Actor, groupId: string) {
+      const group = await prisma.chatGroup.findFirst({
+        where: { id: groupId, workspaceId: actor.workspaceId, userId: actor.userId },
+        include: groupTargetInclude,
+      });
+      if (!group) throw new IsolationError();
+      return group;
     },
 
     async createGroup(actor: Actor, input: { name: string; botIds: string[] }): Promise<Group> {
@@ -142,10 +164,55 @@ export function createGroupRepos(prisma: PrismaClient) {
     async updateGroup(
       actor: Actor,
       input: { groupId: string; name?: string; botIds?: string[] },
-    ): Promise<Group> {
-      await this.getGroup(actor, input.groupId);
+    ): Promise<{ group: Group; cancelledRunIds: string[] }> {
       if (input.botIds) await assertOwnedBots(prisma, actor, input.botIds);
       const updated = await prisma.$transaction(async (tx) => {
+        await lockOwnedGroup(tx, actor, input.groupId);
+        const current = await tx.chatGroup.findFirst({
+          where: {
+            id: input.groupId,
+            workspaceId: actor.workspaceId,
+            userId: actor.userId,
+          },
+          include: { members: { select: { botId: true } }, thread: { select: { id: true } } },
+        });
+        if (!current?.thread) throw new IsolationError();
+        const nextBotIds = new Set(input.botIds ?? current.members.map((member) => member.botId));
+        const removedBotIds = current.members
+          .map((member) => member.botId)
+          .filter((botId) => !nextBotIds.has(botId));
+        const activeRuns = removedBotIds.length
+          ? await tx.run.findMany({
+              where: {
+                threadId: current.thread.id,
+                botId: { in: removedBotIds },
+                status: {
+                  in: ["queued", "leased", "running", "waiting_input", "waiting_takeover"],
+                },
+              },
+              select: { id: true, taskId: true },
+            })
+          : [];
+        if (activeRuns.length) {
+          const now = new Date();
+          await tx.run.updateMany({
+            where: { id: { in: activeRuns.map((run) => run.id) } },
+            data: {
+              status: "cancelled",
+              completedAt: now,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+            },
+          });
+          await tx.attempt.updateMany({
+            where: { runId: { in: activeRuns.map((run) => run.id) }, status: "running" },
+            data: { status: "cancelled", finishedAt: now },
+          });
+          await tx.task.updateMany({
+            where: { id: { in: activeRuns.map((run) => run.taskId) } },
+            data: { status: "cancelled" },
+          });
+        }
         if (input.name !== undefined) {
           await tx.chatGroup.update({
             where: { id: input.groupId },
@@ -162,29 +229,66 @@ export function createGroupRepos(prisma: PrismaClient) {
           where: { id: input.groupId },
           data: { updatedAt: new Date() },
         });
-        return tx.chatGroup.findFirstOrThrow({
-          where: { id: input.groupId },
-          include: groupInclude,
-        });
+        return tx.chatGroup
+          .findFirstOrThrow({
+            where: { id: input.groupId },
+            include: groupInclude,
+          })
+          .then((group) => ({ group, cancelledRunIds: activeRuns.map((run) => run.id) }));
       });
-      if (!updated.thread) throw new IsolationError();
-      return mapGroup(updated as GroupRecord);
+      if (!updated.group.thread) throw new IsolationError();
+      return {
+        group: mapGroup(updated.group as GroupRecord),
+        cancelledRunIds: updated.cancelledRunIds,
+      };
     },
 
-    async removeGroup(actor: Actor, groupId: string): Promise<void> {
-      await this.getGroup(actor, groupId);
-      await prisma.chatGroup.delete({ where: { id: groupId } });
+    async removeGroup(actor: Actor, groupId: string) {
+      return prisma.$transaction(async (tx) => {
+        await lockOwnedGroup(tx, actor, groupId);
+        const group = await tx.chatGroup.findUnique({
+          where: { id: groupId },
+          select: {
+            artifacts: { select: { storageKey: true } },
+            members: { orderBy: { createdAt: "asc" }, take: 1, select: { botId: true } },
+          },
+        });
+        const contextBotId = group?.members[0]?.botId;
+        if (!contextBotId) throw new IsolationError();
+        await tx.chatGroup.delete({ where: { id: groupId } });
+        return {
+          contextBotId,
+          artifactStorageKeys: group.artifacts.map((artifact) => artifact.storageKey),
+        };
+      });
     },
 
     mapGroup,
   };
 }
 
-export async function touchGroupUpdatedAt(prisma: PrismaClient, groupId: string) {
+export async function lockOwnedGroup(
+  prisma: Pick<Prisma.TransactionClient, "$queryRaw">,
+  actor: Pick<Actor, "workspaceId" | "userId">,
+  groupId: string,
+) {
+  const locked = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM chat_groups
+    WHERE id = ${groupId}
+      AND "workspaceId" = ${actor.workspaceId}
+      AND "userId" = ${actor.userId}
+    FOR UPDATE
+  `;
+  if (locked.length !== 1) throw new IsolationError();
+}
+
+export async function touchGroupUpdatedAt(
+  prisma: Pick<Prisma.TransactionClient, "chatGroup">,
+  groupId: string,
+) {
   await prisma.chatGroup.update({
     where: { id: groupId },
     data: { updatedAt: new Date() },
   });
 }
-
-export { GROUP_MEMBER_MAX, GROUP_MEMBER_MIN };

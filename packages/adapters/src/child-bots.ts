@@ -13,6 +13,7 @@ import {
   computerScopeKey,
   createRepos,
   createThreadMessageInTransaction,
+  type Prisma,
   type PrismaClient,
 } from "@rakazo/db";
 import { toComputerRef } from "./computer-support.js";
@@ -269,7 +270,7 @@ export async function archiveBot(
   ]);
   const runIds = activeRuns.map((run) => run.id);
   const now = new Date();
-  await deps.prisma.$transaction(async (tx) => {
+  const removedGroupArtifactKeys = await deps.prisma.$transaction(async (tx) => {
     await tx.run.updateMany({
       where: { id: { in: runIds } },
       data: { status: "cancelled", completedAt: now },
@@ -282,6 +283,7 @@ export async function archiveBot(
       where: { botId: bot.id },
       data: { active: false, nextRunAt: null },
     });
+    const groupArtifactKeys = await detachBotFromGroups(tx, bot.id);
     await tx.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
     await tx.computer.updateMany({
       where: {
@@ -299,6 +301,7 @@ export async function archiveBot(
       where: { id: bot.id },
       data: { archivedAt: bot.archivedAt ?? now, pinned: false },
     });
+    return groupArtifactKeys;
   });
   await Promise.allSettled([
     ...activeRuns.map((run) => deps.jobs.cancel(runJobKey(run.id))),
@@ -321,6 +324,7 @@ export async function archiveBot(
       data: { state: "stopped" },
     });
   }
+  await removeStoredArtifacts(deps.artifacts, removedGroupArtifactKeys, context);
 }
 
 export async function destroyBot(
@@ -339,7 +343,7 @@ export async function destroyBot(
     }),
     deps.prisma.routine.findMany({ where: { botId: bot.id }, select: { id: true } }),
     deps.prisma.artifact.findMany({
-      where: { botId: bot.id, workspaceId: bot.workspaceId },
+      where: { botId: bot.id, groupId: null, workspaceId: bot.workspaceId },
       select: { storageKey: true },
     }),
   ]);
@@ -356,16 +360,8 @@ export async function destroyBot(
   if (dedicated?.providerRef) {
     await deps.sandbox.destroy(toComputerRef(dedicated), context).catch(() => undefined);
   }
-  await deps.prisma.$transaction(async (tx) => {
-    const undersizedGroups = await tx.chatGroup.findMany({
-      where: { members: { some: { botId: bot.id } } },
-      include: { _count: { select: { members: true } } },
-    });
-    for (const group of undersizedGroups) {
-      if (group._count.members <= 2) {
-        await tx.chatGroup.delete({ where: { id: group.id } });
-      }
-    }
+  const removedGroupArtifactKeys = await deps.prisma.$transaction(async (tx) => {
+    const groupArtifactKeys = await detachBotFromGroups(tx, bot.id);
     await tx.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
     await tx.computer.updateMany({
       where: {
@@ -396,6 +392,7 @@ export async function destroyBot(
     });
     await tx.bot.delete({ where: { id: bot.id } });
     if (dedicated) await tx.computer.delete({ where: { id: dedicated.id } });
+    return groupArtifactKeys;
   });
   if (dedicated) {
     await rm(resolveAgentHomePath(deps.home, dedicated.homeKey, deps.dataDir ?? "./data"), {
@@ -405,9 +402,61 @@ export async function destroyBot(
   }
   const artifactStore = deps.artifacts;
   if (artifactStore) {
-    await Promise.all(
-      artifactRows.map((artifact) => artifactStore.remove(artifact.storageKey, context)),
+    await removeStoredArtifacts(
+      artifactStore,
+      [...artifactRows.map((artifact) => artifact.storageKey), ...removedGroupArtifactKeys],
+      context,
     );
+  }
+}
+
+async function detachBotFromGroups(tx: Prisma.TransactionClient, botId: string) {
+  await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT groups.id
+    FROM chat_groups AS groups
+    INNER JOIN chat_group_members AS members ON members."groupId" = groups.id
+    WHERE members."botId" = ${botId}
+    ORDER BY groups.id
+    FOR UPDATE OF groups
+  `;
+  const affectedGroups = await tx.chatGroup.findMany({
+    where: { members: { some: { botId } } },
+    include: { _count: { select: { members: true } } },
+  });
+  const dissolvedGroupIds = affectedGroups
+    .filter((group) => group._count.members <= 2)
+    .map((group) => group.id);
+  const retainedGroupIds = affectedGroups
+    .filter((group) => group._count.members > 2)
+    .map((group) => group.id);
+  const groupArtifacts = dissolvedGroupIds.length
+    ? await tx.artifact.findMany({
+        where: { groupId: { in: dissolvedGroupIds } },
+        select: { storageKey: true },
+      })
+    : [];
+  if (dissolvedGroupIds.length) {
+    await tx.chatGroup.deleteMany({ where: { id: { in: dissolvedGroupIds } } });
+  }
+  if (retainedGroupIds.length) {
+    await tx.chatGroupMember.deleteMany({
+      where: { botId, groupId: { in: retainedGroupIds } },
+    });
+  }
+  return groupArtifacts.map((artifact) => artifact.storageKey);
+}
+
+async function removeStoredArtifacts(
+  artifacts: ArtifactStore | undefined,
+  storageKeys: string[],
+  context: AdapterContext,
+) {
+  if (!artifacts) return;
+  const results = await Promise.allSettled(
+    [...new Set(storageKeys)].map((storageKey) => artifacts.remove(storageKey, context)),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") console.error("group artifact cleanup", result.reason);
   }
 }
 

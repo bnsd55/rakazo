@@ -4,9 +4,15 @@ import path from "node:path";
 import {
   DesktopSandboxProvider,
   FakeSandboxProvider,
+  handoffToGroupBot,
   ManagedSandboxEmulator,
 } from "@rakazo/adapters";
-import { appendEvent, createThreadMessage, RunHistoryWriteError } from "@rakazo/db";
+import {
+  appendEvent,
+  createThreadEvents,
+  createThreadMessage,
+  RunHistoryWriteError,
+} from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sessionCookieHeader } from "./index.js";
 
@@ -1355,6 +1361,7 @@ describeJourneys("required product journeys", () => {
 
   it("54: group chats share one transcript with mentions and handoffs", async () => {
     const ada = await signup(app, `ada-g-${stamp}@rakazo.test`, "Ada Groups");
+    const adaMe = await rpc<Me>(app, ada, "me");
     const botA = await rpc<Bot>(app, ada, "bots/create", {
       name: "BotA",
       title: "Researcher",
@@ -1376,16 +1383,23 @@ describeJourneys("required product journeys", () => {
       instructions: "",
       notifyOnFinish: true,
     });
+    const botD = await rpc<Bot>(app, ada, "bots/create", {
+      name: "Research Writer",
+      title: "Analyst",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
     const group = await rpc<{ id: string; threadId: string; members: Array<{ botId: string }> }>(
       app,
       ada,
       "groups/create",
-      { name: "Research squad", botIds: [botA.id, botB.id, botC.id] },
+      { name: "Research squad", botIds: [botA.id, botB.id, botC.id, botD.id] },
     );
     const listed = await rpc<Array<{ id: string }>>(app, ada, "groups/list");
     expect(listed.some((row) => row.id === group.id)).toBe(true);
     expect((await rpc<Bot[]>(app, ada, "bots/list")).map((b) => b.id)).toEqual(
-      expect.arrayContaining([botA.id, botB.id, botC.id]),
+      expect.arrayContaining([botA.id, botB.id, botC.id, botD.id]),
     );
 
     await sendGroupAndWait(app, ada, group.id, "@BotA gather sources. @BotB summarize.");
@@ -1421,14 +1435,242 @@ describeJourneys("required product journeys", () => {
       ),
     ).toBe(true);
 
+    const groupAsk = await rpc<{ runId: string }>(app, ada, "threads/send", {
+      groupId: group.id,
+      text: "@Research Writer ask me which city to use",
+    });
+    await waitForDatabase(async () => {
+      const run = await prisma.run.findUnique({ where: { id: groupAsk.runId } });
+      return run?.status === "waiting_input";
+    });
+    const concurrentTask = await prisma.task.create({
+      data: {
+        workspaceId: botA.workspaceId,
+        botId: botA.id,
+        threadId: group.threadId,
+        userId: adaMe.userId,
+        prompt: "concurrent work",
+        status: "running",
+      },
+    });
+    const concurrentRun = await prisma.run.create({
+      data: {
+        workspaceId: botA.workspaceId,
+        botId: botA.id,
+        threadId: group.threadId,
+        taskId: concurrentTask.id,
+        userId: adaMe.userId,
+        status: "running",
+        trigger: "user",
+        createdAt: new Date(Date.now() + 1_000),
+      },
+    });
+    const askSnapshot = await rpc<Snap>(app, ada, "threads/get", { groupId: group.id });
+    expect(askSnapshot.run?.id).toBe(concurrentRun.id);
+    expect(askSnapshot.activeRuns?.some((run) => run.id === groupAsk.runId)).toBe(true);
+    const askMessage = askSnapshot.messages.find(
+      (message) =>
+        message.runId === groupAsk.runId &&
+        message.blocks.some((block) => block.kind === "ask" && block.status !== "answered"),
+    );
+    expect(askMessage).toBeTruthy();
+    await rpc(app, ada, "threads/answer", {
+      groupId: group.id,
+      runId: groupAsk.runId,
+      messageId: askMessage!.id,
+      answer: "Paris",
+    });
+    await waitForDatabase(async () => {
+      const run = await prisma.run.findUnique({ where: { id: groupAsk.runId } });
+      return run?.status === "completed";
+    });
+    const answerEvent = await prisma.event.findFirstOrThrow({
+      where: {
+        threadId: group.threadId,
+        runId: groupAsk.runId,
+        type: "thread.message.updated",
+      },
+      orderBy: { seq: "desc" },
+    });
+    expect(answerEvent.botId).toBe(botD.id);
+    await prisma.$transaction([
+      prisma.run.update({
+        where: { id: concurrentRun.id },
+        data: { status: "cancelled", completedAt: new Date() },
+      }),
+      prisma.task.update({ where: { id: concurrentTask.id }, data: { status: "cancelled" } }),
+    ]);
+
+    const staleTask = await prisma.task.create({
+      data: {
+        workspaceId: botB.workspaceId,
+        botId: botB.id,
+        threadId: group.threadId,
+        userId: adaMe.userId,
+        prompt: "stale handoff",
+        status: "running",
+      },
+    });
+    const staleRun = await prisma.run.create({
+      data: {
+        workspaceId: botB.workspaceId,
+        botId: botB.id,
+        threadId: group.threadId,
+        taskId: staleTask.id,
+        userId: adaMe.userId,
+        status: "running",
+        trigger: "user",
+      },
+    });
+    const replayNonce = `group-replay-${stamp}`;
+    const firstSend = await rpc<{ runId: string; runIds?: string[] }>(app, ada, "threads/send", {
+      groupId: group.id,
+      text: "@BotA gather updates. @BotB compare them.",
+      clientNonce: replayNonce,
+    });
     await rpc(app, ada, "groups/update", {
       groupId: group.id,
-      botIds: [botA.id, botB.id],
+      botIds: [botA.id, botC.id, botD.id],
     });
-    await rpc(app, ada, "groups/remove", { groupId: group.id });
-    expect((await rpc<Bot[]>(app, ada, "bots/list")).map((b) => b.id)).toEqual(
-      expect.arrayContaining([botA.id, botB.id, botC.id]),
+    expect((await prisma.run.findUniqueOrThrow({ where: { id: staleRun.id } })).status).toBe(
+      "cancelled",
     );
+    const replayedSend = await rpc<{ runId: string; runIds?: string[] }>(app, ada, "threads/send", {
+      groupId: group.id,
+      text: "this changed text must not create another message",
+      clientNonce: replayNonce,
+    });
+    expect(replayedSend.runId).toBe(firstSend.runId);
+    expect(replayedSend.runIds).toEqual(firstSend.runIds);
+    const replayMessage = await prisma.message.findUniqueOrThrow({
+      where: { threadId_clientNonce: { threadId: group.threadId, clientNonce: replayNonce } },
+      include: { sourceRuns: true },
+    });
+    expect(replayMessage.sourceRuns).toHaveLength(2);
+    expect(
+      await prisma.message.count({ where: { threadId: group.threadId, clientNonce: replayNonce } }),
+    ).toBe(1);
+    const messageEvents = await prisma.event.findMany({
+      where: { threadId: group.threadId, type: "thread.message.created" },
+      select: { payload: true },
+    });
+    expect(
+      messageEvents.filter(
+        (event) => (event.payload as { messageId?: string } | null)?.messageId === replayMessage.id,
+      ),
+    ).toHaveLength(1);
+
+    const staleHandoff = await handoffToGroupBot(
+      { prisma, events: createThreadEvents(prisma), jobs },
+      {
+        id: staleRun.id,
+        workspaceId: botB.workspaceId,
+        threadId: group.threadId,
+        botId: botB.id,
+        userId: staleTask.userId,
+      },
+      group.id,
+      { bot_id: botC.id, message: "should be rejected" },
+    );
+    expect(staleHandoff).toEqual({ error: "source run is no longer active" });
+
+    const crossThread = await rpc<{ runId: string }>(app, ada, "threads/send", {
+      botId: botC.id,
+      text: "the same nonce is valid in a different thread",
+      clientNonce: replayNonce,
+    });
+    expect(crossThread.runId).not.toBe(firstSend.runId);
+
+    const attachmentText = "group attachment content";
+    const artifact = await rpc<{ id: string }>(app, ada, "artifacts/create", {
+      groupId: group.id,
+      name: "group-note.txt",
+      mimeType: "text/plain",
+      contentBase64: Buffer.from(attachmentText).toString("base64"),
+    });
+    const attached = await rpc<{ runId: string }>(app, ada, "threads/send", {
+      groupId: group.id,
+      text: "@Research Writer inspect the attachment",
+      artifactIds: [artifact.id],
+    });
+    await waitForDatabase(async () => {
+      const run = await prisma.run.findUnique({ where: { id: attached.runId } });
+      return Boolean(run && ["completed", "failed", "cancelled"].includes(run.status));
+    });
+    expect(await prisma.run.findUniqueOrThrow({ where: { id: attached.runId } })).toMatchObject({
+      botId: botD.id,
+      status: "completed",
+      error: null,
+    });
+    const downloaded = await rpc<{ contentBase64: string }>(app, ada, "artifacts/get", {
+      groupId: group.id,
+      artifactId: artifact.id,
+    });
+    expect(Buffer.from(downloaded.contentBase64, "base64").toString()).toBe(attachmentText);
+
+    await rpc(app, ada, "groups/update", {
+      groupId: group.id,
+      botIds: [botC.id, botD.id],
+    });
+    await rpc(app, ada, "bots/remove", { botId: botA.id, deleteMemories: true });
+    expect(await prisma.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({
+      botId: null,
+      groupId: group.id,
+    });
+    const downloadedAfterUploaderRemoval = await rpc<{ contentBase64: string }>(
+      app,
+      ada,
+      "artifacts/get",
+      { groupId: group.id, artifactId: artifact.id },
+    );
+    expect(Buffer.from(downloadedAfterUploaderRemoval.contentBase64, "base64").toString()).toBe(
+      attachmentText,
+    );
+
+    const archiveMember = await rpc<Bot>(app, ada, "bots/create", {
+      name: "Archive Member",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const archivePartner = await rpc<Bot>(app, ada, "bots/create", {
+      name: "Archive Partner",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const archiveGroup = await rpc<{ id: string }>(app, ada, "groups/create", {
+      name: "Archive invariant",
+      botIds: [archiveMember.id, archivePartner.id],
+    });
+    await rpc(app, ada, "bots/archive", { botId: archiveMember.id });
+    expect(await prisma.chatGroup.findUnique({ where: { id: archiveGroup.id } })).toBeNull();
+
+    const deletionPartner = await rpc<Bot>(app, ada, "bots/create", {
+      name: "Deletion Partner",
+      title: "",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const deletionGroup = await rpc<{ id: string }>(app, ada, "groups/create", {
+      name: "Deletion invariant",
+      botIds: [botB.id, deletionPartner.id],
+    });
+    await expect(prisma.bot.delete({ where: { id: botB.id } })).rejects.toThrow();
+    expect(await prisma.chatGroup.findUnique({ where: { id: deletionGroup.id } })).not.toBeNull();
+    await rpc(app, ada, "bots/remove", { botId: botB.id, deleteMemories: true });
+    expect(await prisma.chatGroup.findUnique({ where: { id: deletionGroup.id } })).toBeNull();
+
+    await rpc(app, ada, "groups/remove", { groupId: group.id });
+    expect(await prisma.artifact.findUnique({ where: { id: artifact.id } })).toBeNull();
+    const remainingBotIds = (await rpc<Bot[]>(app, ada, "bots/list")).map((bot) => bot.id);
+    expect(remainingBotIds).toEqual(
+      expect.arrayContaining([botC.id, botD.id, deletionPartner.id, archivePartner.id]),
+    );
+    expect(remainingBotIds).not.toContain(botA.id);
   });
 
   it("17: teach a task end to end", async () => {
@@ -1565,8 +1807,14 @@ type Bot = {
   parentBotId?: string | null;
 };
 type Snap = {
-  messages: Array<{ seq: number; blocks: unknown[] }>;
-  run: { status: string } | null;
+  messages: Array<{
+    id: string;
+    seq: number;
+    runId?: string | null;
+    blocks: Array<{ kind?: string; status?: string }>;
+  }>;
+  run: { id: string; status: string } | null;
+  activeRuns?: Array<{ id: string; status: string }>;
 };
 
 async function signup(app: App, email: string, name: string) {

@@ -1,6 +1,8 @@
 import { isAttachmentImageMimeType } from "@rakazo/contracts";
 import { rpc } from "./rpc";
 
+export type ArtifactTarget = { botId: string } | { groupId: string };
+
 export function decodeArtifactBase64(contentBase64: string): Uint8Array {
   const binary = atob(contentBase64);
   const bytes = new Uint8Array(binary.length);
@@ -11,12 +13,12 @@ export function decodeArtifactBase64(contentBase64: string): Uint8Array {
 }
 
 export async function openArtifact(
-  botId: string,
+  target: ArtifactTarget,
   artifactId: string,
   name: string,
   mimeType: string,
 ): Promise<void> {
-  const artifact = await rpc.artifacts.get({ botId, artifactId });
+  const artifact = await rpc.artifacts.get({ ...target, artifactId });
   const bytes = decodeArtifactBase64(artifact.contentBase64);
   const blob = new Blob([new Uint8Array(bytes)], { type: mimeType });
   const url = URL.createObjectURL(blob);

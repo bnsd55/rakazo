@@ -5,6 +5,16 @@ export type GroupMemberRef = {
 
 const MENTION_PATTERN = /@([A-Za-z0-9][A-Za-z0-9_-]{0,39})/g;
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasNamedMention(text: string, name: string): boolean {
+  const normalized = name.trim();
+  if (!normalized) return false;
+  return new RegExp(`@${escapeRegExp(normalized)}(?![\\p{L}\\p{N}_-])`, "iu").test(text);
+}
+
 export function parseMentionNames(text: string): string[] {
   const names = new Set<string>();
   for (const match of text.matchAll(MENTION_PATTERN)) {
@@ -20,22 +30,17 @@ export function resolveGroupTargetBotIds(input: {
   explicitMentions?: string[];
 }): string[] {
   const membersById = new Map(input.members.map((member) => [member.id, member]));
-  const membersByName = new Map(
-    input.members.map((member) => [member.name.toLowerCase(), member.id]),
-  );
   const targetIds = new Set<string>();
 
   for (const mentionId of input.explicitMentions ?? []) {
     if (membersById.has(mentionId)) targetIds.add(mentionId);
   }
 
-  const parsedNames = parseMentionNames(input.text);
-  if (parsedNames.includes("everyone")) {
+  if (hasNamedMention(input.text, "everyone")) {
     for (const member of input.members) targetIds.add(member.id);
   } else {
-    for (const name of parsedNames) {
-      const botId = membersByName.get(name);
-      if (botId) targetIds.add(botId);
+    for (const member of input.members) {
+      if (hasNamedMention(input.text, member.name)) targetIds.add(member.id);
     }
   }
 
@@ -57,11 +62,15 @@ export function inferHandoffTargetBotId(
   prompt: string,
   members: GroupMemberRef[],
 ): string | undefined {
-  const lower = prompt.toLowerCase();
-  if (lower.includes("@writer")) {
-    return members.find((member) => member.name.toLowerCase() === "writer")?.id;
-  }
+  const handedTo = members.find((member) => {
+    const escaped = escapeRegExp(member.name.trim());
+    return escaped
+      ? new RegExp(`\\bto\\s+@?${escaped}(?![\\p{L}\\p{N}_-])`, "iu").test(prompt)
+      : false;
+  });
+  if (handedTo) return handedTo.id;
+  const mentioned = members.find((member) => hasNamedMention(prompt, member.name));
+  if (mentioned) return mentioned.id;
   const name = inferHandoffTargetName(prompt)?.toLowerCase();
-  if (!name) return undefined;
-  return members.find((member) => member.name.toLowerCase() === name)?.id;
+  return name ? members.find((member) => member.name.toLowerCase() === name)?.id : undefined;
 }

@@ -1,3 +1,4 @@
+import { GROUP_MEMBER_MAX, GROUP_MEMBER_MIN } from "@rakazo/contracts";
 import { Stack, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput } from "react-native";
@@ -21,13 +22,19 @@ export default function NewGroup() {
   function toggle(botId: string) {
     setSelected((current) => {
       if (current.includes(botId)) return current.filter((id) => id !== botId);
-      if (current.length >= 6) return current;
+      if (current.length >= GROUP_MEMBER_MAX) return current;
       return [...current, botId];
     });
   }
 
   async function create() {
-    if (!name.trim() || selected.length < 2 || pending) return;
+    if (
+      !name.trim() ||
+      selected.length < GROUP_MEMBER_MIN ||
+      selected.length > GROUP_MEMBER_MAX ||
+      pending
+    )
+      return;
     setPending(true);
     setError(null);
     try {
@@ -68,7 +75,9 @@ export default function NewGroup() {
             fontSize: 16,
           }}
         />
-        <Text style={{ color: "#85858A", fontSize: 14, marginTop: 20 }}>Members (2–6)</Text>
+        <Text style={{ color: "#85858A", fontSize: 14, marginTop: 20 }}>
+          Members ({GROUP_MEMBER_MIN}–{GROUP_MEMBER_MAX})
+        </Text>
         {bots.map((bot) => {
           const checked = selected.includes(bot.id);
           return (
@@ -91,11 +100,22 @@ export default function NewGroup() {
         {error ? <Text style={{ color: "#FF6B6B", marginTop: 12 }}>{error}</Text> : null}
         <Pressable
           onPress={() => void create()}
-          disabled={!name.trim() || selected.length < 2 || pending}
+          disabled={
+            !name.trim() ||
+            selected.length < GROUP_MEMBER_MIN ||
+            selected.length > GROUP_MEMBER_MAX ||
+            pending
+          }
           style={{
             marginTop: 24,
             backgroundColor: "#8B5CF6",
-            opacity: !name.trim() || selected.length < 2 || pending ? 0.5 : 1,
+            opacity:
+              !name.trim() ||
+              selected.length < GROUP_MEMBER_MIN ||
+              selected.length > GROUP_MEMBER_MAX ||
+              pending
+                ? 0.5
+                : 1,
             borderRadius: 11,
             padding: 14,
             alignItems: "center",

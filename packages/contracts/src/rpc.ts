@@ -17,6 +17,7 @@ import {
   CreateRoutineInput,
   DeploymentSettingsSchema,
   ExportManifestSchema,
+  GROUP_MEMBER_MAX,
   GroupDetailSchema,
   GroupSchema,
   MemoryDocumentSchema,
@@ -61,26 +62,15 @@ const threadTarget = z
     }
   });
 
-const threadSendInput = z
-  .object({
-    botId: Id.optional(),
-    groupId: Id.optional(),
+const threadSendInput = threadTarget
+  .extend({
     text: z.string().optional(),
     artifactIds: z.array(Id).max(ATTACHMENT_MAX_COUNT).optional(),
-    mentions: z.array(Id).optional(),
+    mentions: z.array(Id).max(GROUP_MEMBER_MAX).optional(),
     replyToMessageId: Id.optional(),
-    clientNonce: z.string().optional(),
+    clientNonce: z.string().min(1).max(200).optional(),
   })
   .superRefine((input, ctx) => {
-    const hasBot = Boolean(input.botId);
-    const hasGroup = Boolean(input.groupId);
-    if (hasBot === hasGroup) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Provide exactly one of botId or groupId",
-        path: ["botId"],
-      });
-    }
     const text = input.text?.trim() ?? "";
     const artifactIds = input.artifactIds ?? [];
     if (!text && artifactIds.length === 0) {
@@ -209,48 +199,16 @@ export const appContract = {
     ),
     stop: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
     followUp: oc
-      .input(
-        z
-          .object({
-            botId: Id.optional(),
-            groupId: Id.optional(),
-            text: z.string().min(1),
-          })
-          .superRefine((input, ctx) => {
-            const hasBot = Boolean(input.botId);
-            const hasGroup = Boolean(input.groupId);
-            if (hasBot === hasGroup) {
-              ctx.addIssue({
-                code: "custom",
-                message: "Provide exactly one of botId or groupId",
-                path: ["botId"],
-              });
-            }
-          }),
-      )
+      .input(threadTarget.extend({ text: z.string().min(1) }))
       .output(z.object({ ok: z.literal(true) })),
     clear: oc.input(botId).output(z.object({ ok: z.literal(true) })),
     answer: oc
       .input(
-        z
-          .object({
-            botId: Id.optional(),
-            groupId: Id.optional(),
-            runId: Id,
-            messageId: Id,
-            answer: z.string().min(1),
-          })
-          .superRefine((input, ctx) => {
-            const hasBot = Boolean(input.botId);
-            const hasGroup = Boolean(input.groupId);
-            if (hasBot === hasGroup) {
-              ctx.addIssue({
-                code: "custom",
-                message: "Provide exactly one of botId or groupId",
-                path: ["botId"],
-              });
-            }
-          }),
+        threadTarget.extend({
+          runId: Id,
+          messageId: Id,
+          answer: z.string().min(1),
+        }),
       )
       .output(z.object({ ok: z.literal(true) })),
     markRead: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
@@ -369,15 +327,16 @@ export const appContract = {
     list: oc.input(botId).output(z.array(ArtifactSchema)),
     create: oc
       .input(
-        z.object({
-          botId: Id,
-          name: z.string().min(1).max(255),
-          mimeType: z.string().min(1),
-          contentBase64: z.string().min(1).max(ATTACHMENT_MAX_BASE64_LENGTH),
-        }),
+        threadTarget.and(
+          z.object({
+            name: z.string().min(1).max(255),
+            mimeType: z.string().min(1),
+            contentBase64: z.string().min(1).max(ATTACHMENT_MAX_BASE64_LENGTH),
+          }),
+        ),
       )
       .output(ArtifactSchema),
-    get: oc.input(z.object({ botId: Id, artifactId: Id })).output(ArtifactWithContentSchema),
+    get: oc.input(threadTarget.and(z.object({ artifactId: Id }))).output(ArtifactWithContentSchema),
   },
   usage: {
     list: oc.output(z.array(UsageRecordSchema)),

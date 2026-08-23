@@ -8,6 +8,7 @@ export interface CreateThreadMessageInput {
   botId?: string;
   replyToMessageId?: string;
   runId?: string;
+  clientNonce?: string;
 }
 
 export async function createThreadMessage(prisma: PrismaClient, input: CreateThreadMessageInput) {
@@ -38,6 +39,7 @@ export async function createThreadMessageInTransaction(
       botId: input.botId,
       replyToMessageId: input.replyToMessageId,
       runId: input.runId,
+      clientNonce: input.clientNonce,
     },
   });
 }

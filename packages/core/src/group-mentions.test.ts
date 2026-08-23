@@ -40,6 +40,21 @@ describe("resolveGroupTargetBotIds", () => {
     ).toEqual(["b"]);
   });
 
+  it("matches multi-word and Unicode names without prefix collisions", () => {
+    const namedMembers = [
+      { id: "research", name: "Research Writer" },
+      { id: "edit", name: "Éditeur" },
+      { id: "ann", name: "Ann" },
+      { id: "anna", name: "Anna" },
+    ];
+    expect(
+      resolveGroupTargetBotIds({
+        text: "@Research Writer compare this with @Éditeur and @Anna.",
+        members: namedMembers,
+      }),
+    ).toEqual(["research", "edit", "anna"]);
+  });
+
   it("picks the first member when unmentioned", () => {
     expect(
       resolveGroupTargetBotIds({
@@ -67,5 +82,14 @@ describe("inferHandoffTargetBotId", () => {
 
   it("resolves Writer from mixed mention prompt", () => {
     expect(inferHandoffTargetBotId("@BotA hand this to Writer for the draft", members)).toBe("c");
+  });
+
+  it("resolves multi-word handoff targets", () => {
+    expect(
+      inferHandoffTargetBotId("hand this to Research Writer for the draft", [
+        ...members,
+        { id: "research", name: "Research Writer" },
+      ]),
+    ).toBe("research");
   });
 });

@@ -1,64 +1,63 @@
-import { runContinueJob } from "@rakazo/adapter-kit";
+import type { SandboxProvider } from "@rakazo/adapter-kit";
+import type { Actor } from "@rakazo/contracts";
+import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
+import { stopThreadRuns, type ThreadTarget } from "./thread-target.js";
 
-function fanoutRunClientNonce(
-  clientNonce: string | undefined,
-  botId: string,
-  multiTarget: boolean,
-): string | undefined {
-  if (!clientNonce) return undefined;
-  return multiTarget ? `${clientNonce}:${botId}` : clientNonce;
-}
+describe("stopThreadRuns", () => {
+  it("releases every active group member screen immediately", async () => {
+    const releaseScreen = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      run: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: "run-a", botId: "bot-a" },
+          { id: "run-b", botId: "bot-b" },
+        ]),
+        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
+      bot: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "bot-a",
+            computer: { homeKey: "home-a", kind: "fake", providerRef: "computer-a" },
+          },
+          {
+            id: "bot-b",
+            computer: { homeKey: "home-b", kind: "fake", providerRef: "computer-b" },
+          },
+        ]),
+      },
+      computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 2 }) },
+      computer: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) },
+      event: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    } as unknown as PrismaClient;
+    const actor = {
+      workspaceId: "workspace-1",
+      userId: "user-1",
+    } as Actor;
+    const target = {
+      kind: "group",
+      groupId: "group-1",
+      groupName: "Test group",
+      threadId: "thread-1",
+      members: [],
+      memberBotIds: ["bot-a", "bot-b"],
+    } satisfies ThreadTarget;
 
-function sendNonceKeys(clientNonce: string, memberBotIds?: string[]): string[] {
-  const keys = new Set<string>([clientNonce]);
-  if (memberBotIds) {
-    for (const botId of memberBotIds) {
-      keys.add(`${clientNonce}:${botId}`);
-    }
-  }
-  return [...keys];
-}
+    await stopThreadRuns(
+      { prisma, sandbox: { releaseScreen } as unknown as SandboxProvider },
+      actor,
+      target,
+    );
 
-describe("fanoutRunClientNonce", () => {
-  it("uses the request nonce for a single target", () => {
-    expect(fanoutRunClientNonce("nonce-1", "bot-a", false)).toBe("nonce-1");
-  });
-
-  it("derives per-bot keys for multi-target fan-out", () => {
-    expect(fanoutRunClientNonce("nonce-1", "bot-a", true)).toBe("nonce-1:bot-a");
-    expect(fanoutRunClientNonce("nonce-1", "bot-b", true)).toBe("nonce-1:bot-b");
-  });
-});
-
-describe("sendNonceKeys", () => {
-  it("uses only the raw nonce for a 1:1 bot send", () => {
-    expect(sendNonceKeys("nonce-1")).toEqual(["nonce-1"]);
-  });
-
-  it("includes raw nonce and every member key for group threads", () => {
-    expect(sendNonceKeys("nonce-1", ["bot-a", "bot-b"])).toEqual([
-      "nonce-1",
-      "nonce-1:bot-a",
-      "nonce-1:bot-b",
-    ]);
-  });
-});
-
-describe("nonce replay enqueue", () => {
-  it("re-enqueues only queued runs on replay", async () => {
-    const enqueue = vi.fn();
-    const runs = [
-      { id: "run-a", status: "queued" },
-      { id: "run-b", status: "completed" },
-      { id: "run-c", status: "waiting_input" },
-    ];
-    for (const run of runs) {
-      if (run.status === "queued") {
-        await enqueue(runContinueJob(run.id));
-      }
-    }
-    expect(enqueue).toHaveBeenCalledTimes(1);
-    expect(enqueue).toHaveBeenCalledWith(runContinueJob("run-a"));
+    expect(releaseScreen).toHaveBeenCalledTimes(2);
+    expect(releaseScreen).toHaveBeenCalledWith(
+      expect.objectContaining({ providerRef: "computer-a" }),
+      expect.objectContaining({ workspaceId: "workspace-1", userId: "user-1", botId: "bot-a" }),
+    );
+    expect(releaseScreen).toHaveBeenCalledWith(
+      expect.objectContaining({ providerRef: "computer-b" }),
+      expect.objectContaining({ workspaceId: "workspace-1", userId: "user-1", botId: "bot-b" }),
+    );
   });
 });

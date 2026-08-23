@@ -229,6 +229,38 @@ describe("thread event reduction", () => {
     ).toBe(waiting);
   });
 
+  it("updates a waiting group run without replacing the newer active run", () => {
+    const newerRun = {
+      id: "run-newer",
+      botId: "bot-a",
+      threadId: "thread-1",
+      taskId: "task-a",
+      status: "running" as const,
+      trigger: "user" as const,
+      modelProvider: null,
+      modelId: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+    };
+    const waitingRun = { ...newerRun, id: "run-waiting", botId: "bot-b", taskId: "task-b" };
+    const initial: ThreadSnapshot = {
+      ...snapshot([]),
+      run: newerRun,
+      activeRuns: [newerRun, waitingRun],
+    };
+
+    const waiting = reduceThreadSnapshot(
+      initial,
+      event({ type: "run.waiting_input", seq: 6, runId: "run-waiting" }),
+    );
+
+    expect(waiting?.run).toEqual(newerRun);
+    expect(waiting?.activeRuns?.find((run) => run.id === "run-waiting")?.status).toBe(
+      "waiting_input",
+    );
+  });
+
   it("replaces an ask message when its durable prompt state changes", () => {
     const initial = snapshot([
       message("ask-1", [{ kind: "ask", text: "Which city?", status: "pending" }]),

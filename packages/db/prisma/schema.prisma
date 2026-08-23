@@ -276,6 +276,7 @@ model ChatGroup {
   updatedAt   DateTime @updatedAt
   members     ChatGroupMember[]
   thread      Thread?
+  artifacts   Artifact[]
 
   @@index([workspaceId, userId, updatedAt])
   @@map("chat_groups")
@@ -286,7 +287,7 @@ model ChatGroupMember {
   groupId   String
   group     ChatGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
   botId     String
-  bot       Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  bot       Bot       @relation(fields: [botId], references: [id], onDelete: NoAction)
   createdAt DateTime  @default(now())
 
   @@unique([groupId, botId])
@@ -331,9 +332,12 @@ model Message {
   replyTo          Message? @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
   replies          Message[] @relation("MessageReplies")
   runId            String?
+  clientNonce      String?
+  sourceRuns       Run[]    @relation("RunSourceMessage")
   createdAt        DateTime @default(now())
 
   @@unique([threadId, seq])
+  @@unique([threadId, clientNonce])
   @@index([threadId, seq])
   @@map("messages")
 }
@@ -398,6 +402,8 @@ model Run {
   leaseExpiresAt DateTime?
   checkpoint    String?
   clientNonce   String?
+  sourceMessageId String?
+  sourceMessage Message?  @relation("RunSourceMessage", fields: [sourceMessageId], references: [id], onDelete: SetNull)
   startedAt     DateTime?
   completedAt   DateTime?
   createdAt     DateTime  @default(now())
@@ -410,6 +416,8 @@ model Run {
   @@index([status, leaseExpiresAt])
   @@index([status, updatedAt, id])
   @@index([workspaceId, botId])
+  @@index([sourceMessageId])
+  @@index([threadId, status, createdAt])
   @@map("runs")
 }
 
@@ -643,8 +651,10 @@ model Artifact {
   id          String   @id @default(cuid())
   workspaceId String
   workspace   Organization @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  botId       String
-  bot         Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  botId       String?
+  bot         Bot?     @relation(fields: [botId], references: [id], onDelete: SetNull)
+  groupId     String?
+  group       ChatGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   userId      String
   runId       String?
   name        String
@@ -655,6 +665,7 @@ model Artifact {
   createdAt   DateTime @default(now())
 
   @@index([workspaceId, botId])
+  @@index([groupId])
   @@map("artifacts")
 }
 

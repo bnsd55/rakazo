@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { completeOnboarding, openNewBot, signup } from "./helpers";
+import { captureScreenshot, completeOnboarding, openNewBot, signup } from "./helpers";
 
 async function createBot(page: import("@playwright/test").Page, name: string) {
   const botList = page.locator("aside").first();
@@ -12,7 +12,7 @@ async function createBot(page: import("@playwright/test").Page, name: string) {
   await page.waitForURL(/\/app\/[^/]+$/);
 }
 
-test("create group from + and see two bots in one transcript", async ({ page }) => {
+test("create group from + and see two bots in one transcript", async ({ page }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `group-${stamp}@rakazo.test`, "password12", "Group E2E");
   await completeOnboarding(page, ["A bit of everything", "Clear and tight"]);
@@ -20,19 +20,28 @@ test("create group from + and see two bots in one transcript", async ({ page }) 
   await page.waitForURL(/\/app\/[^/]+$/);
 
   await createBot(page, "Researcher");
-  await createBot(page, "Writer");
+  await createBot(page, "Research Writer");
 
   await page.getByTitle("Create").click();
   await page.getByRole("button", { name: "New group" }).click();
   await page.locator("label:has-text('Name') input").fill("Draft team");
   const panel = page.getByTestId("side-panel");
   await panel.getByRole("button", { name: "Researcher" }).click();
-  await panel.getByRole("button", { name: "Writer" }).click();
+  await panel.getByRole("button", { name: "Research Writer" }).click();
+  await captureScreenshot(page, testInfo, "group-creation");
   await page.getByRole("button", { name: "Create group", exact: true }).click();
   await page.waitForURL(/\/app\/g\/[^/]+$/);
+  const groupUrl = page.url();
+  await page.reload();
+  await expect(page).toHaveURL(groupUrl);
 
   const composer = page.getByPlaceholder("Message Draft team");
-  await composer.fill("@Researcher gather sources. @Writer turn them into a draft.");
+  await composer.fill("@Res");
+  await captureScreenshot(page, testInfo, "group-mention-picker");
+  await page.getByRole("button", { name: "@Research Writer", exact: true }).click();
+  await composer.fill(`${await composer.inputValue()} turn the sources into a draft. @Res`);
+  await page.getByRole("button", { name: "@Researcher", exact: true }).click();
+  await composer.fill(`${await composer.inputValue()} gather sources.`);
   await composer.press("Enter");
 
   await expect(page.getByTestId("transcript")).toContainText(/handled|on it|gather/i, {
@@ -40,5 +49,28 @@ test("create group from + and see two bots in one transcript", async ({ page }) 
   });
   const transcript = page.getByTestId("transcript");
   await expect(transcript.getByText("Researcher", { exact: true }).first()).toBeVisible();
-  await expect(transcript.getByText("Writer", { exact: true }).first()).toBeVisible();
+  await expect(transcript.getByText("Research Writer", { exact: true }).first()).toBeVisible();
+  await captureScreenshot(page, testInfo, "group-transcript");
+
+  await composer.fill("@Research Writer ask me which city to use");
+  await composer.press("Enter");
+  await expect(page.getByText("Which city should I use?", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.getByRole("button", { name: "Edit first" }).click();
+  await page.getByRole("textbox", { name: "Answer" }).fill("Paris");
+  await page.getByRole("button", { name: "Send answer" }).click();
+  await expect(page.getByText("Answered: Paris", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+  expect((await transcript.boundingBox())?.width).toBeGreaterThan(350);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.getByRole("button", { name: "Close navigation" })).toBeVisible();
+  await page.getByRole("button", { name: "Close navigation" }).click();
+  await page.getByTestId("bot-settings-trigger").click();
+  const settings = page.getByTestId("side-panel");
+  await expect(settings).toHaveAttribute("data-panel", "group-settings");
+  expect((await settings.boundingBox())?.width).toBeLessThanOrEqual(390);
+  await captureScreenshot(page, testInfo, "group-settings-mobile");
 });
