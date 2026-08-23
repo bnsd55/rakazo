@@ -1,5 +1,10 @@
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
-import { abortableDelay, attachmentsForThread, latestAnswerableAskMessageId } from "@rakazo/core";
+import {
+  abortableDelay,
+  attachmentsForThread,
+  hasMentionToken,
+  latestAnswerableAskMessageId,
+} from "@rakazo/core";
 import { Link, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AppState, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -369,7 +374,9 @@ export default function Thread() {
 
   function updateDraft(value: string) {
     setDraft(value);
-    setSelectedMentions((current) => current.filter((member) => value.includes(`@${member.name}`)));
+    setSelectedMentions((current) =>
+      current.filter((member) => hasMentionToken(value, member.name)),
+    );
     const match = /(?:^|\s)@([\w-]*)$/.exec(value);
     setMentionQuery(match ? (match[1] ?? "") : null);
   }

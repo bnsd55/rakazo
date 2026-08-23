@@ -9,7 +9,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function hasNamedMention(text: string, name: string): boolean {
+export function hasMentionToken(text: string, name: string): boolean {
   const normalized = name.trim();
   if (!normalized) return false;
   return new RegExp(`@${escapeRegExp(normalized)}(?![\\p{L}\\p{N}_-])`, "iu").test(text);
@@ -36,11 +36,11 @@ export function resolveGroupTargetBotIds(input: {
     if (membersById.has(mentionId)) targetIds.add(mentionId);
   }
 
-  if (hasNamedMention(input.text, "everyone")) {
+  if (hasMentionToken(input.text, "everyone")) {
     for (const member of input.members) targetIds.add(member.id);
   } else {
     for (const member of input.members) {
-      if (hasNamedMention(input.text, member.name)) targetIds.add(member.id);
+      if (hasMentionToken(input.text, member.name)) targetIds.add(member.id);
     }
   }
 
@@ -69,7 +69,7 @@ export function inferHandoffTargetBotId(
       : false;
   });
   if (handedTo) return handedTo.id;
-  const mentioned = members.find((member) => hasNamedMention(prompt, member.name));
+  const mentioned = members.find((member) => hasMentionToken(prompt, member.name));
   if (mentioned) return mentioned.id;
   const name = inferHandoffTargetName(prompt)?.toLowerCase();
   return name ? members.find((member) => member.name.toLowerCase() === name)?.id : undefined;

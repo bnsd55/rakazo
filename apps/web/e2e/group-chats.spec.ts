@@ -58,6 +58,12 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await expect(groupName).toHaveValue("Draft team");
   await desktopSettings.getByRole("button", { name: "Save", exact: true }).click();
 
+  await page.getByPlaceholder("Message Draft team").fill("@Researcher unfinished draft");
+  await sidebar.getByRole("button", { name: /Review team/ }).click();
+  await expect(page.getByPlaceholder("Message Review team")).toHaveValue("");
+  await sidebar.getByRole("button", { name: /Draft team/ }).click();
+  await expect(page.getByPlaceholder("Message Draft team")).toHaveValue("");
+
   const composer = page.getByPlaceholder("Message Draft team");
   await composer.fill("@Res");
   await captureScreenshot(page, testInfo, "group-mention-picker");

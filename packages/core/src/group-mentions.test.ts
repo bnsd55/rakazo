@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasMentionToken,
   inferHandoffTargetBotId,
   inferHandoffTargetName,
   resolveGroupTargetBotIds,
@@ -10,6 +11,19 @@ const members = [
   { id: "b", name: "BotB" },
   { id: "c", name: "Writer" },
 ];
+
+describe("hasMentionToken", () => {
+  it("requires a boundary after the complete member name", () => {
+    expect(hasMentionToken("Ask @Ann to review", "Ann")).toBe(true);
+    expect(hasMentionToken("Ask @Ann, then continue", "Ann")).toBe(true);
+    expect(hasMentionToken("Ask @Anna to review", "Ann")).toBe(false);
+  });
+
+  it("supports multi-word and Unicode member names", () => {
+    expect(hasMentionToken("Ask @Research Writer and @Éditeur", "Research Writer")).toBe(true);
+    expect(hasMentionToken("Ask @Research Writer and @Éditeur", "Éditeur")).toBe(true);
+  });
+});
 
 describe("resolveGroupTargetBotIds", () => {
   it("returns mentioned bots from text", () => {

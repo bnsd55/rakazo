@@ -27,6 +27,7 @@ import {
   defaultCronPreset,
   formatCron,
   groupBotsForSidebar,
+  hasMentionToken,
   inferAttachmentMimeType,
   isActive,
   latestAnswerableAskMessageId,
@@ -217,9 +218,9 @@ export function ShellPage() {
   const autoSpoken = useRef<string | null>(null);
   const autoSpokenBotId = useRef<string | null>(null);
 
-  const active = bots.find((b) => b.id === botId) ?? bots[0];
-  const activeGroup = groups.find((group) => group.id === groupId);
   const inGroup = Boolean(groupId);
+  const active = inGroup ? undefined : (bots.find((b) => b.id === botId) ?? bots[0]);
+  const activeGroup = groups.find((group) => group.id === groupId);
   const activePendingAttachments = useMemo(
     () => attachmentsForThread(pendingAttachments, inGroup ? groupId : active?.id),
     [active?.id, groupId, inGroup, pendingAttachments],
@@ -405,18 +406,26 @@ export function ShellPage() {
   }
 
   async function loadOlderMessages() {
-    if (!active || snapshot?.olderCursor == null || loadingOlder) return;
+    const targetBotId = inGroup ? undefined : active?.id;
+    const targetGroupId = inGroup ? groupId : undefined;
+    if ((!targetBotId && !targetGroupId) || snapshot?.olderCursor == null || loadingOlder) return;
     pinnedAroundRef.current = null;
     const scrollElement = messageScroll.current;
     const previousHeight = scrollElement?.scrollHeight ?? 0;
     const epoch = historyEpoch.current;
+    const before = snapshot.olderCursor;
     setLoadingOlder(true);
     try {
       const page = await rpc.threads.messages({
-        botId: active.id,
-        before: snapshot.olderCursor,
+        ...(targetGroupId ? { groupId: targetGroupId } : { botId: targetBotId! }),
+        before,
       });
-      if (epoch !== historyEpoch.current) return;
+      if (
+        epoch !== historyEpoch.current ||
+        activeBotId.current !== targetBotId ||
+        activeGroupId.current !== targetGroupId
+      )
+        return;
       expandedHistoryThread.current = page.threadId;
       setSnapshot((prev) => prependThreadMessagePage(prev, page));
       window.requestAnimationFrame(() => {
@@ -1540,6 +1549,7 @@ export function ShellPage() {
           </div>
         ) : null}
         <Composer
+          key={inGroup ? `group:${groupId}` : `bot:${active?.id}`}
           activeName={inGroup ? (activeGroup?.name ?? snapshot?.groupName) : active?.name}
           running={Boolean(snapshot?.run && isActive(snapshot.run.status))}
           disabled={Boolean(recordingSkill)}
@@ -2320,7 +2330,9 @@ const Composer = memo(function Composer({
 
   function updateDraft(value: string) {
     setDraft(value);
-    setSelectedMentions((current) => current.filter((member) => value.includes(`@${member.name}`)));
+    setSelectedMentions((current) =>
+      current.filter((member) => hasMentionToken(value, member.name)),
+    );
     const match = /(?:^|\s)@([\w-]*)$/.exec(value);
     setMentionQuery(match ? (match[1] ?? "") : null);
   }
