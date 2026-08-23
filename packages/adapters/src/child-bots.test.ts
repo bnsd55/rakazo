@@ -342,9 +342,10 @@ describe("destroyBot", () => {
     );
 
     expect(deleteGroups).toHaveBeenCalledWith({ where: { id: { in: ["group-1", "group-3"] } } });
-    expect(deleteMemberships).toHaveBeenCalledWith({
-      where: { botId: "bot-1", groupId: { in: ["group-2"] } },
-    });
+    expect(deleteMemberships).toHaveBeenCalledWith({ where: { botId: "bot-1" } });
+    expect(deleteMemberships.mock.invocationCallOrder[0]!).toBeLessThan(
+      deleteGroups.mock.invocationCallOrder[0]!,
+    );
     expect(findRuns).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
