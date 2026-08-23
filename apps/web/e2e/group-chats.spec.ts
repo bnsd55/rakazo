@@ -44,8 +44,13 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
     name: "Review team",
     botIds: [researcherId, writerId],
   });
+  await rpc(page, "voice/connect", {
+    provider: "scripted",
+    apiKey: "fake-group-voice-key",
+  });
   await page.reload();
   await expect(page).toHaveURL(groupUrl);
+  await expect(page.getByPlaceholder("Message Draft team")).toBeVisible();
 
   await page.getByTestId("bot-settings-trigger").click();
   const desktopSettings = page.getByTestId("side-panel");
@@ -79,6 +84,14 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   const transcript = page.getByTestId("transcript");
   await expect(transcript.getByText("Researcher", { exact: true }).first()).toBeVisible();
   await expect(transcript.getByText("Research Writer", { exact: true }).first()).toBeVisible();
+  const researcherReply = transcript.getByText("Researcher", { exact: true }).first().locator("..");
+  const [speechRequest] = await Promise.all([
+    page.waitForRequest(
+      (request) => request.url().includes("/api/voice/speak") && request.method() === "POST",
+    ),
+    researcherReply.getByRole("button", { name: "Speak this reply" }).click(),
+  ]);
+  expect(speechRequest.postDataJSON()).toMatchObject({ botId: researcherId });
   await captureScreenshot(page, testInfo, "group-transcript");
 
   await composer.fill("@Research Writer ask me which city to use");

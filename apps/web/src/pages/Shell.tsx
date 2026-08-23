@@ -439,13 +439,14 @@ export function ShellPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void takeInitialBootstrap(botId)
-      .then((bootstrap) => {
+    void Promise.all([takeInitialBootstrap(botId), rpc.groups.list()])
+      .then(([bootstrap, groupList]) => {
         if (cancelled) return;
         setBootstrapMe(bootstrap.me);
         setBots(bootstrap.bots);
         setBotSections(bootstrap.botSections);
         setArchivedBots(bootstrap.archivedBots);
+        setGroups(groupList);
         setInitialBotsLoaded(true);
         if (!groupId && bootstrap.thread) {
           bootstrappedThread.current = bootstrap.thread;
@@ -993,6 +994,11 @@ export function ShellPage() {
   // Transcript and MessageView are memoized; these must stay referentially stable or every
   // Shell state change re-renders the whole transcript.
   const refreshActiveThread = useCallback(async () => {
+    const groupId = activeGroupId.current;
+    if (groupId) {
+      await refreshGroupThreadRef.current(groupId);
+      return;
+    }
     const id = activeBotId.current;
     if (!id) return;
     await refreshThreadRef.current(id);
@@ -1010,7 +1016,7 @@ export function ShellPage() {
       return;
     }
     const text = speechFromBlocks(message.blocks);
-    const id = activeBotId.current;
+    const id = message.botId ?? activeBotId.current;
     if (text && id) void speaker.speak(text, { botId: id, messageId: message.id });
   }, []);
 
