@@ -17,6 +17,7 @@ function describeRule(rule: ActionApprovalRule) {
 export function ApprovalRulesSettings() {
   const [rules, setRules] = useState<ActionApprovalRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingPreset, setSavingPreset] = useState<"email" | "purchase" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
@@ -36,6 +37,7 @@ export function ApprovalRulesSettings() {
   }, []);
 
   async function setPreset(matchValue: "email" | "purchase") {
+    if (loading || savingPreset) return;
     if (
       rules.some(
         (rule) =>
@@ -46,6 +48,7 @@ export function ApprovalRulesSettings() {
     ) {
       return;
     }
+    setSavingPreset(matchValue);
     setError(null);
     try {
       const saved = await rpc.approvalRules.set({
@@ -56,6 +59,8 @@ export function ApprovalRulesSettings() {
       setRules((current) => [...current, saved]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save rule");
+    } finally {
+      setSavingPreset(null);
     }
   }
 
@@ -79,15 +84,17 @@ export function ApprovalRulesSettings() {
       <div className="mt-4 flex flex-col items-start gap-2">
         <button
           type="button"
+          disabled={loading || savingPreset !== null}
           onClick={() => void setPreset("email")}
-          className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14px] text-[#C9C9CE]"
+          className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14px] text-[#C9C9CE] disabled:opacity-50"
         >
           Ask before sending external email
         </button>
         <button
           type="button"
+          disabled={loading || savingPreset !== null}
           onClick={() => void setPreset("purchase")}
-          className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14px] text-[#C9C9CE]"
+          className="rounded-[11px] border border-[#26262A] px-[17px] py-2 text-[14px] text-[#C9C9CE] disabled:opacity-50"
         >
           Ask before purchases
         </button>

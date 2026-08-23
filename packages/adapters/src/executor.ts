@@ -63,6 +63,7 @@ import {
   isApprovalPausedResult,
   resolveDuplicateEffectGate,
   settleUncertainEffect,
+  uncertainEffectResult,
 } from "./approval-effect.js";
 import { builtinAgentTools } from "./builtin-tools.js";
 import { archiveSpawnedBot, spawnBot } from "./child-bots.js";
@@ -807,17 +808,17 @@ export function createRunExecutor(deps: ExecutorDeps) {
             const early = await claimOrReturn("intended");
             if (early !== undefined) return early;
           }
-          const finish = async (result: unknown) => {
-            if (applied) {
-              await completeEffect(
-                deps,
-                applied.effect.id,
-                claimedEffect ? "executing" : "intended",
-                result,
-              );
-            }
-            return result;
-          };
+          const persistEffectResult = (result: unknown) =>
+            applied
+              ? completeEffect(
+                  deps,
+                  applied.effect.id,
+                  claimedEffect ? "executing" : "intended",
+                  result,
+                )
+              : Promise.resolve(true);
+          const finish = async (result: unknown) =>
+            (await persistEffectResult(result)) ? result : uncertainEffectResult(name);
           if (name === "computer_observe") {
             if (await getActiveTeachingSession(deps.prisma, run.workspaceId, run.botId)) {
               return { error: "Teaching is in progress. Stop teaching before using the computer." };
@@ -1168,7 +1169,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               prompt: args.prompt ? String(args.prompt) : undefined,
             });
             if ("error" in spawned) return finish(spawned);
-            await finish(spawned);
+            if (!(await persistEffectResult(spawned))) return uncertainEffectResult(name);
             try {
               await publishMessage(deps, run, "bot", [
                 {
@@ -1218,7 +1219,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               context,
             );
             if ("error" in archived) return finish(archived);
-            await finish(archived);
+            if (!(await persistEffectResult(archived))) return uncertainEffectResult(name);
             try {
               await publishMessage(deps, run, "bot", [
                 {
@@ -1938,7 +1939,7 @@ async function completeEffect(
     "details" in result
       ? (result as { details: unknown }).details
       : result;
-  await completeExternalEffect(deps.prisma, effectId, expectedStatus, storedResult as never);
+  return completeExternalEffect(deps.prisma, effectId, expectedStatus, storedResult as never);
 }
 
 function uncertainEffectError(toolName: string): Error {
