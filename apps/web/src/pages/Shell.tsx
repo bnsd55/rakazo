@@ -304,23 +304,13 @@ export function ShellPage() {
     const currentGroupId = routeGroupId.current;
     if (currentGroupId) {
       if (!groupList.some((group) => group.id === currentGroupId)) {
-        navigate(
-          list[0] ? `/app/${list[0].id}` : groupList[0] ? `/app/g/${groupList[0].id}` : "/app",
-          {
-            replace: true,
-          },
-        );
+        navigate(firstThreadRoute(list, groupList), { replace: true });
       }
       return;
     }
     const currentBotId = routeBotId.current;
     if (!currentBotId || !list.some((bot) => bot.id === currentBotId)) {
-      navigate(
-        list[0] ? `/app/${list[0].id}` : groupList[0] ? `/app/g/${groupList[0].id}` : "/app",
-        {
-          replace: true,
-        },
-      );
+      navigate(firstThreadRoute(list, groupList), { replace: true });
     }
   }
 
@@ -472,8 +462,14 @@ export function ShellPage() {
           navigate("/onboarding", { replace: true });
           return;
         }
+        if (groupId) {
+          if (!groupList.some((group) => group.id === groupId)) {
+            navigate(firstThreadRoute(bootstrap.bots, groupList), { replace: true });
+          }
+          return;
+        }
         const selectedBotId = bootstrap.thread?.botId ?? bootstrap.bots[0]?.id;
-        if (!groupId && selectedBotId && selectedBotId !== botId) {
+        if (selectedBotId && selectedBotId !== botId) {
           navigate(`/app/${selectedBotId}`, { replace: true });
         }
       })
@@ -2573,6 +2569,15 @@ function previewMessageText(message: ThreadMessage): string {
     return "Attachment";
   }
   return "Message";
+}
+
+function firstThreadRoute(
+  bots: readonly Pick<Bot, "id">[],
+  groups: readonly Pick<Group, "id">[],
+): string {
+  if (bots[0]) return `/app/${bots[0].id}`;
+  if (groups[0]) return `/app/g/${groups[0].id}`;
+  return "/app";
 }
 
 function applyThreadEvent(

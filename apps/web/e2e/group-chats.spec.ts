@@ -160,4 +160,9 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await expect(settings).toHaveAttribute("data-panel", "group-settings");
   expect((await settings.boundingBox())?.width).toBeLessThanOrEqual(390);
   await captureScreenshot(page, testInfo, "group-settings-mobile");
+
+  await rpc(page, "groups/remove", { groupId: reviewGroup.id });
+  await page.goto(`/app/g/${reviewGroup.id}`);
+  await page.waitForURL(/\/app\/(?!g\/)[^/]+$/);
+  await expect(page.getByPlaceholder(/Message/)).toBeVisible();
 });
