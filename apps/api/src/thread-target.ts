@@ -1,6 +1,11 @@
 import { type JobPublisher, runContinueJob } from "@rakazo/adapter-kit";
 import { toComputerRef } from "@rakazo/adapters";
-import type { Actor, GroupMember, ThreadSnapshot } from "@rakazo/contracts";
+import {
+  type Actor,
+  GROUP_MEMBER_MIN,
+  type GroupMember,
+  type ThreadSnapshot,
+} from "@rakazo/contracts";
 import { ACTIVE_RUN_STATUSES, projectMessages, resolveGroupTargetBotIds } from "@rakazo/core";
 import {
   appendEventInTransaction,
@@ -155,7 +160,7 @@ async function lockAndLoadGroupMembers(
       },
     },
   });
-  if (!group) throw new IsolationError();
+  if (!group || group.members.length < GROUP_MEMBER_MIN) throw new IsolationError();
   return group.members.map((member) => ({
     botId: member.bot.id,
     name: member.bot.name,

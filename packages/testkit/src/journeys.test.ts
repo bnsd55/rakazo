@@ -1682,17 +1682,15 @@ describeJourneys("required product journeys", () => {
       ]),
       thread: archiveThread,
     });
-    const archivedMemberSend = await rpc<{ runId: string }>(app, ada, "threads/send", {
-      groupId: archiveGroup.id,
-      text: "Only the active member should receive this",
-    });
-    expect(
-      await prisma.run.findUniqueOrThrow({ where: { id: archivedMemberSend.runId } }),
-    ).toMatchObject({ botId: archivePartner.id });
-    await waitForDatabase(async () => {
-      const run = await prisma.run.findUnique({ where: { id: archivedMemberSend.runId } });
-      return Boolean(run && ["completed", "failed", "cancelled"].includes(run.status));
-    });
+    const groupsWhileUndersized = await rpc<Array<{ id: string }>>(app, ada, "groups/list");
+    expect(groupsWhileUndersized.some((row) => row.id === archiveGroup.id)).toBe(false);
+    await expect(rpc(app, ada, "threads/get", { groupId: archiveGroup.id })).rejects.toThrow();
+    await expect(
+      rpc(app, ada, "threads/send", {
+        groupId: archiveGroup.id,
+        text: "This hidden group must not run with one active member",
+      }),
+    ).rejects.toThrow();
     await rpc(app, ada, "bots/restore", { botId: archiveMember.id });
     const restoredArchiveGroup = await rpc<
       Array<{ id: string; members: Array<{ botId: string }> }>

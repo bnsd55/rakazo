@@ -60,6 +60,10 @@ function mapGroup(group: GroupRecord): Group {
   };
 }
 
+function hasMinimumActiveMembers(members: readonly unknown[]) {
+  return members.length >= GROUP_MEMBER_MIN;
+}
+
 async function assertOwnedBots(
   prisma: PrismaClient,
   actor: Actor,
@@ -119,7 +123,9 @@ export function createGroupRepos(prisma: PrismaClient) {
         include: groupInclude,
         orderBy: { updatedAt: "desc" },
       });
-      return groups.map((group) => mapGroup(group as GroupRecord));
+      return groups
+        .filter((group) => hasMinimumActiveMembers(group.members))
+        .map((group) => mapGroup(group as GroupRecord));
     },
 
     async getGroup(actor: Actor, groupId: string) {
@@ -127,7 +133,7 @@ export function createGroupRepos(prisma: PrismaClient) {
         where: { id: groupId, workspaceId: actor.workspaceId, userId: actor.userId },
         include: groupInclude,
       });
-      if (!group) throw new IsolationError();
+      if (!group || !hasMinimumActiveMembers(group.members)) throw new IsolationError();
       return group as GroupRecord;
     },
 
@@ -136,7 +142,7 @@ export function createGroupRepos(prisma: PrismaClient) {
         where: { id: groupId, workspaceId: actor.workspaceId, userId: actor.userId },
         include: groupTargetInclude,
       });
-      if (!group) throw new IsolationError();
+      if (!group || !hasMinimumActiveMembers(group.members)) throw new IsolationError();
       return group;
     },
 
@@ -181,9 +187,20 @@ export function createGroupRepos(prisma: PrismaClient) {
             workspaceId: actor.workspaceId,
             userId: actor.userId,
           },
-          include: { members: { select: { botId: true } }, thread: { select: { id: true } } },
+          include: {
+            members: { select: { botId: true, bot: { select: { archivedAt: true } } } },
+            thread: { select: { id: true } },
+          },
         });
         if (!current?.thread) throw new IsolationError();
+        if (
+          !members &&
+          !hasMinimumActiveMembers(
+            current.members.filter((member) => member.bot.archivedAt === null),
+          )
+        ) {
+          throw new IsolationError();
+        }
         const nextBotIds = new Set(
           members?.map((member) => member.botId) ?? current.members.map((member) => member.botId),
         );
