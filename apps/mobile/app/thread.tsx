@@ -561,23 +561,16 @@ export default function Thread() {
             }}
           >
             <View style={{ maxWidth: "90%", flexShrink: 1 }}>
-              {message.role !== "user" ? (
-                <Pressable
-                  accessibilityLabel="Reply"
-                  onPress={() => setReplyTarget(message)}
-                  style={{ alignSelf: "flex-start", marginBottom: 4 }}
-                >
-                  <Text style={{ color: "#6C6C70", fontSize: 12 }}>Reply</Text>
-                </Pressable>
-              ) : (
-                <Pressable
-                  accessibilityLabel="Reply"
-                  onPress={() => setReplyTarget(message)}
-                  style={{ alignSelf: "flex-end", marginBottom: 4 }}
-                >
-                  <Text style={{ color: "#6C6C70", fontSize: 12 }}>Reply</Text>
-                </Pressable>
-              )}
+              <Pressable
+                accessibilityLabel="Reply"
+                onPress={() => setReplyTarget(message)}
+                style={{
+                  alignSelf: message.role === "user" ? "flex-end" : "flex-start",
+                  marginBottom: 4,
+                }}
+              >
+                <Text style={{ color: "#6C6C70", fontSize: 12 }}>Reply</Text>
+              </Pressable>
               <MessageBubble
                 botId={botId ?? snap?.members?.[0]?.botId ?? ""}
                 groupId={groupId}

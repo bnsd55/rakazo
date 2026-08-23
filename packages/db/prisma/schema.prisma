@@ -339,6 +339,7 @@ model Message {
   @@unique([threadId, seq])
   @@unique([threadId, clientNonce])
   @@index([threadId, seq])
+  @@index([replyToMessageId])
   @@map("messages")
 }
 

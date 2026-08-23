@@ -42,6 +42,9 @@ CREATE UNIQUE INDEX "chat_group_members_groupId_botId_key" ON "chat_group_member
 -- CreateIndex
 CREATE INDEX "chat_group_members_botId_idx" ON "chat_group_members"("botId");
 
+-- CreateIndex
+CREATE INDEX "messages_replyToMessageId_idx" ON "messages"("replyToMessageId");
+
 -- AddForeignKey
 ALTER TABLE "chat_groups" ADD CONSTRAINT "chat_groups_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

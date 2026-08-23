@@ -2,6 +2,64 @@ import { type Bot, GROUP_MEMBER_MAX, GROUP_MEMBER_MIN, type Group } from "@rakaz
 import { BotAvatar, Button } from "@rakazo/ui-web";
 import { useMemo, useState } from "react";
 
+function validSelection(name: string, selected: readonly string[]) {
+  return (
+    Boolean(name.trim()) &&
+    selected.length >= GROUP_MEMBER_MIN &&
+    selected.length <= GROUP_MEMBER_MAX
+  );
+}
+
+function sameMembers(left: readonly string[], right: readonly string[]) {
+  if (left.length !== right.length) return false;
+  const rightIds = new Set(right);
+  return left.every((id) => rightIds.has(id));
+}
+
+function MemberPicker({
+  bots,
+  selected,
+  onChange,
+  maxHeight,
+}: {
+  bots: Bot[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+  maxHeight: "max-h-[240px]" | "max-h-[280px]";
+}) {
+  const selectable = useMemo(() => bots.filter((bot) => !bot.archivedAt), [bots]);
+
+  function toggle(botId: string) {
+    if (selected.includes(botId)) {
+      onChange(selected.filter((id) => id !== botId));
+    } else if (selected.length < GROUP_MEMBER_MAX) {
+      onChange([...selected, botId]);
+    }
+  }
+
+  return (
+    <div className={`mt-2 ${maxHeight} space-y-1 overflow-y-auto`}>
+      {selectable.map((bot) => {
+        const checked = selected.includes(bot.id);
+        return (
+          <button
+            key={bot.id}
+            type="button"
+            onClick={() => toggle(bot.id)}
+            className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left ${
+              checked ? "bg-[#1A1A1D]" : "hover:bg-[#141416]"
+            }`}
+          >
+            <BotAvatar color={bot.color} size={32} />
+            <span className="flex-1 text-[15px] text-[#ECECEE]">{bot.name}</span>
+            <span className="text-[13px] text-[#6C6C70]">{checked ? "✓" : ""}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CreateGroupForm({
   bots,
   onCancel,
@@ -13,15 +71,6 @@ export function CreateGroupForm({
 }) {
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
-  const selectable = useMemo(() => bots.filter((bot) => !bot.archivedAt), [bots]);
-
-  function toggle(botId: string) {
-    setSelected((current) => {
-      if (current.includes(botId)) return current.filter((id) => id !== botId);
-      if (current.length >= GROUP_MEMBER_MAX) return current;
-      return [...current, botId];
-    });
-  }
 
   return (
     <div>
@@ -43,30 +92,15 @@ export function CreateGroupForm({
       <div className="mt-5 text-[14px] text-[#85858A]">
         Members (pick {GROUP_MEMBER_MIN}–{GROUP_MEMBER_MAX})
       </div>
-      <div className="mt-2 max-h-[280px] space-y-1 overflow-y-auto">
-        {selectable.map((bot) => {
-          const checked = selected.includes(bot.id);
-          return (
-            <button
-              key={bot.id}
-              type="button"
-              onClick={() => toggle(bot.id)}
-              className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left ${
-                checked ? "bg-[#1A1A1D]" : "hover:bg-[#141416]"
-              }`}
-            >
-              <BotAvatar color={bot.color} size={32} />
-              <span className="flex-1 text-[15px] text-[#ECECEE]">{bot.name}</span>
-              <span className="text-[13px] text-[#6C6C70]">{checked ? "✓" : ""}</span>
-            </button>
-          );
-        })}
-      </div>
+      <MemberPicker
+        bots={bots}
+        selected={selected}
+        onChange={setSelected}
+        maxHeight="max-h-[280px]"
+      />
       <Button
         className="mt-5 w-full"
-        disabled={
-          !name.trim() || selected.length < GROUP_MEMBER_MIN || selected.length > GROUP_MEMBER_MAX
-        }
+        disabled={!validSelection(name, selected)}
         onClick={() => onCreate({ name: name.trim(), botIds: selected })}
       >
         Create group
@@ -88,15 +122,6 @@ export function GroupSettings({
 }) {
   const [name, setName] = useState(group.name);
   const [selected, setSelected] = useState(group.members.map((member) => member.botId));
-  const selectable = useMemo(() => bots.filter((bot) => !bot.archivedAt), [bots]);
-
-  function toggle(botId: string) {
-    setSelected((current) => {
-      if (current.includes(botId)) return current.filter((id) => id !== botId);
-      if (current.length >= GROUP_MEMBER_MAX) return current;
-      return [...current, botId];
-    });
-  }
 
   return (
     <div>
@@ -114,37 +139,24 @@ export function GroupSettings({
       <div className="mt-5 text-[14px] text-[#85858A]">
         Members ({GROUP_MEMBER_MIN}–{GROUP_MEMBER_MAX})
       </div>
-      <div className="mt-2 max-h-[240px] space-y-1 overflow-y-auto">
-        {selectable.map((bot) => {
-          const checked = selected.includes(bot.id);
-          return (
-            <button
-              key={bot.id}
-              type="button"
-              onClick={() => toggle(bot.id)}
-              className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left ${
-                checked ? "bg-[#1A1A1D]" : "hover:bg-[#141416]"
-              }`}
-            >
-              <BotAvatar color={bot.color} size={32} />
-              <span className="flex-1 text-[15px] text-[#ECECEE]">{bot.name}</span>
-              <span className="text-[13px] text-[#6C6C70]">{checked ? "✓" : ""}</span>
-            </button>
-          );
-        })}
-      </div>
+      <MemberPicker
+        bots={bots}
+        selected={selected}
+        onChange={setSelected}
+        maxHeight="max-h-[240px]"
+      />
       <Button
         className="mt-5 w-full"
-        disabled={
-          !name.trim() || selected.length < GROUP_MEMBER_MIN || selected.length > GROUP_MEMBER_MAX
-        }
+        disabled={!validSelection(name, selected)}
         onClick={() =>
           onSave({
             name: name.trim() !== group.name ? name.trim() : undefined,
-            botIds:
-              selected.join(",") !== group.members.map((m) => m.botId).join(",")
-                ? selected
-                : undefined,
+            botIds: sameMembers(
+              selected,
+              group.members.map((member) => member.botId),
+            )
+              ? undefined
+              : selected,
           })
         }
       >

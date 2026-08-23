@@ -803,6 +803,15 @@ export function ShellPage() {
     }
   }, [active?.id, routines, routinesBotId, searchParams, setSearchParams]);
   const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
+  const transcriptArtifactTarget = useMemo<ArtifactTarget>(
+    () => (inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }),
+    [active?.id, groupId, inGroup],
+  );
+  const transcriptMembers = snapshot?.members ?? activeGroup?.members;
+  const resolveTranscriptMemberName = useCallback(
+    (botId: string | undefined) => memberName(transcriptMembers, botId),
+    [transcriptMembers],
+  );
   const shellReady =
     initialBotsLoaded &&
     (inGroup
@@ -1531,7 +1540,7 @@ export function ShellPage() {
         </div>
         <Transcript
           scrollRef={messageScroll}
-          artifactTarget={inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }}
+          artifactTarget={transcriptArtifactTarget}
           messages={snapshot?.messages ?? []}
           olderCursor={snapshot?.olderCursor ?? null}
           loadingOlder={loadingOlder}
@@ -1543,7 +1552,7 @@ export function ShellPage() {
           onOpenBot={openBot}
           onAnswer={answerMessage}
           onReply={setReplyTarget}
-          memberName={(botId) => memberName(snapshot?.members ?? activeGroup?.members, botId)}
+          memberName={resolveTranscriptMemberName}
           onRefresh={refreshActiveThread}
           onAddRoutine={addSkillRoutine}
           voiceReady={Boolean(voiceStatus?.ready)}
