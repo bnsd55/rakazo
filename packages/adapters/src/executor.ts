@@ -1380,6 +1380,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             if (event.type === "text") {
               assembled += event.text;
               currentTextSegment += event.text;
+              toolCallStreak = { key: undefined, count: 0 };
               toolNameStreak = { name: undefined, count: 0 };
               tryFlushPendingTools();
               pendingProgress += progressRedactor.push(event.text);
@@ -1388,6 +1389,8 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 await flushProgress();
               }
             } else if (event.type === "progress") {
+              toolCallStreak = { key: undefined, count: 0 };
+              toolNameStreak = { name: undefined, count: 0 };
               // Flush batched text deltas first so an activity line cannot land
               // ahead of text the model streamed before the tool call.
               if (pendingProgress) {

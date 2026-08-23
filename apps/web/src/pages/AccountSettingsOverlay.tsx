@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ApprovalRulesSettings } from "../components/ApprovalRulesSettings";
 
 export function AccountSettingsOverlay({
@@ -10,23 +10,40 @@ export function AccountSettingsOverlay({
   name: string;
   onClose: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     }
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+    panelRef.current?.focus();
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, []);
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(4,4,5,.62)] p-4 sm:p-10">
       <div
+        ref={panelRef}
         data-testid="user-settings"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-settings-title"
+        tabIndex={-1}
         className="rk-scroll max-h-full w-[640px] max-w-full overflow-y-auto rounded-[26px] border border-[#232326] bg-[#141416] p-6 shadow-[0_40px_90px_rgba(0,0,0,.55)] sm:p-8"
       >
         <div className="flex items-start justify-between gap-6">
           <div>
-            <h2 className="text-2xl font-medium text-[#F1F1F2]">Settings</h2>
+            <h2 id="account-settings-title" className="text-2xl font-medium text-[#F1F1F2]">
+              Settings
+            </h2>
             <p className="mt-1 text-[13.5px] text-[#7A7A80]">
               Account preferences apply across all your bots.
             </p>
