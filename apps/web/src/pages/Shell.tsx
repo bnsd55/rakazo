@@ -1186,7 +1186,7 @@ export function ShellPage() {
           type="button"
           aria-label="Close navigation"
           onClick={() => setMobileSidebarOpen(false)}
-          className="absolute inset-0 z-30 bg-black/60 md:hidden"
+          className="absolute inset-y-0 right-0 left-[min(calc(100%-48px),316px)] z-30 bg-black/60 md:hidden"
         />
       ) : null}
       <aside
