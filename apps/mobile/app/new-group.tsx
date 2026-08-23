@@ -15,7 +15,7 @@ export default function NewGroup() {
 
   useEffect(() => {
     void rpc<MobileBot[]>("bots/list")
-      .then(setBots)
+      .then((nextBots) => setBots(nextBots.filter((bot) => !bot.archivedAt)))
       .catch(() => undefined);
   }, []);
 

@@ -577,12 +577,14 @@ export default function Thread() {
                 onSpeak={
                   message.role === "bot"
                     ? () =>
-                        void speakMessage(botId ?? snap?.members?.[0]?.botId ?? "", message).catch(
-                          (err) =>
-                            Alert.alert(
-                              "Could not speak",
-                              err instanceof Error ? err.message : "Try again.",
-                            ),
+                        void speakMessage(
+                          message.botId ?? botId ?? snap?.members?.[0]?.botId ?? "",
+                          message,
+                        ).catch((err) =>
+                          Alert.alert(
+                            "Could not speak",
+                            err instanceof Error ? err.message : "Try again.",
+                          ),
                         )
                     : undefined
                 }

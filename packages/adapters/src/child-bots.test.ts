@@ -164,6 +164,8 @@ describe("destroyBot", () => {
     const executeRaw = vi.fn().mockResolvedValue(1);
     const releaseComputers = vi.fn().mockResolvedValue({ count: 1 });
     const removeArtifact = vi.fn().mockResolvedValue(undefined);
+    const findArtifacts = vi.fn().mockResolvedValue([{ storageKey: "stored-artifact" }]);
+    const deleteArtifacts = vi.fn().mockResolvedValue({ count: 1 });
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
         $queryRaw: vi.fn().mockResolvedValue([]),
@@ -171,7 +173,7 @@ describe("destroyBot", () => {
           findMany: vi.fn().mockResolvedValue([]),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
         },
-        artifact: { findMany: vi.fn().mockResolvedValue([]) },
+        artifact: { findMany: findArtifacts, deleteMany: deleteArtifacts },
         computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         computer: { updateMany: releaseComputers },
         $executeRaw: executeRaw,
@@ -189,7 +191,6 @@ describe("destroyBot", () => {
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
       routine: { findMany: vi.fn().mockResolvedValue([]) },
-      artifact: { findMany: vi.fn().mockResolvedValue([{ storageKey: "stored-artifact" }]) },
       $transaction: transaction,
     } as unknown as PrismaClient;
 
@@ -232,6 +233,16 @@ describe("destroyBot", () => {
       },
     });
     expect(deleteBot).toHaveBeenCalledWith({ where: { id: "bot-1" } });
+    expect(findArtifacts).toHaveBeenCalledWith({
+      where: { botId: "bot-1", groupId: null, workspaceId: "workspace-1" },
+      select: { storageKey: true },
+    });
+    expect(deleteArtifacts).toHaveBeenCalledWith({
+      where: { botId: "bot-1", groupId: null, workspaceId: "workspace-1" },
+    });
+    expect(deleteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteBot.mock.invocationCallOrder[0]!,
+    );
     expect(removeArtifact).toHaveBeenCalledWith("stored-artifact", context);
   });
 
@@ -249,7 +260,10 @@ describe("destroyBot", () => {
           deleteMany: deleteGroups,
         },
         chatGroupMember: { deleteMany: deleteMemberships },
-        artifact: { findMany: vi.fn().mockResolvedValue([]) },
+        artifact: {
+          findMany: vi.fn().mockResolvedValue([]),
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
         computerExecutionLease: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         computer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
         $executeRaw: vi.fn(),
@@ -323,9 +337,10 @@ describe("archiveBot", () => {
   it("stops work and routines while preserving the bot", async () => {
     const updateBot = vi.fn().mockResolvedValue({});
     const disableRoutines = vi.fn().mockResolvedValue({ count: 2 });
+    const groupCleanup = noGroupMemberships();
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
-        ...noGroupMemberships(),
+        ...groupCleanup,
         run: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
         task: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
         routine: { updateMany: disableRoutines },
@@ -368,6 +383,9 @@ describe("archiveBot", () => {
       where: { id: "bot-1" },
       data: { archivedAt: expect.any(Date), pinned: false },
     });
+    expect(groupCleanup.$queryRaw).not.toHaveBeenCalled();
+    expect(groupCleanup.chatGroup.deleteMany).not.toHaveBeenCalled();
+    expect(groupCleanup.chatGroupMember.deleteMany).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledWith("run:run-1");
   });
 

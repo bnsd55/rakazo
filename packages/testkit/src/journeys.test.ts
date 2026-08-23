@@ -1034,6 +1034,12 @@ describeJourneys("required product journeys", () => {
       gone.id,
       "write a file in your home called notes/result.txt that says delete-ok",
     );
+    const goneArtifact = await rpc<{ id: string }>(app, ada, "artifacts/create", {
+      botId: gone.id,
+      name: "delete-me.txt",
+      mimeType: "text/plain",
+      contentBase64: Buffer.from("fake artifact content").toString("base64"),
+    });
     const home = path.join(dataDir, "homes", gone.id);
     expect(existsSync(home)).toBe(true);
 
@@ -1046,6 +1052,7 @@ describeJourneys("required product journeys", () => {
     expect((await rpc<Bot[]>(app, ada, "bots/listArchived")).map((bot) => bot.id)).toContain(
       gone.id,
     );
+    expect(await prisma.artifact.findUnique({ where: { id: goneArtifact.id } })).not.toBeNull();
     expect(existsSync(home)).toBe(true);
 
     await rpc(app, ada, "bots/restore", { botId: gone.id });
@@ -1067,6 +1074,7 @@ describeJourneys("required product journeys", () => {
     expect(await prisma.botDeletion.findUniqueOrThrow({ where: { id: gone.id } })).toMatchObject({
       memoriesPreserved: true,
     });
+    expect(await prisma.artifact.findUnique({ where: { id: goneArtifact.id } })).toBeNull();
     expect(existsSync(home)).toBe(false);
 
     await rpc(app, ada, "bots/remove", { botId: forget.id, deleteMemories: true });
@@ -1422,10 +1430,14 @@ describeJourneys("required product journeys", () => {
     const botABefore = await countUserRuns(botA.id);
     const botBBefore = await countUserRuns(botB.id);
     const botCBefore = await countUserRuns(botC.id);
-    await sendGroupAndWait(app, ada, group.id, "hello team", botA.id);
-    expect(await countUserRuns(botA.id)).toBe(botABefore + 1);
-    expect(await countUserRuns(botB.id)).toBe(botBBefore);
-    expect(await countUserRuns(botC.id)).toBe(botCBefore);
+    const botDBefore = await countUserRuns(botD.id);
+    await sendGroupAndWait(app, ada, group.id, "hello team");
+    expect(
+      (await countUserRuns(botA.id)) +
+        (await countUserRuns(botB.id)) +
+        (await countUserRuns(botC.id)) +
+        (await countUserRuns(botD.id)),
+    ).toBe(botABefore + botBBefore + botCBefore + botDBefore + 1);
 
     await sendGroupAndWait(app, ada, group.id, "@BotA hand this to Writer for the draft", botA.id);
     const handoffSnap = await rpc<Snap>(app, ada, "threads/get", { groupId: group.id });
@@ -1645,8 +1657,40 @@ describeJourneys("required product journeys", () => {
       name: "Archive invariant",
       botIds: [archiveMember.id, archivePartner.id],
     });
+    const archiveThread = await prisma.thread.findUniqueOrThrow({
+      where: { groupId: archiveGroup.id },
+      select: { id: true },
+    });
     await rpc(app, ada, "bots/archive", { botId: archiveMember.id });
-    expect(await prisma.chatGroup.findUnique({ where: { id: archiveGroup.id } })).toBeNull();
+    expect(
+      await prisma.chatGroup.findUniqueOrThrow({
+        where: { id: archiveGroup.id },
+        include: { members: true, thread: { select: { id: true } } },
+      }),
+    ).toMatchObject({
+      members: expect.arrayContaining([
+        expect.objectContaining({ botId: archiveMember.id }),
+        expect.objectContaining({ botId: archivePartner.id }),
+      ]),
+      thread: archiveThread,
+    });
+    const archivedMemberSend = await rpc<{ runId: string }>(app, ada, "threads/send", {
+      groupId: archiveGroup.id,
+      text: "Only the active member should receive this",
+    });
+    expect(
+      await prisma.run.findUniqueOrThrow({ where: { id: archivedMemberSend.runId } }),
+    ).toMatchObject({ botId: archivePartner.id });
+    await rpc(app, ada, "bots/restore", { botId: archiveMember.id });
+    const restoredArchiveGroup = await rpc<
+      Array<{ id: string; members: Array<{ botId: string }> }>
+    >(app, ada, "groups/list");
+    expect(restoredArchiveGroup.find((row) => row.id === archiveGroup.id)?.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ botId: archiveMember.id }),
+        expect.objectContaining({ botId: archivePartner.id }),
+      ]),
+    );
 
     const deletionPartner = await rpc<Bot>(app, ada, "bots/create", {
       name: "Deletion Partner",
@@ -1668,7 +1712,13 @@ describeJourneys("required product journeys", () => {
     expect(await prisma.artifact.findUnique({ where: { id: artifact.id } })).toBeNull();
     const remainingBotIds = (await rpc<Bot[]>(app, ada, "bots/list")).map((bot) => bot.id);
     expect(remainingBotIds).toEqual(
-      expect.arrayContaining([botC.id, botD.id, deletionPartner.id, archivePartner.id]),
+      expect.arrayContaining([
+        botC.id,
+        botD.id,
+        deletionPartner.id,
+        archiveMember.id,
+        archivePartner.id,
+      ]),
     );
     expect(remainingBotIds).not.toContain(botA.id);
   });

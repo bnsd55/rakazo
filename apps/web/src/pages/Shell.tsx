@@ -674,7 +674,11 @@ export function ShellPage() {
         retryMs = Math.min(retryMs * 2, 5_000);
       }
     })();
-    return () => abort.abort();
+    return () => {
+      window.removeEventListener("focus", markVisibleGroupRead);
+      document.removeEventListener("visibilitychange", markVisibleGroupRead);
+      abort.abort();
+    };
   }, [activeGroup?.id, groupId]);
 
   const filtered = useMemo(
@@ -1737,6 +1741,7 @@ export function ShellPage() {
             ) : null}
             {panel === "group-settings" && activeGroup ? (
               <GroupSettings
+                key={activeGroup.id}
                 group={activeGroup}
                 bots={bots}
                 onSave={async (input) => {

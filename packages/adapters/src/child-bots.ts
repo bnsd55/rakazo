@@ -270,7 +270,7 @@ export async function archiveBot(
   ]);
   const runIds = activeRuns.map((run) => run.id);
   const now = new Date();
-  const removedGroupArtifactKeys = await deps.prisma.$transaction(async (tx) => {
+  await deps.prisma.$transaction(async (tx) => {
     await tx.run.updateMany({
       where: { id: { in: runIds } },
       data: { status: "cancelled", completedAt: now },
@@ -283,7 +283,6 @@ export async function archiveBot(
       where: { botId: bot.id },
       data: { active: false, nextRunAt: null },
     });
-    const groupArtifactKeys = await detachBotFromGroups(tx, bot.id);
     await tx.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
     await tx.computer.updateMany({
       where: {
@@ -301,7 +300,6 @@ export async function archiveBot(
       where: { id: bot.id },
       data: { archivedAt: bot.archivedAt ?? now, pinned: false },
     });
-    return groupArtifactKeys;
   });
   await Promise.allSettled([
     ...activeRuns.map((run) => deps.jobs.cancel(runJobKey(run.id))),
@@ -324,7 +322,6 @@ export async function archiveBot(
       data: { state: "stopped" },
     });
   }
-  await removeStoredArtifacts(deps.artifacts, removedGroupArtifactKeys, context);
 }
 
 export async function destroyBot(
@@ -333,7 +330,7 @@ export async function destroyBot(
   context: AdapterContext,
   options: { deleteMemories: boolean },
 ) {
-  const [dedicated, activeRuns, routines, artifactRows] = await Promise.all([
+  const [dedicated, activeRuns, routines] = await Promise.all([
     deps.prisma.computer.findUnique({
       where: { scopeKey: computerScopeKey("dedicated", bot.workspaceId, bot.id) },
     }),
@@ -342,10 +339,6 @@ export async function destroyBot(
       select: { id: true },
     }),
     deps.prisma.routine.findMany({ where: { botId: bot.id }, select: { id: true } }),
-    deps.prisma.artifact.findMany({
-      where: { botId: bot.id, groupId: null, workspaceId: bot.workspaceId },
-      select: { storageKey: true },
-    }),
   ]);
   const runIds = activeRuns.map((run) => run.id);
   await deps.prisma.run.updateMany({
@@ -360,7 +353,20 @@ export async function destroyBot(
   if (dedicated?.providerRef) {
     await deps.sandbox.destroy(toComputerRef(dedicated), context).catch(() => undefined);
   }
-  const removedGroupArtifactKeys = await deps.prisma.$transaction(async (tx) => {
+  const removedArtifactKeys = await deps.prisma.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM bots
+      WHERE id = ${bot.id} AND "workspaceId" = ${bot.workspaceId}
+      FOR UPDATE
+    `;
+    const botArtifacts = await tx.artifact.findMany({
+      where: { botId: bot.id, groupId: null, workspaceId: bot.workspaceId },
+      select: { storageKey: true },
+    });
+    await tx.artifact.deleteMany({
+      where: { botId: bot.id, groupId: null, workspaceId: bot.workspaceId },
+    });
     const groupArtifactKeys = await detachBotFromGroups(tx, bot.id);
     await tx.computerExecutionLease.deleteMany({ where: { botId: bot.id } });
     await tx.computer.updateMany({
@@ -392,7 +398,7 @@ export async function destroyBot(
     });
     await tx.bot.delete({ where: { id: bot.id } });
     if (dedicated) await tx.computer.delete({ where: { id: dedicated.id } });
-    return groupArtifactKeys;
+    return [...botArtifacts.map((artifact) => artifact.storageKey), ...groupArtifactKeys];
   });
   if (dedicated) {
     await rm(resolveAgentHomePath(deps.home, dedicated.homeKey, deps.dataDir ?? "./data"), {
@@ -402,11 +408,7 @@ export async function destroyBot(
   }
   const artifactStore = deps.artifacts;
   if (artifactStore) {
-    await removeStoredArtifacts(
-      artifactStore,
-      [...artifactRows.map((artifact) => artifact.storageKey), ...removedGroupArtifactKeys],
-      context,
-    );
+    await removeStoredArtifacts(artifactStore, removedArtifactKeys, context);
   }
 }
 

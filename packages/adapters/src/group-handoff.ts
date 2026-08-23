@@ -35,6 +35,7 @@ export async function handoffToGroupBot(
         where: { id: groupId, thread: { id: run.threadId } },
         include: {
           members: {
+            where: { bot: { archivedAt: null } },
             include: { bot: { select: { id: true, name: true } } },
             orderBy: { createdAt: "asc" },
           },
@@ -138,6 +139,7 @@ export async function loadGroupContext(
     where: { id: groupId },
     include: {
       members: {
+        where: { bot: { archivedAt: null } },
         include: { bot: { select: { id: true, name: true } } },
         orderBy: { createdAt: "asc" },
       },

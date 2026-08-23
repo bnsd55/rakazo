@@ -53,16 +53,22 @@ export const GroupSchema = z.object({
 });
 export type Group = z.infer<typeof GroupSchema>;
 
+const GroupBotIds = z
+  .array(Id)
+  .min(GROUP_MEMBER_MIN)
+  .max(GROUP_MEMBER_MAX)
+  .refine((ids) => new Set(ids).size === ids.length, { error: "botIds must be distinct" });
+
 export const CreateGroupInput = z.object({
-  name: z.string().min(1).max(80),
-  botIds: z.array(Id).min(GROUP_MEMBER_MIN).max(GROUP_MEMBER_MAX),
+  name: z.string().trim().min(1).max(80),
+  botIds: GroupBotIds,
 });
 export type CreateGroupInput = z.infer<typeof CreateGroupInput>;
 
 export const UpdateGroupInput = z.object({
   groupId: Id,
-  name: z.string().min(1).max(80).optional(),
-  botIds: z.array(Id).min(GROUP_MEMBER_MIN).max(GROUP_MEMBER_MAX).optional(),
+  name: z.string().trim().min(1).max(80).optional(),
+  botIds: GroupBotIds.optional(),
 });
 export type UpdateGroupInput = z.infer<typeof UpdateGroupInput>;
 

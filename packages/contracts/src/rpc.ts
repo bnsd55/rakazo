@@ -63,7 +63,7 @@ const threadTarget = z
   });
 
 const threadSendInput = threadTarget
-  .extend({
+  .safeExtend({
     text: z.string().optional(),
     artifactIds: z.array(Id).max(ATTACHMENT_MAX_COUNT).optional(),
     mentions: z.array(Id).max(GROUP_MEMBER_MAX).optional(),
@@ -175,7 +175,7 @@ export const appContract = {
     get: oc.input(threadTarget).output(ThreadSnapshotSchema),
     messages: oc
       .input(
-        threadTarget.extend({
+        threadTarget.safeExtend({
           before: z.number().int().nonnegative().optional(),
           around: z
             .object({
@@ -187,7 +187,7 @@ export const appContract = {
       )
       .output(ThreadMessagePageSchema),
     subscribe: oc
-      .input(threadTarget.extend({ cursor: z.number().int().min(-1) }))
+      .input(threadTarget.safeExtend({ cursor: z.number().int().min(-1) }))
       .output(eventIterator(ProductEventSchema)),
     send: oc.input(threadSendInput).output(
       z.object({
@@ -199,12 +199,12 @@ export const appContract = {
     ),
     stop: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
     followUp: oc
-      .input(threadTarget.extend({ text: z.string().min(1) }))
+      .input(threadTarget.safeExtend({ text: z.string().min(1) }))
       .output(z.object({ ok: z.literal(true) })),
     clear: oc.input(botId).output(z.object({ ok: z.literal(true) })),
     answer: oc
       .input(
-        threadTarget.extend({
+        threadTarget.safeExtend({
           runId: Id,
           messageId: Id,
           answer: z.string().min(1),

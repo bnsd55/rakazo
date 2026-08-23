@@ -149,6 +149,7 @@ async function lockAndLoadGroupMembers(
     },
     include: {
       members: {
+        where: { bot: { archivedAt: null } },
         include: { bot: { select: { id: true, name: true, color: true } } },
         orderBy: { createdAt: "asc" },
       },

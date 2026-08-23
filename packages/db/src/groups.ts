@@ -81,7 +81,12 @@ async function assertOwnedBots(
     select: { id: true, name: true, color: true },
   });
   if (bots.length !== unique.length) throw new IsolationError();
-  return bots.map((bot) => ({ botId: bot.id, name: bot.name, color: bot.color }));
+  const botsById = new Map(bots.map((bot) => [bot.id, bot]));
+  return unique.map((botId) => {
+    const bot = botsById.get(botId);
+    if (!bot) throw new IsolationError();
+    return { botId: bot.id, name: bot.name, color: bot.color };
+  });
 }
 
 const groupInclude = {
@@ -91,6 +96,7 @@ const groupInclude = {
     },
   },
   members: {
+    where: { bot: { archivedAt: null } },
     include: { bot: { select: { id: true, name: true, color: true } } },
     orderBy: { createdAt: "asc" as const },
   },
@@ -99,6 +105,7 @@ const groupInclude = {
 const groupTargetInclude = {
   thread: { select: { id: true } },
   members: {
+    where: { bot: { archivedAt: null } },
     include: { bot: { select: { id: true, name: true, color: true } } },
     orderBy: { createdAt: "asc" as const },
   },
@@ -134,7 +141,7 @@ export function createGroupRepos(prisma: PrismaClient) {
     },
 
     async createGroup(actor: Actor, input: { name: string; botIds: string[] }): Promise<Group> {
-      await assertOwnedBots(prisma, actor, input.botIds);
+      const members = await assertOwnedBots(prisma, actor, input.botIds);
       const created = await prisma.$transaction(async (tx) => {
         const group = await tx.chatGroup.create({
           data: {
@@ -144,7 +151,7 @@ export function createGroupRepos(prisma: PrismaClient) {
           },
         });
         await tx.chatGroupMember.createMany({
-          data: input.botIds.map((botId) => ({ groupId: group.id, botId })),
+          data: members.map((member) => ({ groupId: group.id, botId: member.botId })),
         });
         await tx.thread.create({
           data: {
@@ -165,7 +172,7 @@ export function createGroupRepos(prisma: PrismaClient) {
       actor: Actor,
       input: { groupId: string; name?: string; botIds?: string[] },
     ): Promise<{ group: Group; cancelledRunIds: string[] }> {
-      if (input.botIds) await assertOwnedBots(prisma, actor, input.botIds);
+      const members = input.botIds ? await assertOwnedBots(prisma, actor, input.botIds) : undefined;
       const updated = await prisma.$transaction(async (tx) => {
         await lockOwnedGroup(tx, actor, input.groupId);
         const current = await tx.chatGroup.findFirst({
@@ -177,7 +184,9 @@ export function createGroupRepos(prisma: PrismaClient) {
           include: { members: { select: { botId: true } }, thread: { select: { id: true } } },
         });
         if (!current?.thread) throw new IsolationError();
-        const nextBotIds = new Set(input.botIds ?? current.members.map((member) => member.botId));
+        const nextBotIds = new Set(
+          members?.map((member) => member.botId) ?? current.members.map((member) => member.botId),
+        );
         const removedBotIds = current.members
           .map((member) => member.botId)
           .filter((botId) => !nextBotIds.has(botId));
@@ -219,10 +228,10 @@ export function createGroupRepos(prisma: PrismaClient) {
             data: { name: input.name.trim() },
           });
         }
-        if (input.botIds) {
+        if (members) {
           await tx.chatGroupMember.deleteMany({ where: { groupId: input.groupId } });
           await tx.chatGroupMember.createMany({
-            data: input.botIds.map((botId) => ({ groupId: input.groupId, botId })),
+            data: members.map((member) => ({ groupId: input.groupId, botId: member.botId })),
           });
         }
         await tx.chatGroup.update({

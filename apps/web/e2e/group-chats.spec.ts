@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { captureScreenshot, completeOnboarding, openNewBot, signup } from "./helpers";
+import {
+  activeBotId,
+  captureScreenshot,
+  completeOnboarding,
+  openNewBot,
+  rpc,
+  signup,
+} from "./helpers";
 
 async function createBot(page: import("@playwright/test").Page, name: string) {
   const botList = page.locator("aside").first();
@@ -10,6 +17,7 @@ async function createBot(page: import("@playwright/test").Page, name: string) {
   await expect(botList.getByRole("button", { name: new RegExp(`^${name}`) })).toBeVisible();
   await expect(page.getByPlaceholder(`Message ${name}`)).toBeVisible();
   await page.waitForURL(/\/app\/[^/]+$/);
+  return activeBotId(page);
 }
 
 test("create group from + and see two bots in one transcript", async ({ page }, testInfo) => {
@@ -19,8 +27,8 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await page.goto("/app");
   await page.waitForURL(/\/app\/[^/]+$/);
 
-  await createBot(page, "Researcher");
-  await createBot(page, "Research Writer");
+  const researcherId = await createBot(page, "Researcher");
+  const writerId = await createBot(page, "Research Writer");
 
   await page.getByTitle("Create").click();
   await page.getByRole("button", { name: "New group" }).click();
@@ -32,8 +40,23 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await page.getByRole("button", { name: "Create group", exact: true }).click();
   await page.waitForURL(/\/app\/g\/[^/]+$/);
   const groupUrl = page.url();
+  await rpc(page, "groups/create", {
+    name: "Review team",
+    botIds: [researcherId, writerId],
+  });
   await page.reload();
   await expect(page).toHaveURL(groupUrl);
+
+  await page.getByTestId("bot-settings-trigger").click();
+  const desktopSettings = page.getByTestId("side-panel");
+  const groupName = desktopSettings.locator("label:has-text('Name') input");
+  await groupName.fill("Unsaved Draft team name");
+  const sidebar = page.locator("aside").first();
+  await sidebar.getByRole("button", { name: /Review team/ }).click();
+  await expect(groupName).toHaveValue("Review team");
+  await sidebar.getByRole("button", { name: /Draft team/ }).click();
+  await expect(groupName).toHaveValue("Draft team");
+  await desktopSettings.getByRole("button", { name: "Save", exact: true }).click();
 
   const composer = page.getByPlaceholder("Message Draft team");
   await composer.fill("@Res");
