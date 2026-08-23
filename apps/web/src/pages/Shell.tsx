@@ -409,7 +409,16 @@ export function ShellPage() {
   async function loadOlderMessages() {
     const targetBotId = inGroup ? undefined : active?.id;
     const targetGroupId = inGroup ? groupId : undefined;
-    if ((!targetBotId && !targetGroupId) || snapshot?.olderCursor == null || loadingOlder) return;
+    const snapshotMatchesTarget = targetGroupId
+      ? snapshot?.groupId === targetGroupId
+      : snapshot?.botId === targetBotId;
+    if (
+      (!targetBotId && !targetGroupId) ||
+      !snapshotMatchesTarget ||
+      snapshot?.olderCursor == null ||
+      loadingOlder
+    )
+      return;
     pinnedAroundRef.current = null;
     const scrollElement = messageScroll.current;
     const previousHeight = scrollElement?.scrollHeight ?? 0;
@@ -802,21 +811,30 @@ export function ShellPage() {
       });
     }
   }, [active?.id, routines, routinesBotId, searchParams, setSearchParams]);
-  const answerableAskMessageId = latestAnswerableAskMessageId(snapshot);
+  const activeSnapshot = inGroup
+    ? snapshot?.groupId === groupId
+      ? snapshot
+      : null
+    : snapshot?.botId === active?.id
+      ? snapshot
+      : null;
+  const activeReplyTarget =
+    replyTarget && activeSnapshot?.messages.some((message) => message.id === replyTarget.id)
+      ? replyTarget
+      : null;
+  const answerableAskMessageId = latestAnswerableAskMessageId(activeSnapshot);
   const transcriptArtifactTarget = useMemo<ArtifactTarget>(
     () => (inGroup ? { groupId: groupId ?? "" } : { botId: active?.id ?? "" }),
     [active?.id, groupId, inGroup],
   );
-  const transcriptMembers = snapshot?.members ?? activeGroup?.members;
+  const transcriptMembers = activeSnapshot?.members ?? activeGroup?.members;
   const resolveTranscriptMemberName = useCallback(
     (botId: string | undefined) => memberName(transcriptMembers, botId),
     [transcriptMembers],
   );
   const shellReady =
     initialBotsLoaded &&
-    (inGroup
-      ? Boolean(activeGroup && snapshot?.groupId === activeGroup.id)
-      : Boolean(active && snapshot?.botId === active.id));
+    (inGroup ? Boolean(activeGroup && activeSnapshot) : Boolean(active && activeSnapshot));
   const refreshThreadRef = useRef(refreshThread);
   refreshThreadRef.current = refreshThread;
   const refreshGroupThreadRef = useRef(refreshGroupThread);
@@ -936,14 +954,14 @@ export function ShellPage() {
             text: trimmed || undefined,
             mentions: mentions?.length ? mentions : undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
-            replyToMessageId: replyTarget?.id,
+            replyToMessageId: activeReplyTarget?.id,
           });
         } else if (botTarget) {
           await rpc.threads.send({
             botId: botTarget,
             text: trimmed || undefined,
             artifactIds: artifactIds.length ? artifactIds : undefined,
-            replyToMessageId: replyTarget?.id,
+            replyToMessageId: activeReplyTarget?.id,
           });
         }
         setReplyTarget(null);
@@ -965,7 +983,7 @@ export function ShellPage() {
         setSending(false);
       }
     },
-    [pendingAttachments, replyTarget?.id, sending],
+    [activeReplyTarget?.id, pendingAttachments, sending],
   );
   const followUpMessage = useCallback(async (text: string) => {
     const id = activeBotId.current;
@@ -1500,7 +1518,7 @@ export function ShellPage() {
               <span className="min-w-0">
                 <span className="block truncate text-[16px] font-medium text-[#ECECEE]">
                   {inGroup
-                    ? (activeGroup?.name ?? snapshot?.groupName ?? "Group")
+                    ? (activeGroup?.name ?? activeSnapshot?.groupName ?? "Group")
                     : (active?.name ?? "Select a bot")}
                 </span>
               </span>
@@ -1541,12 +1559,13 @@ export function ShellPage() {
         <Transcript
           scrollRef={messageScroll}
           artifactTarget={transcriptArtifactTarget}
-          messages={snapshot?.messages ?? []}
-          olderCursor={snapshot?.olderCursor ?? null}
+          messages={activeSnapshot?.messages ?? []}
+          olderCursor={activeSnapshot?.olderCursor ?? null}
           loadingOlder={loadingOlder}
           answerableAskMessageId={answerableAskMessageId}
           running={Boolean(
-            snapshot?.run && ["running", "queued", "leased"].includes(snapshot.run.status),
+            activeSnapshot?.run &&
+              ["running", "queued", "leased"].includes(activeSnapshot.run.status),
           )}
           onLoadOlder={loadOlder}
           onOpenBot={openBot}
@@ -1566,8 +1585,8 @@ export function ShellPage() {
         ) : null}
         <Composer
           key={inGroup ? `group:${groupId}` : `bot:${active?.id}`}
-          activeName={inGroup ? (activeGroup?.name ?? snapshot?.groupName) : active?.name}
-          running={Boolean(snapshot?.run && isActive(snapshot.run.status))}
+          activeName={inGroup ? (activeGroup?.name ?? activeSnapshot?.groupName) : active?.name}
+          running={Boolean(activeSnapshot?.run && isActive(activeSnapshot.run.status))}
           disabled={Boolean(recordingSkill)}
           pendingAttachments={activePendingAttachments}
           attachmentNotice={attachmentNotice}
@@ -1579,11 +1598,11 @@ export function ShellPage() {
           onRemoveAttachment={removeAttachment}
           onSend={sendMessage}
           onStop={stopRun}
-          replyTarget={replyTarget}
+          replyTarget={activeReplyTarget}
           onClearReply={() => setReplyTarget(null)}
           mentionMembers={
             inGroup
-              ? (snapshot?.members ?? activeGroup?.members)?.map((member) => ({
+              ? (activeSnapshot?.members ?? activeGroup?.members)?.map((member) => ({
                   botId: member.botId,
                   name: member.name,
                 }))
@@ -2079,7 +2098,7 @@ export function ShellPage() {
             botId={active.id}
             botName={active.name}
             transcribe={Boolean(voiceStatus?.transcribe)}
-            snapshot={snapshot}
+            snapshot={activeSnapshot}
             onSend={sendMessage}
             onFollowUp={followUpMessage}
             onAnswer={answerMessage}
@@ -2257,7 +2276,7 @@ const Transcript = memo(function Transcript({
             type="button"
             aria-label="Reply"
             onClick={() => onReply(message)}
-            className="absolute right-0 top-0 hidden rounded px-2 py-1 text-[12px] text-[#85858A] group-hover/message:block hover:text-[#ECECEE]"
+            className="absolute right-0 top-0 rounded px-2 py-1 text-[12px] text-[#85858A] opacity-0 group-hover/message:opacity-100 hover:text-[#ECECEE] focus:opacity-100"
           >
             Reply
           </button>

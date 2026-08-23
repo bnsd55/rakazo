@@ -40,7 +40,7 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await page.getByRole("button", { name: "Create group", exact: true }).click();
   await page.waitForURL(/\/app\/g\/[^/]+$/);
   const groupUrl = page.url();
-  await rpc(page, "groups/create", {
+  const reviewGroup = await rpc<{ id: string }>(page, "groups/create", {
     name: "Review team",
     botIds: [researcherId, writerId],
   });
@@ -103,6 +103,40 @@ test("create group from + and see two bots in one transcript", async ({ page }, 
   await page.getByRole("textbox", { name: "Answer" }).fill("Paris");
   await page.getByRole("button", { name: "Send answer" }).click();
   await expect(page.getByText("Answered: Paris", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  const replyButton = transcript.getByRole("button", { name: "Reply" }).first();
+  await replyButton.focus();
+  await expect(replyButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Replying to", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel reply" }).click();
+
+  let releaseReviewSnapshot!: () => void;
+  let sawReviewSnapshot!: () => void;
+  const reviewSnapshotReleased = new Promise<void>((resolve) => {
+    releaseReviewSnapshot = resolve;
+  });
+  const reviewSnapshotIntercepted = new Promise<void>((resolve) => {
+    sawReviewSnapshot = resolve;
+  });
+  await page.route("**/rpc/threads/get", async (route) => {
+    if (route.request().postData()?.includes(reviewGroup.id) !== true) {
+      await route.continue();
+      return;
+    }
+    sawReviewSnapshot();
+    await reviewSnapshotReleased;
+    await route.continue();
+  });
+  await sidebar.getByRole("button", { name: /Review team/ }).click();
+  await reviewSnapshotIntercepted;
+  await expect(page).toHaveURL(new RegExp(`/app/g/${reviewGroup.id}$`));
+  await expect(page.getByTestId("transcript")).not.toContainText("Answered: Paris");
+  releaseReviewSnapshot();
+  await expect(page.getByPlaceholder("Message Review team")).toBeVisible();
+  await page.unroute("**/rpc/threads/get");
+  await sidebar.getByRole("button", { name: /Draft team/ }).click();
+  await expect(page.getByText("Answered: Paris", { exact: true })).toBeVisible();
 
   await composer.fill(
     "@Researcher write path notes/group-preview.md and attach it to the thread says # Group artifact",
