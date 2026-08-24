@@ -66,12 +66,17 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
         ? provider
         : (nextMe.defaultProvider ?? nextCatalog[0]?.provider ?? "");
     const nextModel =
-      nextCatalog.find((entry) => entry.provider === nextProvider && entry.id === modelId)?.id ??
-      nextCatalog.find(
-        (entry) => entry.provider === nextProvider && entry.id === nextMe.defaultModel,
-      )?.id ??
-      nextCatalog.find((entry) => entry.provider === nextProvider)?.id ??
-      "";
+      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+        ? (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+            ? nextMe.defaultModel
+            : modelId.trim()) || ""
+        : (nextCatalog.find((entry) => entry.provider === nextProvider && entry.id === modelId)
+            ?.id ??
+          nextCatalog.find(
+            (entry) => entry.provider === nextProvider && entry.id === nextMe.defaultModel,
+          )?.id ??
+          nextCatalog.find((entry) => entry.provider === nextProvider)?.id ??
+          "");
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
     setMe(nextMe);
@@ -128,7 +133,11 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   function chooseProvider(nextProvider: string) {
     cancelOAuthAttempt();
     setProvider(nextProvider);
-    setModelId(catalog.find((entry) => entry.provider === nextProvider)?.id ?? "");
+    setModelId(
+      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+        ? ""
+        : (catalog.find((entry) => entry.provider === nextProvider)?.id ?? ""),
+    );
     detailScrollRef.current?.scrollTo({ top: 0 });
     setApiKey("");
     setProbeModels([]);

@@ -63,10 +63,20 @@ describe("openai-compatible provider", () => {
 
   it("probes /v1/models with mocked fetch", async () => {
     const fetchImpl = async () =>
-      new Response(JSON.stringify({ models: [{ id: "a" }, { id: "b" }] }), { status: 200 });
+      new Response(JSON.stringify({ object: "list", data: [{ id: "a" }, { id: "b" }] }), {
+        status: 200,
+      });
     await expect(
       probeOpenAiCompatibleModels({ baseUrl: "http://127.0.0.1:8000/v1" }, fetchImpl),
     ).resolves.toEqual(["a", "b"]);
+  });
+
+  it("still accepts legacy models[] probe responses", async () => {
+    const fetchImpl = async () =>
+      new Response(JSON.stringify({ models: [{ id: "legacy" }] }), { status: 200 });
+    await expect(
+      probeOpenAiCompatibleModels({ baseUrl: "http://127.0.0.1:8000/v1" }, fetchImpl),
+    ).resolves.toEqual(["legacy"]);
   });
 
   it("lists openai-compatible in the catalog even without RAKAZO_LOCAL_MODELS", () => {

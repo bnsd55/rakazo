@@ -82,7 +82,7 @@ export function OnboardingPage() {
           models[0];
         if (preferred) {
           setProvider(preferred.provider);
-          setModelId(preferred.id);
+          setModelId(preferred.provider === OPENAI_COMPATIBLE_PROVIDER_ID ? "" : preferred.id);
         }
         setStep("model");
       })
@@ -291,8 +291,12 @@ export function OnboardingPage() {
                   onClick={() => {
                     cancelOAuthAttempt();
                     setProvider(entry.provider);
-                    const first = catalog.find((item) => item.provider === entry.provider);
-                    if (first) setModelId(first.id);
+                    setModelId(
+                      entry.provider === OPENAI_COMPATIBLE_PROVIDER_ID
+                        ? ""
+                        : (catalog.find((item) => item.provider === entry.provider)?.id ?? ""),
+                    );
+                    setProbeModels([]);
                     setError(null);
                   }}
                   className={`flex w-full items-center justify-between border-b border-[#202023] px-3.5 py-2.5 text-left last:border-0 ${

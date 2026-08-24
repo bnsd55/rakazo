@@ -71,13 +71,18 @@ export default function Models() {
       nextCatalog[0]?.provider ??
       "";
     const nextModel =
-      nextCatalog.find((entry) => entry.provider === nextProvider && entry.id === preferred.modelId)
-        ?.id ??
-      nextCatalog.find(
-        (entry) => entry.provider === nextProvider && entry.id === nextMe.defaultModel,
-      )?.id ??
-      nextCatalog.find((entry) => entry.provider === nextProvider)?.id ??
-      "";
+      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+        ? preferred.modelId?.trim() ||
+          (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ||
+          ""
+        : (nextCatalog.find(
+            (entry) => entry.provider === nextProvider && entry.id === preferred.modelId,
+          )?.id ??
+          nextCatalog.find(
+            (entry) => entry.provider === nextProvider && entry.id === nextMe.defaultModel,
+          )?.id ??
+          nextCatalog.find((entry) => entry.provider === nextProvider)?.id ??
+          "");
     setMe(nextMe);
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
@@ -126,7 +131,11 @@ export default function Models() {
   function chooseProvider(nextProvider: string) {
     cancelOAuth();
     setProvider(nextProvider);
-    setModelId(catalog.find((entry) => entry.provider === nextProvider)?.id ?? "");
+    setModelId(
+      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+        ? ""
+        : (catalog.find((entry) => entry.provider === nextProvider)?.id ?? ""),
+    );
     setApiKey("");
     setProbeModels([]);
     setError(null);

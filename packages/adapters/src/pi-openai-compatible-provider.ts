@@ -109,8 +109,24 @@ export function prepareOpenAiCompatibleConnect(input: OpenAiCompatibleConnectInp
 }
 
 export type OpenAiCompatibleModelsResponse = {
-  models: Array<{ id: string }>;
+  object?: string;
+  data?: Array<{ id?: string }>;
+  models?: Array<{ id?: string }>;
 };
+
+function probeModelIds(body: OpenAiCompatibleModelsResponse): string[] {
+  const entries = Array.isArray(body.data)
+    ? body.data
+    : Array.isArray(body.models)
+      ? body.models
+      : null;
+  if (!entries) {
+    throw new Error("Model server response did not include a models list");
+  }
+  return entries
+    .map((entry) => (typeof entry?.id === "string" ? entry.id.trim() : ""))
+    .filter((id) => id.length > 0);
+}
 
 export async function probeOpenAiCompatibleModels(
   input: { baseUrl: string; apiKey?: string },
@@ -132,12 +148,7 @@ export async function probeOpenAiCompatibleModels(
       throw new Error(`Model server returned ${response.status}`);
     }
     const body = (await response.json()) as OpenAiCompatibleModelsResponse;
-    if (!Array.isArray(body.models)) {
-      throw new Error("Model server response did not include a models list");
-    }
-    return body.models
-      .map((entry) => (typeof entry?.id === "string" ? entry.id.trim() : ""))
-      .filter((id) => id.length > 0);
+    return probeModelIds(body);
   } finally {
     clearTimeout(timeout);
   }
