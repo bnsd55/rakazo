@@ -50,12 +50,21 @@ describe("openai-compatible URL policy", () => {
     );
   });
 
-  it("blocks cloud metadata endpoints", () => {
+  it("blocks metadata and link-local endpoints", () => {
     expect(() =>
       assertAllowedOpenAiCompatibleUrl("http://169.254.169.254/latest/meta-data/"),
-    ).toThrow(/blocked metadata host/);
+    ).toThrow(/blocked metadata or link-local host/);
+    expect(() => assertAllowedOpenAiCompatibleUrl("http://169.254.1.1/v1")).toThrow(
+      /blocked metadata or link-local host/,
+    );
+    expect(() => assertAllowedOpenAiCompatibleUrl("http://[fe80::1]/v1")).toThrow(
+      /blocked metadata or link-local host/,
+    );
+    expect(() => assertAllowedOpenAiCompatibleUrl("http://[::ffff:169.254.1.1]/v1")).toThrow(
+      /blocked metadata or link-local host/,
+    );
     expect(() => assertAllowedOpenAiCompatibleUrl("http://metadata.google.internal/")).toThrow(
-      /blocked metadata host/,
+      /blocked metadata or link-local host/,
     );
   });
 

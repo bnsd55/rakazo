@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@rakazo/contracts";
-import { isPrivateAddress } from "./network-address.js";
+import { isLinkLocalAddress, isPrivateAddress } from "./network-address.js";
 
 export { OPENAI_COMPATIBLE_PROVIDER_ID };
 
@@ -55,7 +55,9 @@ function isPrivateHostname(hostname: string): boolean {
 
 function isBlockedHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
-  return METADATA_HOSTS.has(normalized);
+  return (
+    METADATA_HOSTS.has(normalized) || (isIP(normalized) !== 0 && isLinkLocalAddress(normalized))
+  );
 }
 
 export function assertAllowedOpenAiCompatibleUrl(
@@ -66,7 +68,7 @@ export function assertAllowedOpenAiCompatibleUrl(
   const url = new URL(normalized);
   const hostname = normalizeHostname(url.hostname);
   if (isBlockedHostname(hostname)) {
-    throw new Error("Base URL targets a blocked metadata host");
+    throw new Error("Base URL targets a blocked metadata or link-local host");
   }
   const allowPublic = opts?.allowPublic ?? openAiCompatAllowPublicHosts();
   if (isPrivateHostname(hostname)) return url;

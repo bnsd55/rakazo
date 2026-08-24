@@ -31,6 +31,25 @@ export function isPrivateAddress(address: string): boolean {
   );
 }
 
+export function isLinkLocalAddress(address: string): boolean {
+  const value = address.toLowerCase().replace(/^\[|\]$/g, "");
+  const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  const ipv4 = mapped ?? (isIP(value) === 4 ? value : undefined);
+  if (ipv4) {
+    const [a, b] = ipv4.split(".").map(Number);
+    return a === 169 && b === 254;
+  }
+
+  const ipv6 = parseIpv6(value);
+  if (ipv6 === undefined) return false;
+  const ipv4Prefix = ipv6 >> 32n;
+  if (ipv4Prefix === 0xffffn || ipv4Prefix === 0n) {
+    const embeddedIpv4 = Number(ipv6 & 0xffffffffn);
+    return ((embeddedIpv4 >>> 24) & 0xff) === 169 && ((embeddedIpv4 >>> 16) & 0xff) === 254;
+  }
+  return ipv6 >> 118n === 0x3fan;
+}
+
 function parseIpv6(value: string): bigint | undefined {
   if (isIP(value) !== 6) return undefined;
   const [leftValue, rightValue] = value.split("::", 2);
