@@ -1,6 +1,6 @@
 import type { ModelConnectInput, ModelCredential } from "@rakazo/contracts";
 import { OPENAI_COMPATIBLE_PROVIDER_ID as CONTRACT_OPENAI_COMPAT } from "@rakazo/contracts";
-import { parseModelSecret, serializeModelSecret, type StoredModelSecret } from "./pi-oauth.js";
+import { parseModelSecret, type StoredModelSecret, serializeModelSecret } from "./pi-oauth.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
   prepareOpenAiCompatibleConnect,

@@ -73,10 +73,10 @@ export default function Models() {
     const nextCredential = nextCredentials.find((entry) => entry.provider === nextProvider);
     const nextModel =
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
-        ? (preferred.modelId?.trim() ||
-            nextCredential?.modelId ||
-            (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ||
-            "")
+        ? preferred.modelId?.trim() ||
+          nextCredential?.modelId ||
+          (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ||
+          ""
         : (nextCatalog.find(
             (entry) => entry.provider === nextProvider && entry.id === preferred.modelId,
           )?.id ??

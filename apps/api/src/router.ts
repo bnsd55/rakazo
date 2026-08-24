@@ -20,7 +20,6 @@ import {
   archiveBot,
   buildModelConnectPlaintext,
   ComputerBusyError,
-  modelCredentialDto,
   type ComputerExecutionLease,
   type ConnectorRegistry,
   checkpointAndRecordComputerWorkspace,
@@ -33,6 +32,7 @@ import {
   hasActiveComputerControl,
   listPiCatalog,
   type MemoryProviderResolver,
+  modelCredentialDto,
   type PiOAuthLogins,
   planLiveConnectionSync,
   prepareApiInstall,
@@ -290,7 +290,14 @@ export function createRouter(deps: RouterDeps) {
         return Promise.all(
           rows.map(async (row) => {
             const secret = await deps.prisma.secret.findUnique({ where: { id: row.secretId } });
-            const plaintext = secret ? deps.secrets.load(secret.ciphertext) : undefined;
+            let plaintext: string | undefined;
+            if (secret?.ciphertext) {
+              try {
+                plaintext = deps.secrets.load(secret.ciphertext);
+              } catch {
+                plaintext = undefined;
+              }
+            }
             return modelCredentialDto(row, plaintext);
           }),
         );
