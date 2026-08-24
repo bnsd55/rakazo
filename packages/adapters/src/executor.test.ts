@@ -101,7 +101,9 @@ describe("createRunExecutor", () => {
       events: { append },
     } as unknown as Parameters<typeof createRunExecutor>[0]);
 
-    await expect(executor.wakeRoutine("routine-1", scheduledAt.toISOString())).resolves.toBeUndefined();
+    await expect(
+      executor.wakeRoutine("routine-1", scheduledAt.toISOString()),
+    ).resolves.toBeUndefined();
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ name: "run.continue" }));
     expect(cancel).toHaveBeenCalledWith("routine:routine-1");
   });

@@ -1500,9 +1500,7 @@ export function createRouter(deps: RouterDeps) {
         }
         const bot = await repos.getBot(context.actor, input.botId);
         // Inactive @once rows skip nextRoutineDate — it rejects @once.
-        const nextRunAt = input.active
-          ? nextRoutineDate(input.cron, input.timezone)
-          : null;
+        const nextRunAt = input.active ? nextRoutineDate(input.cron, input.timezone) : null;
         const row = await deps.prisma.routine.create({
           data: {
             workspaceId: context.actor.workspaceId,
