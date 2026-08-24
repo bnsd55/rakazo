@@ -146,7 +146,7 @@ export default function Models() {
   const acceptsKey = selected?.auth !== "oauth";
   const subscriptionSignIn = selected?.signIn !== undefined;
   const busy = pending !== null || oauthPending;
-  const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
+  const effectiveBaseUrl = baseUrl.trim();
   const openAiCompatibleReady = openAiCompatibleConnectReady({
     baseUrl: effectiveBaseUrl,
     modelId,
@@ -240,7 +240,6 @@ export default function Models() {
   async function connectKey() {
     if (!selected) return;
     if (isOpenAiCompatible) {
-      const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
       if (!effectiveBaseUrl || !modelId.trim()) return;
     } else if (!apiKey.trim()) {
       return;
@@ -248,7 +247,6 @@ export default function Models() {
     setError(null);
     setNotice(null);
     setPending("connect");
-    const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
     try {
       await rpc(
         "models/connect",

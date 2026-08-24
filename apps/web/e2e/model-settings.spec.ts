@@ -84,6 +84,12 @@ test("connects, lists, and uses an OpenAI-compatible endpoint", async ({ page },
     await expect(page.getByText(/Connected · OpenAI-compatible/)).toBeVisible();
     await captureScreenshot(page, testInfo, "openai-compatible-connected");
 
+    await page.getByLabel("OpenAI-compatible base URL").fill("");
+    await expect(page.getByRole("button", { name: "Test & list models" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Replace connection" })).toBeDisabled();
+    await page.getByLabel("OpenAI-compatible base URL").fill(baseUrl);
+    await expect(page.getByRole("button", { name: "Replace connection" })).toBeEnabled();
+
     if (process.env.AGENT_RUNTIME === "pi") {
       await page.getByRole("button", { name: "Close model settings" }).click();
       const composer = page.getByPlaceholder(/Message/);

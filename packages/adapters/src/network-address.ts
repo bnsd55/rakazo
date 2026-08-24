@@ -52,7 +52,10 @@ export function isLinkLocalAddress(address: string): boolean {
 
 function parseIpv6(value: string): bigint | undefined {
   if (isIP(value) !== 6) return undefined;
-  const [leftValue, rightValue] = value.split("::", 2);
+  const dottedTail = value.slice(value.lastIndexOf(":") + 1);
+  const normalized = dottedTail.includes(".") ? replaceIpv4Tail(value, dottedTail) : value;
+  if (!normalized) return undefined;
+  const [leftValue, rightValue] = normalized.split("::", 2);
   const left = leftValue ? leftValue.split(":") : [];
   const right = rightValue ? rightValue.split(":") : [];
   const missing = 8 - left.length - right.length;
@@ -64,6 +67,15 @@ function parseIpv6(value: string): bigint | undefined {
   } catch {
     return undefined;
   }
+}
+
+function replaceIpv4Tail(value: string, tail: string): string | undefined {
+  if (isIP(tail) !== 4) return undefined;
+  const [a, b, c, d] = tail.split(".").map(Number);
+  if (a == null || b == null || c == null || d == null) return undefined;
+  const first = ((a << 8) | b).toString(16);
+  const second = ((c << 8) | d).toString(16);
+  return `${value.slice(0, value.lastIndexOf(":") + 1)}${first}:${second}`;
 }
 
 function isPrivateIpv4Number(value: number): boolean {

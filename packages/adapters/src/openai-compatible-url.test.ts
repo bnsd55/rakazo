@@ -63,6 +63,9 @@ describe("openai-compatible URL policy", () => {
     expect(() => assertAllowedOpenAiCompatibleUrl("http://[::ffff:169.254.1.1]/v1")).toThrow(
       /blocked metadata or link-local host/,
     );
+    expect(() => assertAllowedOpenAiCompatibleUrl("http://[::169.254.1.1]/v1")).toThrow(
+      /blocked metadata or link-local host/,
+    );
     expect(() => assertAllowedOpenAiCompatibleUrl("http://metadata.google.internal/")).toThrow(
       /blocked metadata or link-local host/,
     );

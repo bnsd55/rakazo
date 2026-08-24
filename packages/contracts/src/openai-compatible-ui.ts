@@ -1,5 +1,5 @@
 export const OPENAI_COMPATIBLE_BASE_URL_HINT =
-  "Use the base URL your server exposes for /v1/models — often http://127.0.0.1:8000/v1 for MTPLX, Ollama, or LM Studio.";
+  "Use the base URL your server exposes for /v1/models — often http://127.0.0.1:8000/v1 for Rapid-MLX, Ollama, or LM Studio.";
 
 export function openAiCompatibleConnectReady(input: {
   baseUrl: string;

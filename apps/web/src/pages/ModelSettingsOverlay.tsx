@@ -152,7 +152,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   const acceptsKey = selected?.auth !== "oauth";
   const subscriptionSignIn = selected?.signIn !== undefined;
   const busy = pending !== null || oauthPending;
-  const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
+  const effectiveBaseUrl = baseUrl.trim();
   const openAiCompatibleReady = openAiCompatibleConnectReady({
     baseUrl: effectiveBaseUrl,
     modelId,
@@ -248,7 +248,6 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   async function connectKey() {
     if (!selected) return;
     if (isOpenAiCompatible) {
-      const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
       if (!effectiveBaseUrl || !modelId.trim()) return;
     } else if (!apiKey.trim()) {
       return;
@@ -256,7 +255,6 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setError(null);
     setNotice(null);
     setPending("connect");
-    const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
     try {
       await rpc.models.connect(
         isOpenAiCompatible
