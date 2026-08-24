@@ -158,6 +158,43 @@ describe("schedule tool persistence", () => {
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
+  it("rolls back routine and job when event append fails", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const remove = vi.fn(async () => undefined);
+    const deps = {
+      prisma: {
+        routine: {
+          create: vi.fn(async () => ({
+            id: "routine-1",
+            name: "Morning joke",
+            nextRunAt: new Date(),
+          })),
+          delete: remove,
+        },
+      },
+      events: {
+        append: vi.fn(async () => {
+          throw new Error("event failed");
+        }),
+      },
+      jobs: { enqueue: vi.fn(async () => undefined), cancel },
+    } as unknown as Parameters<typeof createScheduleFromTool>[0];
+
+    const result = await createScheduleFromTool(deps, {
+      workspaceId: "ws-1",
+      botId: "bot-1",
+      userId: "user-1",
+      threadId: "thread-1",
+      name: "Morning joke",
+      prompt: "Tell a joke",
+      schedule: { every: 1, unit: "minutes" },
+    });
+
+    expect(result).toEqual({ error: "Could not schedule the reminder. Try again." });
+    expect(cancel).toHaveBeenCalledWith("routine:routine-1");
+    expect(remove).toHaveBeenCalledWith({ where: { id: "routine-1" } });
+  });
+
   it("scopes list and cancel to workspace and user", async () => {
     const findMany = vi.fn(async () => []);
     const findFirst = vi.fn(async () => null);

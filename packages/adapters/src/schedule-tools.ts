@@ -200,18 +200,18 @@ export async function createScheduleFromTool(
 
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+    await deps.events.append({
+      workspaceId: input.workspaceId,
+      threadId: input.threadId,
+      botId: input.botId,
+      type: "routine.created",
+      payload: { name: row.name },
+    });
   } catch {
+    await deps.jobs.cancel(routineJobKey(row.id)).catch(() => undefined);
     await deps.prisma.routine.delete({ where: { id: row.id } });
     return { error: "Could not schedule the reminder. Try again." };
   }
-
-  await deps.events.append({
-    workspaceId: input.workspaceId,
-    threadId: input.threadId,
-    botId: input.botId,
-    type: "routine.created",
-    payload: { name: row.name },
-  });
 
   return {
     ok: true as const,
