@@ -205,14 +205,11 @@ export async function createScheduleFromTool(
       await deps.prisma.routine.delete({ where: { id: row.id } });
     } catch {
       // If delete fails, deactivate so a reconciler cannot fire a "failed" create.
-      try {
-        await deps.prisma.routine.update({
-          where: { id: row.id },
-          data: { active: false, nextRunAt: null },
-        });
-      } catch {
-        // Compensation exhausted; still report failure to the tool caller.
-      }
+      // Let deactivate errors propagate — do not soft-return while the row stays active.
+      await deps.prisma.routine.update({
+        where: { id: row.id },
+        data: { active: false, nextRunAt: null },
+      });
     }
     return { error: "Could not schedule the reminder. Try again." };
   }

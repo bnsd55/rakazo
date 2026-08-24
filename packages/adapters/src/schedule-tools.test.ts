@@ -273,6 +273,45 @@ describe("schedule tool persistence", () => {
     });
   });
 
+  it("propagates when enqueue rollback cannot deactivate", async () => {
+    const deps = {
+      prisma: {
+        routine: {
+          create: vi.fn(async () => ({
+            id: "routine-1",
+            name: "Morning joke",
+            nextRunAt: new Date(),
+          })),
+          delete: vi.fn(async () => {
+            throw new Error("delete failed");
+          }),
+          update: vi.fn(async () => {
+            throw new Error("update failed");
+          }),
+        },
+      },
+      events: { append: vi.fn(async () => undefined) },
+      jobs: {
+        enqueue: vi.fn(async () => {
+          throw new Error("enqueue failed");
+        }),
+        cancel: vi.fn(async () => undefined),
+      },
+    } as unknown as Parameters<typeof createScheduleFromTool>[0];
+
+    await expect(
+      createScheduleFromTool(deps, {
+        workspaceId: "ws-1",
+        botId: "bot-1",
+        userId: "user-1",
+        threadId: "thread-1",
+        name: "Morning joke",
+        prompt: "Tell a joke",
+        schedule: { every: 1, unit: "minutes" },
+      }),
+    ).rejects.toThrow("update failed");
+  });
+
   it("scopes list and cancel to workspace and user", async () => {
     const findMany = vi.fn(async () => []);
     const findFirst = vi.fn(async () => null);
