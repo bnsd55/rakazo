@@ -1,3 +1,4 @@
+import type { JobPublisher } from "@rakazo/adapter-kit";
 import { routineJobKey, routineWakeupJob } from "@rakazo/adapter-kit";
 import {
   cronFromPreset,
@@ -6,15 +7,10 @@ import {
   ONCE_ROUTINE_CRON,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
-import type { JobPublisher } from "@rakazo/adapter-kit";
 
 export { isOneShotRoutineCron, ONCE_ROUTINE_CRON };
 
-export const SCHEDULE_TOOL_NAMES = new Set([
-  "schedule_create",
-  "schedule_list",
-  "schedule_cancel",
-]);
+export const SCHEDULE_TOOL_NAMES = new Set(["schedule_create", "schedule_list", "schedule_cancel"]);
 
 export function filterBuiltinToolsForThread<T extends { name: string }>(
   tools: T[],
@@ -33,21 +29,28 @@ export type ResolvedSchedule =
   | { ok: true; cron: string; nextRunAt: Date; oneShot: boolean }
   | { ok: false; error: string };
 
-export function resolveScheduleTiming(input: {
-  cron?: unknown;
-  every?: unknown;
-  unit?: unknown;
-  runAt?: unknown;
-  delayMinutes?: unknown;
-  delaySeconds?: unknown;
-}): ResolvedSchedule {
-  const hasRepeat = input.cron !== undefined || input.every !== undefined || input.unit !== undefined;
+export function resolveScheduleTiming(
+  input: {
+    cron?: unknown;
+    every?: unknown;
+    unit?: unknown;
+    runAt?: unknown;
+    delayMinutes?: unknown;
+    delaySeconds?: unknown;
+  },
+  timezone = "UTC",
+): ResolvedSchedule {
+  const hasRepeat =
+    input.cron !== undefined || input.every !== undefined || input.unit !== undefined;
   const hasOneShot =
     input.runAt !== undefined ||
     input.delayMinutes !== undefined ||
     input.delaySeconds !== undefined;
   if (hasRepeat && hasOneShot) {
-    return { ok: false, error: "Provide either a repeating schedule or a one-shot time, not both." };
+    return {
+      ok: false,
+      error: "Provide either a repeating schedule or a one-shot time, not both.",
+    };
   }
   if (!hasRepeat && !hasOneShot) {
     return {
@@ -64,7 +67,8 @@ export function resolveScheduleTiming(input: {
     if (oneShotFields.length !== 1) {
       return {
         ok: false,
-        error: "Provide exactly one of runAt, delayMinutes, or delaySeconds for a one-shot schedule.",
+        error:
+          "Provide exactly one of runAt, delayMinutes, or delaySeconds for a one-shot schedule.",
       };
     }
     let nextRunAt: Date;
@@ -97,18 +101,25 @@ export function resolveScheduleTiming(input: {
     const cron = String(input.cron).trim();
     if (!cron) return { ok: false, error: "cron must be a non-empty 5-field cron expression." };
     if (isOneShotRoutineCron(cron)) {
-      return { ok: false, error: "Use runAt, delayMinutes, or delaySeconds for one-shot schedules." };
+      return {
+        ok: false,
+        error: "Use runAt, delayMinutes, or delaySeconds for one-shot schedules.",
+      };
     }
-    const intervalError = validateRepeatingCronFloor(cron);
+    const intervalError = validateRepeatingCron(cron);
     if (intervalError) return { ok: false, error: intervalError };
-    const nextRunAt = nextCronDate(cron, new Date());
-    return { ok: true, cron, nextRunAt, oneShot: false };
+    try {
+      const nextRunAt = nextCronDate(cron, new Date(), timezone);
+      return { ok: true, cron, nextRunAt, oneShot: false };
+    } catch {
+      return { ok: false, error: "cron must be a valid 5-field cron expression." };
+    }
   }
 
   const every = Number(input.every);
   const unit = String(input.unit ?? "") as ScheduleUnit;
-  if (!Number.isFinite(every) || every <= 0) {
-    return { ok: false, error: "every must be a positive number." };
+  if (!Number.isFinite(every) || every <= 0 || !Number.isInteger(every)) {
+    return { ok: false, error: "every must be a positive whole number." };
   }
   if (unit === "seconds") {
     return { ok: false, error: "minimum interval is 1 minute" };
@@ -120,20 +131,26 @@ export function resolveScheduleTiming(input: {
     return { ok: false, error: "minimum interval is 1 minute" };
   }
   const cron = cronFromPreset({ freq: "Interval", n: every, unit });
-  const intervalError = validateRepeatingCronFloor(cron);
+  const intervalError = validateRepeatingCron(cron);
   if (intervalError) return { ok: false, error: intervalError };
-  const nextRunAt = nextCronDate(cron, new Date());
-  return { ok: true, cron, nextRunAt, oneShot: false };
+  try {
+    const nextRunAt = nextCronDate(cron, new Date(), timezone);
+    return { ok: true, cron, nextRunAt, oneShot: false };
+  } catch {
+    return { ok: false, error: "every/unit produced an invalid cron expression." };
+  }
 }
 
-function validateRepeatingCronFloor(cron: string): string | null {
+function validateRepeatingCron(cron: string): string | null {
   const parts = cron.trim().split(/\s+/);
-  if (parts.length < 5) return null;
+  if (parts.length !== 5) return "cron must be a 5-field cron expression.";
   const minuteExpr = parts[0] ?? "*";
   const step = /^\*\/(\d+)$/.exec(minuteExpr);
   if (step) {
     const n = Number(step[1]);
-    if (Number.isFinite(n) && n < 1) return "minimum interval is 1 minute";
+    if (!Number.isFinite(n) || n < 1 || !Number.isInteger(n)) {
+      return "minimum interval is 1 minute";
+    }
   }
   return null;
 }
@@ -162,10 +179,10 @@ export async function createScheduleFromTool(
   if (!name) return { error: "name is required." };
   if (!prompt) return { error: "prompt is required." };
 
-  const resolved = resolveScheduleTiming(input.schedule);
+  const timezone = String(input.timezone ?? "UTC");
+  const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  const timezone = String(input.timezone ?? "UTC");
   const row = await deps.prisma.routine.create({
     data: {
       workspaceId: input.workspaceId,
@@ -188,7 +205,12 @@ export async function createScheduleFromTool(
     type: "routine.created",
     payload: { name: row.name },
   });
-  await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+  try {
+    await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+  } catch {
+    await deps.prisma.routine.delete({ where: { id: row.id } });
+    return { error: "Could not schedule the reminder. Try again." };
+  }
 
   return {
     ok: true as const,

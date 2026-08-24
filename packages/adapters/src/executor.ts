@@ -14,7 +14,12 @@ import type {
   SandboxProvider,
   SemanticMemoryProvider,
 } from "@rakazo/adapter-kit";
-import { historyCompactJob, routineJobKey, routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
+import {
+  historyCompactJob,
+  routineJobKey,
+  routineWakeupJob,
+  runContinueJob,
+} from "@rakazo/adapter-kit";
 import type { MessageBlock, RunStatus } from "@rakazo/contracts";
 import { ATTACHMENT_MAX_BYTES, isAttachmentImageMimeType } from "@rakazo/contracts";
 import {
@@ -333,12 +338,16 @@ export function createRunExecutor(deps: ExecutorDeps) {
         runId: claimed.id,
         payload: { routineId: routine.id, scheduledFor },
       });
+      await deps.jobs.enqueue(runContinueJob(claimed.id));
       if (isOneShotRoutineCron(routine.cron)) {
-        await deps.jobs.cancel(routineJobKey(routine.id));
+        try {
+          await deps.jobs.cancel(routineJobKey(routine.id));
+        } catch {
+          // Best effort: the run is already queued for continuation.
+        }
       } else if (nextRunAt) {
         await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
       }
-      await deps.jobs.enqueue(runContinueJob(claimed.id));
     },
 
     async continueRun(runId: string, workerId: string) {

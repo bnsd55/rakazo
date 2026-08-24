@@ -1456,6 +1456,11 @@ export function createRouter(deps: RouterDeps) {
         return listRoutinesDto(deps, context.actor, input.botId);
       }),
       create: authed.routines.create.handler(async ({ context, input }) => {
+        if (input.active && isOneShotRoutineCron(input.cron)) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "One-shot schedules must be created from chat.",
+          });
+        }
         const bot = await repos.getBot(context.actor, input.botId);
         const row = await deps.prisma.routine.create({
           data: {
@@ -1499,6 +1504,11 @@ export function createRouter(deps: RouterDeps) {
         const active = input.active ?? existing.active;
         const cron = input.cron ?? existing.cron;
         const timezone = input.timezone ?? existing.timezone;
+        if (active && isOneShotRoutineCron(cron) && !existing.nextRunAt) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "One-shot schedules cannot be reactivated after they fire.",
+          });
+        }
         const scheduleChanged =
           (!existing.active && active) ||
           (input.cron !== undefined && input.cron !== existing.cron) ||

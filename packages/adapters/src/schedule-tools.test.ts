@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import { ONCE_ROUTINE_CRON } from "@rakazo/core";
+import { describe, expect, it, vi } from "vitest";
 import {
   cancelScheduleFromTool,
   createScheduleFromTool,
@@ -54,11 +54,23 @@ describe("resolveScheduleTiming", () => {
   });
 
   it("rejects one-shot schedules in the past", () => {
-    expect(
-      resolveScheduleTiming({ runAt: new Date(Date.now() - 60_000).toISOString() }),
-    ).toEqual({
+    expect(resolveScheduleTiming({ runAt: new Date(Date.now() - 60_000).toISOString() })).toEqual({
       ok: false,
       error: "One-shot schedules must run in the future.",
+    });
+  });
+
+  it("rejects fractional repeat intervals", () => {
+    expect(resolveScheduleTiming({ every: 1.5, unit: "minutes" })).toEqual({
+      ok: false,
+      error: "every must be a positive whole number.",
+    });
+  });
+
+  it("rejects malformed cron expressions", () => {
+    expect(resolveScheduleTiming({ cron: "*/5 *" })).toEqual({
+      ok: false,
+      error: "cron must be a 5-field cron expression.",
     });
   });
 
@@ -71,11 +83,7 @@ describe("resolveScheduleTiming", () => {
 });
 
 describe("filterBuiltinToolsForThread", () => {
-  const tools = [
-    { name: "handoff_to_bot" },
-    { name: "schedule_create" },
-    { name: "remember" },
-  ];
+  const tools = [{ name: "handoff_to_bot" }, { name: "schedule_create" }, { name: "remember" }];
 
   it("keeps handoff only in groups and hides schedule tools outside 1:1", () => {
     expect(filterBuiltinToolsForThread(tools, "group-1").map((tool) => tool.name)).toEqual([
