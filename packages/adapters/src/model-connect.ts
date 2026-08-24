@@ -1,6 +1,6 @@
-import type { ModelConnectInput } from "@rakazo/contracts";
-import type { StoredModelSecret } from "./pi-oauth.js";
-import { serializeModelSecret } from "./pi-oauth.js";
+import type { ModelConnectInput, ModelCredential } from "@rakazo/contracts";
+import { OPENAI_COMPATIBLE_PROVIDER_ID as CONTRACT_OPENAI_COMPAT } from "@rakazo/contracts";
+import { parseModelSecret, serializeModelSecret, type StoredModelSecret } from "./pi-oauth.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
   prepareOpenAiCompatibleConnect,
@@ -21,4 +21,31 @@ export function buildModelConnectPlaintext(input: ModelConnectInput): string {
     throw new Error("API key must contain at least 8 characters");
   }
   return apiKey;
+}
+
+export function modelCredentialDto(
+  row: {
+    id: string;
+    provider: string;
+    label: string;
+    isDefault: boolean;
+    defaultModel?: string | null;
+  },
+  plaintext?: string,
+): ModelCredential {
+  const credential: ModelCredential = {
+    id: row.id,
+    provider: row.provider,
+    label: row.label,
+    hasKey: true,
+    isDefault: row.isDefault,
+  };
+  if (row.provider !== CONTRACT_OPENAI_COMPAT || !plaintext) return credential;
+  const parsed = parseModelSecret(plaintext);
+  if (parsed.kind !== "openai_compatible") return credential;
+  return {
+    ...credential,
+    baseUrl: parsed.baseUrl,
+    modelId: row.defaultModel ?? undefined,
+  };
 }

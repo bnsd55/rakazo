@@ -28,7 +28,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   const [providerQuery, setProviderQuery] = useState("");
   const [modelId, setModelId] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8000/v1");
+  const [baseUrl, setBaseUrl] = useState("");
   const [probeModels, setProbeModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
   const [oauth, setOauth] = useState<ModelOAuthBegin | null>(null);
@@ -65,11 +65,12 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
       provider && nextCatalog.some((entry) => entry.provider === provider)
         ? provider
         : (nextMe.defaultProvider ?? nextCatalog[0]?.provider ?? "");
+    const nextCredential = nextCredentials.find((entry) => entry.provider === nextProvider);
     const nextModel =
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
-        ? (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID
-            ? nextMe.defaultModel
-            : modelId.trim()) || ""
+        ? (nextCredential?.modelId ??
+          (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ??
+          "")
         : (nextCatalog.find((entry) => entry.provider === nextProvider && entry.id === modelId)
             ?.id ??
           nextCatalog.find(
@@ -82,6 +83,9 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setMe(nextMe);
     setProvider(nextProvider);
     setModelId(nextModel);
+    if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
+      setBaseUrl(nextCredential?.baseUrl ?? "");
+    }
   }
 
   useEffect(() => {
@@ -135,8 +139,13 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setProvider(nextProvider);
     setModelId(
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
-        ? ""
+        ? (credentials.find((entry) => entry.provider === nextProvider)?.modelId ?? "")
         : (catalog.find((entry) => entry.provider === nextProvider)?.id ?? ""),
+    );
+    setBaseUrl(
+      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+        ? (credentials.find((entry) => entry.provider === nextProvider)?.baseUrl ?? "")
+        : "",
     );
     detailScrollRef.current?.scrollTo({ top: 0 });
     setApiKey("");
@@ -172,6 +181,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setNotice(null);
     setPending("default");
     const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
+    if (isOpenAiCompatible && !activeModelId) return;
     try {
       await rpc.models.setDefault({ provider: selected.provider, modelId: activeModelId });
       await refresh();
@@ -186,19 +196,21 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   async function connectKey() {
     if (!selected) return;
     if (isOpenAiCompatible) {
-      if (!baseUrl.trim() || !modelId.trim()) return;
+      const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
+      if (!effectiveBaseUrl || !modelId.trim()) return;
     } else if (!apiKey.trim()) {
       return;
     }
     setError(null);
     setNotice(null);
     setPending("connect");
+    const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
     try {
       await rpc.models.connect(
         isOpenAiCompatible
           ? {
               provider: selected.provider,
-              baseUrl: baseUrl.trim(),
+              baseUrl: effectiveBaseUrl,
               modelId: modelId.trim(),
               apiKey: apiKey.trim() || undefined,
               label: selected.providerName ?? selected.provider,
@@ -611,7 +623,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                       type="button"
                       variant={isActive ? "outline" : "pill"}
                       size="sm"
-                      disabled={busy || isActive}
+                      disabled={busy || isActive || (isOpenAiCompatible && !modelId.trim())}
                       onClick={() => void setModelDefault()}
                     >
                       {isActive

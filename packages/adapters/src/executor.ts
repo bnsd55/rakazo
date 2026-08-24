@@ -1365,6 +1365,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 provider: credential?.provider ?? settings?.defaultModelProvider ?? "scripted",
                 id: credential?.defaultModel ?? settings?.defaultModelId ?? "scripted",
                 apiKey: resolved.oauth ? undefined : resolved.apiKey,
+                baseUrl: resolved.baseUrl,
                 oauth: resolved.oauth
                   ? { credential: resolved.oauth, persist: resolved.persistOAuth }
                   : undefined,

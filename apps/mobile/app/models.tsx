@@ -33,7 +33,7 @@ export default function Models() {
   const [provider, setProvider] = useState("");
   const [modelId, setModelId] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8000/v1");
+  const [baseUrl, setBaseUrl] = useState("");
   const [probeModels, setProbeModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
   const [oauth, setOauth] = useState<ModelOAuthBegin | null>(null);
@@ -70,11 +70,13 @@ export default function Models() {
         : nextMe.defaultProvider) ??
       nextCatalog[0]?.provider ??
       "";
+    const nextCredential = nextCredentials.find((entry) => entry.provider === nextProvider);
     const nextModel =
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
-        ? preferred.modelId?.trim() ||
-          (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ||
-          ""
+        ? (preferred.modelId?.trim() ||
+            nextCredential?.modelId ||
+            (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ||
+            "")
         : (nextCatalog.find(
             (entry) => entry.provider === nextProvider && entry.id === preferred.modelId,
           )?.id ??
@@ -88,6 +90,9 @@ export default function Models() {
     setCredentials(nextCredentials);
     setProvider(nextProvider);
     setModelId(nextModel);
+    if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
+      setBaseUrl(nextCredential?.baseUrl ?? "");
+    }
   }, []);
 
   useFocusEffect(
@@ -133,8 +138,13 @@ export default function Models() {
     setProvider(nextProvider);
     setModelId(
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
-        ? ""
+        ? (credentials.find((entry) => entry.provider === nextProvider)?.modelId ?? "")
         : (catalog.find((entry) => entry.provider === nextProvider)?.id ?? ""),
+    );
+    setBaseUrl(
+      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+        ? (credentials.find((entry) => entry.provider === nextProvider)?.baseUrl ?? "")
+        : "",
     );
     setApiKey("");
     setProbeModels([]);
@@ -169,6 +179,7 @@ export default function Models() {
     setNotice(null);
     setPending("default");
     const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
+    if (isOpenAiCompatible && !activeModelId) return;
     try {
       await rpc("models/setDefault", { provider: selected.provider, modelId: activeModelId });
       await load({ provider, modelId: activeModelId });
@@ -183,20 +194,22 @@ export default function Models() {
   async function connectKey() {
     if (!selected) return;
     if (isOpenAiCompatible) {
-      if (!baseUrl.trim() || !modelId.trim()) return;
+      const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
+      if (!effectiveBaseUrl || !modelId.trim()) return;
     } else if (!apiKey.trim()) {
       return;
     }
     setError(null);
     setNotice(null);
     setPending("connect");
+    const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
     try {
       await rpc(
         "models/connect",
         isOpenAiCompatible
           ? {
               provider: selected.provider,
-              baseUrl: baseUrl.trim(),
+              baseUrl: effectiveBaseUrl,
               modelId: modelId.trim(),
               apiKey: apiKey.trim() || undefined,
               label: selected.providerName ?? selected.provider,
@@ -598,7 +611,7 @@ export default function Models() {
             {credential ? (
               <Pressable
                 accessibilityRole="button"
-                disabled={busy || isActive}
+                disabled={busy || isActive || (isOpenAiCompatible && !modelId.trim())}
                 onPress={() => void setModelDefault()}
                 style={({ pressed }) => [
                   isActive ? styles.outlineButton : styles.primaryButton,

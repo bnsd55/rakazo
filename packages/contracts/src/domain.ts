@@ -358,6 +358,8 @@ export const ModelCredentialSchema = z.object({
   label: z.string(),
   hasKey: z.boolean(),
   isDefault: z.boolean(),
+  baseUrl: z.string().optional(),
+  modelId: z.string().optional(),
 });
 export type ModelCredential = z.infer<typeof ModelCredentialSchema>;
 

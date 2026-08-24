@@ -20,6 +20,7 @@ import {
   archiveBot,
   buildModelConnectPlaintext,
   ComputerBusyError,
+  modelCredentialDto,
   type ComputerExecutionLease,
   type ConnectorRegistry,
   checkpointAndRecordComputerWorkspace,
@@ -286,13 +287,13 @@ export function createRouter(deps: RouterDeps) {
           where: { userId: context.actor.userId, workspaceId: context.actor.workspaceId },
           orderBy: newestModelCredentialOrder,
         });
-        return rows.map((row) => ({
-          id: row.id,
-          provider: row.provider,
-          label: row.label,
-          hasKey: true,
-          isDefault: row.isDefault,
-        }));
+        return Promise.all(
+          rows.map(async (row) => {
+            const secret = await deps.prisma.secret.findUnique({ where: { id: row.secretId } });
+            const plaintext = secret ? deps.secrets.load(secret.ciphertext) : undefined;
+            return modelCredentialDto(row, plaintext);
+          }),
+        );
       }),
       connect: authed.models.connect.handler(async ({ context, input }) => {
         let plaintext: string;
@@ -2317,13 +2318,7 @@ async function persistModelCredential(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     ),
   );
-  return {
-    id: cred.id,
-    provider: cred.provider,
-    label: cred.label,
-    hasKey: true,
-    isDefault: true,
-  };
+  return modelCredentialDto(cred, input.plaintext);
 }
 
 async function requireWorkspaceOwner(prisma: PrismaClient, actor: Actor): Promise<void> {

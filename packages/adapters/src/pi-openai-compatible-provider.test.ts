@@ -79,6 +79,14 @@ describe("openai-compatible provider", () => {
     ).resolves.toEqual(["legacy"]);
   });
 
+  it("rejects redirect responses during probing", async () => {
+    const fetchImpl = async () =>
+      new Response(null, { status: 302, headers: { location: "http://127.0.0.1:9/blocked" } });
+    await expect(
+      probeOpenAiCompatibleModels({ baseUrl: "http://127.0.0.1:8000/v1" }, fetchImpl),
+    ).rejects.toThrow(/redirect/i);
+  });
+
   it("lists openai-compatible in the catalog even without RAKAZO_LOCAL_MODELS", () => {
     delete process.env.RAKAZO_LOCAL_MODELS;
     const entries = listPiCatalog().filter(

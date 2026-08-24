@@ -142,8 +142,12 @@ export async function probeOpenAiCompatibleModels(
     if (input.apiKey?.trim()) headers.Authorization = `Bearer ${input.apiKey.trim()}`;
     const response = await fetchImpl(new URL("models", `${baseUrl.href}/`).href, {
       headers,
+      redirect: "error",
       signal: merged,
     });
+    if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+      throw new Error("Model server redirects are not allowed");
+    }
     if (!response.ok) {
       throw new Error(`Model server returned ${response.status}`);
     }
