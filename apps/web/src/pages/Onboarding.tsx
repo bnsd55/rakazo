@@ -4,6 +4,7 @@ import {
   openAiCompatibleConnectReady,
   openAiCompatibleProbeSuccessMessage,
 } from "@rakazo/contracts";
+import { ChevronDown } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -112,7 +113,6 @@ export function OnboardingPage() {
   const openAiCompatibleReady = openAiCompatibleConnectReady({
     baseUrl,
     modelId,
-    probeModels,
     probedBaseUrl,
   });
 
@@ -294,10 +294,7 @@ export function OnboardingPage() {
         {step === "model" ? (
           <div>
             <h1 className="text-[32px] font-medium text-[#F1F1F2]">Connect a model</h1>
-            <p className="mt-2 text-[#85858A]">
-              Rakazo does not pay for model usage. Paste an API key, sign in with ChatGPT, Copilot,
-              or SuperGrok, or skip if this deployment already has a key.
-            </p>
+            <p className="mt-2 text-[#85858A]">Choose a model to get started.</p>
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -337,19 +334,20 @@ export function OnboardingPage() {
               {isOpenAiCompatible ? (
                 <>
                   <label className="block">
-                    Base URL
+                    Server URL
                     <input
                       value={baseUrl}
                       onChange={(e) => updateBaseUrl(e.target.value)}
-                      aria-label="OpenAI-compatible base URL"
+                      aria-label="OpenAI-compatible server URL"
                       placeholder="http://127.0.0.1:8000/v1"
                       autoComplete="off"
                       className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
                     />
                   </label>
-                  <p className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">
-                    {OPENAI_COMPATIBLE_BASE_URL_HINT}
-                  </p>
+                  <details className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">
+                    <summary className="w-fit cursor-pointer select-none">Setup help</summary>
+                    <p className="mt-1">{OPENAI_COMPATIBLE_BASE_URL_HINT}</p>
+                  </details>
                   <div className="mt-3">
                     <button
                       type="button"
@@ -357,24 +355,32 @@ export function OnboardingPage() {
                       onClick={() => void probeServerModels()}
                       className="rounded-[11px] border border-[#26262A] px-4 py-2 text-sm text-[#ECECEE] disabled:opacity-40"
                     >
-                      {probing ? "Testing…" : "Test & list models"}
+                      {probing ? "Finding…" : "Find models"}
                     </button>
                   </div>
                   <div className="mt-4 block">
-                    <span>Model id</span>
+                    <span>Model</span>
                     {probeModels.length ? (
-                      <select
-                        value={modelId}
-                        onChange={(e) => setModelId(e.target.value)}
-                        aria-label="Models from server"
-                        className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
-                      >
-                        {probeModels.map((id) => (
-                          <option key={id} value={id}>
-                            {id}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative mt-2">
+                        <select
+                          value={modelId}
+                          onChange={(e) => setModelId(e.target.value)}
+                          aria-label="Models from server"
+                          className="w-full appearance-none rounded-[11px] border border-[#26262A] bg-transparent py-3 pl-3.5 pr-11 text-[#ECECEE]"
+                        >
+                          {probeModels.map((id) => (
+                            <option key={id} value={id}>
+                              {id}
+                            </option>
+                          ))}
+                        </select>
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[#85858A]"
+                        >
+                          <ChevronDown size={16} strokeWidth={1.8} />
+                        </span>
+                      </div>
                     ) : (
                       <input
                         value={modelId}
@@ -407,7 +413,9 @@ export function OnboardingPage() {
                 </>
               )}
             </div>
-            <p className="mt-2 text-[13px] text-[#85858A]">{selected?.billing}</p>
+            {!isOpenAiCompatible ? (
+              <p className="mt-2 text-[13px] text-[#85858A]">{selected?.billing}</p>
+            ) : null}
             {subscriptionSignIn ? (
               <div className="mt-4">
                 {oauth ? (
@@ -480,21 +488,32 @@ export function OnboardingPage() {
               </div>
             ) : null}
             {acceptsKey ? (
-              <label className="mt-4 block text-sm text-[#85858A]">
-                {isOpenAiCompatible
-                  ? "API key (optional)"
-                  : subscriptionSignIn
-                    ? "Or paste an API key"
-                    : "API key"}
-                <input
-                  value={apiKey}
-                  onChange={(e) => updateApiKey(e.target.value)}
-                  placeholder={isOpenAiCompatible ? "optional" : "sk-…"}
-                  type="password"
-                  autoComplete="new-password"
-                  className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
-                />
-              </label>
+              isOpenAiCompatible ? (
+                <details className="mt-4 text-sm text-[#85858A]">
+                  <summary className="w-fit cursor-pointer select-none">API key</summary>
+                  <input
+                    aria-label="API key"
+                    value={apiKey}
+                    onChange={(e) => updateApiKey(e.target.value)}
+                    placeholder="Optional"
+                    type="password"
+                    autoComplete="new-password"
+                    className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+                  />
+                </details>
+              ) : (
+                <label className="mt-4 block text-sm text-[#85858A]">
+                  {subscriptionSignIn ? "Or paste an API key" : "API key"}
+                  <input
+                    value={apiKey}
+                    onChange={(e) => updateApiKey(e.target.value)}
+                    placeholder="sk-…"
+                    type="password"
+                    autoComplete="new-password"
+                    className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+                  />
+                </label>
+              )
             ) : subscriptionSignIn ? null : (
               <p className="mt-4 text-sm text-[#85858A]">
                 This provider cannot paste a key here. Skip if this deployment already has

@@ -39,6 +39,8 @@ export default function Models() {
   const [modelId, setModelId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [showEndpointHelp, setShowEndpointHelp] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   const [probeModels, setProbeModels] = useState<string[]>([]);
   const [probedBaseUrl, setProbedBaseUrl] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
@@ -150,7 +152,6 @@ export default function Models() {
   const openAiCompatibleReady = openAiCompatibleConnectReady({
     baseUrl: effectiveBaseUrl,
     modelId,
-    probeModels,
     probedBaseUrl,
     storedBaseUrl: credential?.baseUrl,
   });
@@ -229,7 +230,7 @@ export default function Models() {
     try {
       await rpc("models/setDefault", { provider: selected.provider, modelId: activeModelId });
       await load({ provider, modelId: activeModelId });
-      setNotice(`Now using ${isOpenAiCompatible ? activeModelId : selected.label}.`);
+      setNotice(isOpenAiCompatible ? "Model updated." : `Now using ${selected.label}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not change the default model");
     } finally {
@@ -267,7 +268,7 @@ export default function Models() {
       );
       setApiKey("");
       await load({ provider, modelId });
-      setNotice(`Connected and using ${isOpenAiCompatible ? modelId.trim() : selected.label}.`);
+      setNotice(isOpenAiCompatible ? "Saved." : `Connected and using ${selected.label}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not connect this provider");
     } finally {
@@ -421,9 +422,9 @@ export default function Models() {
             {!isOpenAiCompatible ? <Text style={styles.sectionTitle}>Model</Text> : null}
             {isOpenAiCompatible ? (
               <>
-                <Text style={styles.sectionTitle}>Base URL</Text>
+                <Text style={styles.sectionTitle}>Server URL</Text>
                 <TextInput
-                  accessibilityLabel="OpenAI-compatible base URL"
+                  accessibilityLabel="OpenAI-compatible server URL"
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!busy}
@@ -433,7 +434,16 @@ export default function Models() {
                   style={styles.keyInput}
                   value={baseUrl}
                 />
-                <Text style={styles.hint}>{OPENAI_COMPATIBLE_BASE_URL_HINT}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: showEndpointHelp }}
+                  onPress={() => setShowEndpointHelp((visible) => !visible)}
+                >
+                  <Text style={styles.helpLabel}>Setup help</Text>
+                </Pressable>
+                {showEndpointHelp ? (
+                  <Text style={styles.hint}>{OPENAI_COMPATIBLE_BASE_URL_HINT}</Text>
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
                   disabled={busy || probing || !effectiveBaseUrl}
@@ -444,11 +454,9 @@ export default function Models() {
                     pressed && styles.pressed,
                   ]}
                 >
-                  <Text style={styles.outlineLabel}>
-                    {probing ? "Testing…" : "Test & list models"}
-                  </Text>
+                  <Text style={styles.outlineLabel}>{probing ? "Finding…" : "Find models"}</Text>
                 </Pressable>
-                <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Model id</Text>
+                <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Model</Text>
                 {probeModels.length ? (
                   <View style={styles.card}>
                     {probeModels.map((entry) => (
@@ -513,19 +521,21 @@ export default function Models() {
                 ))}
               </View>
             )}
-            <Text style={styles.billing}>{selected.billing}</Text>
+            {!isOpenAiCompatible ? <Text style={styles.billing}>{selected.billing}</Text> : null}
 
-            <View style={styles.credentialCard}>
-              <Text style={styles.eyebrow}>Personal credential</Text>
-              <Text style={styles.credentialTitle}>
-                {credential ? `Connected · ${credential.label}` : "Not connected"}
-              </Text>
-              <Text style={styles.secondary}>
-                {credential
-                  ? "Your key or subscription token is stored securely and is never shown here."
-                  : "Connect this provider to use it as your personal model."}
-              </Text>
-            </View>
+            {!isOpenAiCompatible ? (
+              <View style={styles.credentialCard}>
+                <Text style={styles.eyebrow}>Personal credential</Text>
+                <Text style={styles.credentialTitle}>
+                  {credential ? `Connected · ${credential.label}` : "Not connected"}
+                </Text>
+                <Text style={styles.secondary}>
+                  {credential
+                    ? "Your key or subscription token is stored securely and is never shown here."
+                    : "Connect this provider to use it as your personal model."}
+                </Text>
+              </View>
+            ) : null}
 
             {subscriptionSignIn ? (
               oauth ? (
@@ -594,30 +604,59 @@ export default function Models() {
 
             {acceptsKey ? (
               <View style={styles.keySection}>
-                <Text style={styles.sectionTitle}>
-                  {credential
-                    ? "Replace API key"
-                    : isOpenAiCompatible
-                      ? "API key (optional)"
-                      : subscriptionSignIn
-                        ? "Or connect an API key"
-                        : "API key"}
-                </Text>
-                <TextInput
-                  accessibilityLabel="API key"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="off"
-                  editable={!busy}
-                  importantForAutofill="no"
-                  onChangeText={updateApiKey}
-                  placeholder={isOpenAiCompatible ? "optional" : "sk-…"}
-                  placeholderTextColor={native.tertiaryLabel}
-                  secureTextEntry
-                  style={styles.keyInput}
-                  textContentType="none"
-                  value={apiKey}
-                />
+                {isOpenAiCompatible ? (
+                  <>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: showApiKey }}
+                      onPress={() => setShowApiKey((visible) => !visible)}
+                    >
+                      <Text style={styles.helpLabel}>API key</Text>
+                    </Pressable>
+                    {showApiKey ? (
+                      <TextInput
+                        accessibilityLabel="API key"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        autoComplete="off"
+                        editable={!busy}
+                        importantForAutofill="no"
+                        onChangeText={updateApiKey}
+                        placeholder="Optional"
+                        placeholderTextColor={native.tertiaryLabel}
+                        secureTextEntry
+                        style={styles.keyInput}
+                        textContentType="none"
+                        value={apiKey}
+                      />
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.sectionTitle}>
+                      {credential
+                        ? "Replace API key"
+                        : subscriptionSignIn
+                          ? "Or connect an API key"
+                          : "API key"}
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="API key"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      editable={!busy}
+                      importantForAutofill="no"
+                      onChangeText={updateApiKey}
+                      placeholder="sk-…"
+                      placeholderTextColor={native.tertiaryLabel}
+                      secureTextEntry
+                      style={styles.keyInput}
+                      textContentType="none"
+                      value={apiKey}
+                    />
+                  </>
+                )}
                 <Pressable
                   accessibilityRole="button"
                   disabled={
@@ -635,12 +674,10 @@ export default function Models() {
                   <Text style={styles.primaryLabel}>
                     {pending === "connect"
                       ? "Saving…"
-                      : credential
-                        ? isOpenAiCompatible
-                          ? "Replace connection"
-                          : "Replace API key"
-                        : isOpenAiCompatible
-                          ? "Connect endpoint"
+                      : isOpenAiCompatible
+                        ? "Save"
+                        : credential
+                          ? "Replace API key"
                           : "Connect API key"}
                   </Text>
                 </Pressable>
@@ -654,23 +691,19 @@ export default function Models() {
               </Text>
             ) : null}
 
-            {credential ? (
+            {credential && !isActive ? (
               <Pressable
                 accessibilityRole="button"
-                disabled={busy || isActive || (isOpenAiCompatible && !modelId.trim())}
+                disabled={busy || (isOpenAiCompatible && !modelId.trim())}
                 onPress={() => void setModelDefault()}
                 style={({ pressed }) => [
-                  isActive ? styles.outlineButton : styles.primaryButton,
-                  (busy || isActive) && styles.disabled,
+                  styles.primaryButton,
+                  busy && styles.disabled,
                   pressed && styles.pressed,
                 ]}
               >
-                <Text style={isActive ? styles.outlineLabel : styles.primaryLabel}>
-                  {isActive
-                    ? "Active model"
-                    : pending === "default"
-                      ? "Switching…"
-                      : "Use this model"}
+                <Text style={styles.primaryLabel}>
+                  {pending === "default" ? "Switching…" : "Use this model"}
                 </Text>
               </Pressable>
             ) : null}
@@ -795,7 +828,13 @@ const styles = StyleSheet.create({
     color: native.secondaryLabel,
     fontSize: 13,
     lineHeight: 19,
+    marginTop: 4,
+  },
+  helpLabel: {
+    color: native.secondaryLabel,
+    fontSize: 13,
     marginTop: 8,
+    textDecorationLine: "underline",
   },
   credentialCard: {
     borderRadius: 14,

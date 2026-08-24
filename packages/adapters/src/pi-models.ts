@@ -53,7 +53,8 @@ function buildPiCatalog(): PiCatalogEntry[] {
         billing,
         auth,
         oauthLabel,
-        authHint: signInMeta?.hint,
+        authHint:
+          provider.id === OPENAI_COMPATIBLE_PROVIDER_ID ? "Custom server" : signInMeta?.hint,
         subscription,
         signIn: signInMeta?.mode,
       });

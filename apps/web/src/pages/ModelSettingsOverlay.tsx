@@ -6,6 +6,7 @@ import {
   openAiCompatibleProbeSuccessMessage,
 } from "@rakazo/contracts";
 import { Button } from "@rakazo/ui-web";
+import { ChevronDown } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
@@ -156,7 +157,6 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   const openAiCompatibleReady = openAiCompatibleConnectReady({
     baseUrl: effectiveBaseUrl,
     modelId,
-    probeModels,
     probedBaseUrl,
     storedBaseUrl: credential?.baseUrl,
   });
@@ -237,7 +237,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     try {
       await rpc.models.setDefault({ provider: selected.provider, modelId: activeModelId });
       await refresh();
-      setNotice(`Now using ${isOpenAiCompatible ? activeModelId : selected.label}.`);
+      setNotice(isOpenAiCompatible ? "Model updated." : `Now using ${selected.label}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not change the default model");
     } finally {
@@ -274,7 +274,8 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
       );
       setApiKey("");
       await refresh();
-      setNotice(`Connected and using ${isOpenAiCompatible ? modelId.trim() : selected.label}.`);
+      detailScrollRef.current?.scrollTo({ top: 0 });
+      setNotice(isOpenAiCompatible ? "Saved." : `Connected and using ${selected.label}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not connect this provider");
     } finally {
@@ -461,19 +462,20 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                   {isOpenAiCompatible ? (
                     <>
                       <label className="block">
-                        Base URL
+                        Server URL
                         <input
                           value={baseUrl}
                           onChange={(event) => updateBaseUrl(event.target.value)}
-                          aria-label="OpenAI-compatible base URL"
+                          aria-label="OpenAI-compatible server URL"
                           placeholder="http://127.0.0.1:8000/v1"
                           autoComplete="off"
                           className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
                         />
                       </label>
-                      <p className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">
-                        {OPENAI_COMPATIBLE_BASE_URL_HINT}
-                      </p>
+                      <details className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">
+                        <summary className="w-fit cursor-pointer select-none">Setup help</summary>
+                        <p className="mt-1">{OPENAI_COMPATIBLE_BASE_URL_HINT}</p>
+                      </details>
                       <div className="mt-3 flex items-center gap-2">
                         <Button
                           type="button"
@@ -482,30 +484,38 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                           disabled={busy || probing || !effectiveBaseUrl}
                           onClick={() => void probeServerModels()}
                         >
-                          {probing ? "Testing…" : "Test & list models"}
+                          {probing ? "Finding…" : "Find models"}
                         </Button>
                       </div>
                       <div className="mt-4 block">
-                        <span>Model id</span>
+                        <span>Model</span>
                         {probeModels.length ? (
-                          <select
-                            value={modelId}
-                            onChange={(event) => {
-                              cancelOAuthAttempt();
-                              selectionRevisionRef.current += 1;
-                              setModelId(event.target.value);
-                              setError(null);
-                              setNotice(null);
-                            }}
-                            aria-label="Models from server"
-                            className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-sm text-[#ECECEE]"
-                          >
-                            {probeModels.map((id) => (
-                              <option key={id} value={id}>
-                                {id}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="relative mt-2">
+                            <select
+                              value={modelId}
+                              onChange={(event) => {
+                                cancelOAuthAttempt();
+                                selectionRevisionRef.current += 1;
+                                setModelId(event.target.value);
+                                setError(null);
+                                setNotice(null);
+                              }}
+                              aria-label="Models from server"
+                              className="w-full appearance-none rounded-[11px] border border-[#26262A] bg-[#101012] py-3 pl-3.5 pr-11 text-sm text-[#ECECEE]"
+                            >
+                              {probeModels.map((id) => (
+                                <option key={id} value={id}>
+                                  {id}
+                                </option>
+                              ))}
+                            </select>
+                            <span
+                              aria-hidden="true"
+                              className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[#85858A]"
+                            >
+                              <ChevronDown size={16} strokeWidth={1.8} />
+                            </span>
+                          </div>
                         ) : (
                           <input
                             value={modelId}
@@ -540,21 +550,27 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                     </>
                   )}
                 </div>
-                <p className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">{selected.billing}</p>
+                {!isOpenAiCompatible ? (
+                  <p className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">
+                    {selected.billing}
+                  </p>
+                ) : null}
 
-                <div className="mt-5 rounded-[13px] border border-[#26262A] px-4 py-3">
-                  <div className="text-[12.5px] uppercase tracking-[0.08em] text-[#6C6C70]">
-                    Personal credential
+                {!isOpenAiCompatible ? (
+                  <div className="mt-5 rounded-[13px] border border-[#26262A] px-4 py-3">
+                    <div className="text-[12.5px] uppercase tracking-[0.08em] text-[#6C6C70]">
+                      Personal credential
+                    </div>
+                    <div className="mt-1 text-[15px] text-[#ECECEE]">
+                      {credential ? `Connected · ${credential.label}` : "Not connected"}
+                    </div>
+                    <div className="mt-1 text-[13px] text-[#85858A]">
+                      {credential
+                        ? "Your key or subscription token is stored securely and is never shown here."
+                        : "Connect this provider to use it as your personal model."}
+                    </div>
                   </div>
-                  <div className="mt-1 text-[15px] text-[#ECECEE]">
-                    {credential ? `Connected · ${credential.label}` : "Not connected"}
-                  </div>
-                  <div className="mt-1 text-[13px] text-[#85858A]">
-                    {credential
-                      ? "Your key or subscription token is stored securely and is never shown here."
-                      : "Connect this provider to use it as your personal model."}
-                  </div>
-                </div>
+                ) : null}
 
                 {subscriptionSignIn ? (
                   <div className="mt-5">
@@ -632,23 +648,36 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
 
                 {acceptsKey ? (
                   <div className="mt-5">
-                    <label className="block text-[13.5px] text-[#85858A]">
-                      {credential
-                        ? "Replace API key"
-                        : isOpenAiCompatible
-                          ? "API key (optional)"
+                    {isOpenAiCompatible ? (
+                      <details className="text-[13.5px] text-[#85858A]">
+                        <summary className="w-fit cursor-pointer select-none">API key</summary>
+                        <input
+                          aria-label="API key"
+                          value={apiKey}
+                          onChange={(event) => updateApiKey(event.target.value)}
+                          placeholder="Optional"
+                          type="password"
+                          autoComplete="new-password"
+                          className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
+                        />
+                      </details>
+                    ) : (
+                      <label className="block text-[13.5px] text-[#85858A]">
+                        {credential
+                          ? "Replace API key"
                           : subscriptionSignIn
                             ? "Or connect an API key"
                             : "API key"}
-                      <input
-                        value={apiKey}
-                        onChange={(event) => updateApiKey(event.target.value)}
-                        placeholder={isOpenAiCompatible ? "optional" : "sk-…"}
-                        type="password"
-                        autoComplete="new-password"
-                        className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
-                      />
-                    </label>
+                        <input
+                          value={apiKey}
+                          onChange={(event) => updateApiKey(event.target.value)}
+                          placeholder="sk-…"
+                          type="password"
+                          autoComplete="new-password"
+                          className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
+                        />
+                      </label>
+                    )}
                     <Button
                       type="button"
                       variant="pill"
@@ -662,12 +691,10 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                     >
                       {pending === "connect"
                         ? "Saving…"
-                        : credential
-                          ? isOpenAiCompatible
-                            ? "Replace connection"
-                            : "Replace API key"
-                          : isOpenAiCompatible
-                            ? "Connect endpoint"
+                        : isOpenAiCompatible
+                          ? "Save"
+                          : credential
+                            ? "Replace API key"
                             : "Connect API key"}
                     </Button>
                   </div>
@@ -680,20 +707,16 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                   </p>
                 ) : null}
 
-                {credential ? (
+                {credential && !isActive ? (
                   <div className="mt-6">
                     <Button
                       type="button"
-                      variant={isActive ? "outline" : "pill"}
+                      variant="pill"
                       size="sm"
-                      disabled={busy || isActive || (isOpenAiCompatible && !modelId.trim())}
+                      disabled={busy || (isOpenAiCompatible && !modelId.trim())}
                       onClick={() => void setModelDefault()}
                     >
-                      {isActive
-                        ? "Active model"
-                        : pending === "default"
-                          ? "Switching…"
-                          : "Use this model"}
+                      {pending === "default" ? "Switching…" : "Use this model"}
                     </Button>
                   </div>
                 ) : null}
@@ -818,7 +841,7 @@ function ModelPicker({
       >
         <span className="min-w-0 truncate">{options[selectedIndex]?.label}</span>
         <span className="ml-3 shrink-0 text-[#85858A]" aria-hidden="true">
-          ▾
+          <ChevronDown size={16} strokeWidth={1.8} />
         </span>
       </button>
       {open ? (
