@@ -260,6 +260,7 @@ function probeModelIds(body: OpenAiCompatibleModelsResponse): string[] {
 async function readBoundedJson(response: Response): Promise<OpenAiCompatibleModelsResponse> {
   const declaredSize = Number(response.headers.get("content-length") ?? 0);
   if (declaredSize > MAX_MODELS_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error("Model server response is too large");
   }
   if (!response.body) throw new Error("Model server returned an empty response");

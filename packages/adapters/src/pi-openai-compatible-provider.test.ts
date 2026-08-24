@@ -127,6 +127,23 @@ describe("openai-compatible provider", () => {
     ).rejects.toThrow(/too large/i);
   });
 
+  it("cancels model responses whose declared size exceeds the limit", async () => {
+    let cancelled = false;
+    const fetchImpl = async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { headers: { "content-length": String(64 * 1024 + 1) } },
+      );
+    await expect(
+      probeOpenAiCompatibleModels({ baseUrl: "http://127.0.0.1:8000/v1" }, fetchImpl),
+    ).rejects.toThrow(/too large/i);
+    expect(cancelled).toBe(true);
+  });
+
   it("lists openai-compatible in the catalog even without RAKAZO_LOCAL_MODELS", () => {
     delete process.env.RAKAZO_LOCAL_MODELS;
     const entries = listPiCatalog().filter(
