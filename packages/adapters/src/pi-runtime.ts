@@ -28,6 +28,10 @@ function catalogModels(): MutableModels {
   return catalogModelsCache;
 }
 const MAX_PARALLEL_SUBAGENTS = 4;
+// Reasoning-capable models must not start at "off": for OpenRouter, pi-ai maps
+// that to reasoning.effort "none", which 400s on endpoints that mandate
+// reasoning (e.g. google/gemini-3.7-flash). Keep a real level when model.reasoning
+// is set; plain models stay off.
 const REASONING_MODEL_THINKING_LEVEL = "medium";
 function thinkingLevelFor(model: { reasoning?: boolean }) {
   return model.reasoning ? REASONING_MODEL_THINKING_LEVEL : "off";
@@ -231,15 +235,17 @@ export class PiAgentRuntime implements AgentRuntime {
 }
 
 function configuredOpenRouterModel(id: string): Model<"openai-completions"> {
-  // A configured model can intentionally be newer than Pi's static catalog. Keep unknown
-  // capabilities and pricing conservative instead of inheriting them from an unrelated model.
+  // A configured model can intentionally be newer than Pi's static catalog. Keep
+  // pricing conservative, but enable reasoning: unknown OpenRouter endpoints
+  // (e.g. gemini-3.7-flash before the snapshot catches up) often mandate it, and
+  // thinkingLevel "off" becomes effort "none" which those endpoints reject.
   return {
     id,
     name: id,
     api: "openai-completions",
     provider: "openrouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    reasoning: false,
+    reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 16_384,
@@ -317,6 +323,7 @@ export function describeToolActivity(toolName: string, args: unknown): string {
   if (toolName === "attach_file") return `Attaching ${detail(record.path)}`;
   if (toolName === "open_path") return `Opening ${detail(record.path)}`;
   if (toolName === "render_plot") return "Rendering a chart";
+  if (toolName === "add_mcp_server") return `Connecting MCP server: ${detail(record.name)}`;
   if (toolName === "computer_observe") return "Looking at the screen";
   if (toolName === "computer_act") return "Operating the computer";
   if (toolName === "run_subagent") return `Delegating to helper: ${detail(record.name)}`;
@@ -476,7 +483,9 @@ function toAgentTool(tool: ConnectorTool, host: ToolHost, exposedName: string): 
         };
       }
       if (host.request.executeTool) {
-        const result = await host.request.executeTool(tool.name, args, executionId);
+        const result = tool.route
+          ? await host.request.executeTool(tool.name, args, executionId, tool.route)
+          : await host.request.executeTool(tool.name, args, executionId);
         if (isAgentToolExecutionResult(result)) return result;
         return {
           content: [{ type: "text", text: summarizeToolResult(result) }],

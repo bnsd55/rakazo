@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { Id } from "./ids.js";
+import { McpTransportSchema } from "./mcp.js";
 
 export const ProductEventType = z.enum([
   "thread.message.created",
@@ -97,6 +98,18 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     question: z.string(),
     subtitle: z.string().optional(),
     options: z.array(z.object({ id: z.string(), letter: z.string(), label: z.string() })),
+    /** Set once the user picks an option; renders the picker as answered. */
+    answerId: z.string().optional(),
+  }),
+  z.object({
+    /** Inline app authorization card (Composio-backed): logo, name, one-line
+        description, and an Authorize button that flips to connected. */
+    kind: z.literal("app_connect"),
+    provider: z.string(),
+    name: z.string(),
+    description: z.string(),
+    logo: z.string().nullable(),
+    status: z.enum(["pending", "connected"]),
   }),
   z.object({
     kind: z.literal("connect"),
@@ -153,6 +166,16 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     status: z.enum(["draft", "saved"]),
   }),
   ChartBlock,
+  z.object({
+    /** Approval card for an agent-created MCP server. The user completes the
+        OAuth popup (or confirms no authorization is needed) in the UI. */
+    kind: z.literal("mcp_approval"),
+    name: z.string(),
+    serverId: Id,
+    transport: McpTransportSchema,
+    endpoint: z.string().nullable(),
+    needsOAuth: z.boolean(),
+  }),
   z.object({
     kind: z.literal("image"),
     artifactId: Id,

@@ -184,13 +184,13 @@ export default function Models() {
   }
 
   async function probeServerModels() {
-    if (!baseUrl.trim()) return;
+    const trimmedBaseUrl = effectiveBaseUrl;
+    if (!trimmedBaseUrl) return;
     setProbing(true);
     setError(null);
     setNotice(null);
     resetOpenAiCompatibleProbe();
     try {
-      const trimmedBaseUrl = baseUrl.trim();
       const result = await rpc<{ models: string[] }>("models/probeOpenAiCompatible", {
         baseUrl: trimmedBaseUrl,
         apiKey: apiKey.trim() || undefined,
@@ -425,11 +425,11 @@ export default function Models() {
                 <Text style={styles.hint}>{OPENAI_COMPATIBLE_BASE_URL_HINT}</Text>
                 <Pressable
                   accessibilityRole="button"
-                  disabled={busy || probing || !baseUrl.trim()}
+                  disabled={busy || probing || !effectiveBaseUrl}
                   onPress={() => void probeServerModels()}
                   style={({ pressed }) => [
                     styles.outlineButton,
-                    (busy || probing || !baseUrl.trim()) && styles.disabled,
+                    (busy || probing || !effectiveBaseUrl) && styles.disabled,
                     pressed && styles.pressed,
                   ]}
                 >

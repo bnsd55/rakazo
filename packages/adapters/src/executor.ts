@@ -50,6 +50,8 @@ import {
   createThreadMessageInTransaction,
   effectiveMemoryScope,
   findDefaultModelCredential,
+  type McpServer,
+  type Prisma,
   type PrismaClient,
   parseComputerMode,
   type ThreadEvents,
@@ -106,6 +108,11 @@ import {
   selectCompactedHistory,
   shouldEnqueueCompaction,
 } from "./history-compaction.js";
+import {
+  buildMcpCredentialBlob,
+  needsOAuthProbe,
+  parseMcpServerToolArgs,
+} from "./mcp-server-tool.js";
 import { loadAgentMemoryContext } from "./memory-context.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { selectMemoryTools } from "./memory-tools.js";
@@ -1133,6 +1140,109 @@ export function createRunExecutor(deps: ExecutorDeps) {
             );
             return finish({ ok: true });
           }
+          if (name === "add_mcp_server") {
+            const parsed = parseMcpServerToolArgs(args);
+            if (!parsed) {
+              return finish({
+                error:
+                  "Invalid MCP server details. Required: name, transport (streamable_http|sse|stdio); endpoint for remote transports; command for stdio.",
+              });
+            }
+            if (!deps.secretStore) {
+              return finish({ error: "Secret storage is not available in this deployment." });
+            }
+            const credentialBlob = buildMcpCredentialBlob(parsed);
+            let storedCredential: { id: string; ciphertext: string } | null = null;
+            if (credentialBlob) {
+              storedCredential = await deps.secretStore.put(credentialBlob, {
+                operationId: executionId,
+                traceId: executionId,
+                workspaceId: run.workspaceId,
+                userId: run.userId,
+                botId: bot.id,
+                signal: new AbortController().signal,
+              });
+            }
+            const oauthLikely = needsOAuthProbe(parsed);
+            let serverRow: McpServer;
+            let approvalEventSeq: number | undefined;
+            try {
+              const created = await deps.prisma.$transaction(async (tx) => {
+                if (storedCredential) {
+                  await tx.secret.create({
+                    data: {
+                      id: storedCredential.id,
+                      userId: run.userId,
+                      workspaceId: run.workspaceId,
+                      kind: "mcp",
+                      ciphertext: storedCredential.ciphertext,
+                    },
+                  });
+                }
+                const server = await tx.mcpServer.create({
+                  data: {
+                    workspaceId: run.workspaceId,
+                    userId: run.userId,
+                    slug: parsed.slug,
+                    name: parsed.name,
+                    description: parsed.description,
+                    transport: parsed.transport,
+                    endpoint: parsed.endpoint ?? null,
+                    command: parsed.command ?? null,
+                    args: parsed.args as unknown as Prisma.InputJsonValue,
+                    env: Object.fromEntries(Object.keys(parsed.env).map((key) => [key, true])),
+                    headers: Object.fromEntries(
+                      Object.keys(parsed.headers).map((key) => [key, true]),
+                    ),
+                    secretId: storedCredential?.id,
+                    enabled: true,
+                  },
+                });
+                if (!parsed.assignToSelf) return { server };
+                const blocks: MessageBlock[] = [
+                  {
+                    kind: "mcp_approval",
+                    name: server.name,
+                    serverId: server.id,
+                    transport: parsed.transport,
+                    endpoint: parsed.endpoint ?? null,
+                    needsOAuth: oauthLikely,
+                  },
+                ];
+                const committed = await persistMessageInTransaction(tx, run, "bot", blocks);
+                return { server, eventSeq: committed.eventSeq };
+              });
+              serverRow = created.server;
+              approvalEventSeq = created.eventSeq;
+            } catch (error) {
+              if (
+                typeof error === "object" &&
+                error !== null &&
+                "code" in error &&
+                (error as { code?: string }).code === "P2002"
+              ) {
+                return finish({
+                  error: `An MCP server named "${parsed.name}" already exists. Ask the user to remove it first or pick another name.`,
+                });
+              }
+              throw error;
+            }
+            if (approvalEventSeq !== undefined) {
+              await deps.events.notify(run.threadId, approvalEventSeq).catch((error) => {
+                console.error("MCP approval realtime notification", error);
+              });
+            }
+            return finish({
+              ok: true,
+              server_id: serverRow.id,
+              assigned_to_self: false,
+              next_step: parsed.assignToSelf
+                ? oauthLikely
+                  ? "An approval card was posted. The user must authorize and approve it before its tools become available."
+                  : "An approval card was posted. The user must approve it before its tools become available."
+                : "The server was registered without assigning it to this bot.",
+            });
+          }
           if (name === "recall_memory") {
             return semanticMemory!.recall(
               {
@@ -1354,6 +1464,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 pluginLine,
                 taughtSkillsLine,
                 'For charts and data visualization, use the render_plot tool: it renders bar, line, scatter, histogram, heatmap, faceted and many more chart types from a JSON spec and attaches the PNG to the chat. Call render_plot with {"help": true} before your first chart to read the full guide.',
+                "When the user asks you to add or connect an MCP server (and gives you its details), use add_mcp_server. If it uses browser sign-in, an approval card appears in the chat — tell the user to click Authorize on it.",
                 "Never print API keys, access tokens, or secret values. Prefer tools over claiming you already did the work.",
               ]
                 .filter((instruction): instruction is string => Boolean(instruction))
@@ -1904,28 +2015,37 @@ async function publishMessage(
   role: "user" | "bot" | "system",
   blocks: MessageBlock[],
 ) {
-  const committed = await deps.prisma.$transaction(async (tx) => {
-    const message = await createThreadMessageInTransaction(tx, {
-      threadId: run.threadId,
-      role,
-      blocks,
-      botId: run.botId,
-      runId: run.id,
-    });
-    const event = await appendEventInTransaction(tx, {
-      workspaceId: run.workspaceId,
-      threadId: run.threadId,
-      botId: run.botId,
-      type: "thread.message.created",
-      runId: run.id,
-      payload: { messageId: message.id, role, blocks },
-    });
-    return { message, eventSeq: event.seq };
-  });
+  const committed = await deps.prisma.$transaction((tx) =>
+    persistMessageInTransaction(tx, run, role, blocks),
+  );
   await deps.events.notify(run.threadId, committed.eventSeq).catch((error) => {
     console.error("thread message realtime notification", error);
   });
   return committed.message;
+}
+
+async function persistMessageInTransaction(
+  tx: Prisma.TransactionClient,
+  run: { id: string; workspaceId: string; threadId: string; botId: string },
+  role: "user" | "bot" | "system",
+  blocks: MessageBlock[],
+) {
+  const message = await createThreadMessageInTransaction(tx, {
+    threadId: run.threadId,
+    role,
+    blocks,
+    botId: run.botId,
+    runId: run.id,
+  });
+  const event = await appendEventInTransaction(tx, {
+    workspaceId: run.workspaceId,
+    threadId: run.threadId,
+    botId: run.botId,
+    type: "thread.message.created",
+    runId: run.id,
+    payload: { messageId: message.id, role, blocks },
+  });
+  return { message, eventSeq: event.seq };
 }
 
 async function recordEffect(

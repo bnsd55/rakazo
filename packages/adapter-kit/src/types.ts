@@ -327,6 +327,7 @@ export interface AgentRunRequest {
     name: string,
     args: Record<string, unknown>,
     executionId: string,
+    route?: ConnectorRoute,
   ) => Promise<unknown>;
 }
 

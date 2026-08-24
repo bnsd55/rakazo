@@ -278,7 +278,9 @@ export function mountVoiceHttpRoutes(
           ) as AbortSignal[],
         ),
       });
-      return new Response(clip.bytes as BodyInit, {
+      // Copy into a fresh ArrayBuffer-backed view: DOM-lib BodyInit rejects
+      // Uint8Array<ArrayBufferLike> since TS 5.7.
+      return new Response(new Uint8Array(clip.bytes), {
         headers: {
           "content-type": clip.mimeType,
           "cache-control": "no-store",

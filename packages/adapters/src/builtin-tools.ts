@@ -180,6 +180,56 @@ export const builtinAgentTools: ConnectorTool[] = [
     },
   },
   {
+    name: "add_mcp_server",
+    description:
+      "Connect an MCP tool server to this workspace when the user asks you to add one and provides the details (URL or command, optional token/headers/env). The server is created immediately and assigned to you. If it needs browser OAuth authorization, an approval card appears in the chat for the user to complete — tell them to click Authorize. Do not invent endpoints; only use details the user provided.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: 'Display name, e.g. "Brex".' },
+        transport: {
+          type: "string",
+          enum: ["streamable_http", "sse", "stdio"],
+          description:
+            "streamable_http for modern HTTP servers, sse for legacy HTTP servers, stdio for local commands.",
+        },
+        endpoint: {
+          type: "string",
+          description: "HTTPS URL of the remote MCP server (required unless transport is stdio).",
+        },
+        command: {
+          type: "string",
+          description:
+            "Executable path for stdio transport (required for stdio). Must be allowlisted by the deployment.",
+        },
+        args: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Arguments for the stdio command. A single space-separated string also works.",
+        },
+        env: {
+          type: "object",
+          description: 'Environment variables for stdio transport, e.g. {"API_KEY": "..."}.',
+        },
+        headers: {
+          type: "object",
+          description: 'HTTP headers for remote transports, e.g. {"Authorization": "Bearer ..."}.',
+        },
+        secret: {
+          type: "string",
+          description: "Static access token, equivalent to an Authorization: Bearer header.",
+        },
+        assign_to_self: {
+          type: "boolean",
+          description:
+            "Assign the server to you so its tools are usable in this conversation (default true).",
+        },
+      },
+      required: ["name", "transport"],
+    },
+  },
+  {
     name: "remember",
     description: "Store a durable fact in this bot's explicit memory.",
     inputSchema: {

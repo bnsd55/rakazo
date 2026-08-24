@@ -54,6 +54,39 @@ function createWindow() {
     },
   });
   mainWindow = win;
+  // OAuth flows open the provider's authorize page via window.open; give that
+  // popup a normal framed window and keep every non-http target closed.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    let target: URL;
+    try {
+      target = new URL(url);
+    } catch {
+      return { action: "deny" };
+    }
+    const appOrigin = new URL(WEB_URL).origin;
+    if (
+      target.protocol !== "https:" &&
+      !(target.protocol === "http:" && target.origin === appOrigin)
+    )
+      return { action: "deny" };
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: {
+        width: 560,
+        height: 720,
+        frame: true,
+        titleBarStyle: "default",
+        autoHideMenuBar: true,
+        backgroundColor: "#050506",
+        webPreferences: {
+          preload: "",
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      },
+    };
+  });
   win.on("close", (event) => {
     if (
       process.platform === "darwin" &&
