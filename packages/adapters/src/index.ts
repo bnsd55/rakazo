@@ -31,6 +31,7 @@ export * from "./home.js";
 export * from "./host-aware-sandbox.js";
 export * from "./installed-connectors.js";
 export * from "./job-reconciler.js";
+export * from "./mcp-emulator.js";
 export * from "./memory-provider-factory.js";
 export * from "./model-connect.js";
 export * from "./openai-compatible-url.js";
