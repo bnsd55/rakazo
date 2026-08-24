@@ -1,5 +1,10 @@
 import type { ModelOAuthBegin } from "@rakazo/contracts";
-import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@rakazo/contracts";
+import {
+  OPENAI_COMPATIBLE_BASE_URL_HINT,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+  openAiCompatibleConnectReady,
+  openAiCompatibleProbeSuccessMessage,
+} from "@rakazo/contracts";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -35,6 +40,7 @@ export default function Models() {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [probeModels, setProbeModels] = useState<string[]>([]);
+  const [probedBaseUrl, setProbedBaseUrl] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
   const [oauth, setOauth] = useState<ModelOAuthBegin | null>(null);
   const [pasteCode, setPasteCode] = useState("");
@@ -132,6 +138,31 @@ export default function Models() {
   const acceptsKey = selected?.auth !== "oauth";
   const subscriptionSignIn = selected?.signIn !== undefined;
   const busy = pending !== null || oauthPending;
+  const effectiveBaseUrl = baseUrl.trim() || credential?.baseUrl || "";
+  const openAiCompatibleReady = openAiCompatibleConnectReady({
+    baseUrl: effectiveBaseUrl,
+    modelId,
+    probeModels,
+    probedBaseUrl,
+    storedBaseUrl: credential?.baseUrl,
+  });
+
+  function resetOpenAiCompatibleProbe() {
+    setProbeModels([]);
+    setProbedBaseUrl(null);
+  }
+
+  function updateBaseUrl(nextBaseUrl: string) {
+    setBaseUrl(nextBaseUrl);
+    resetOpenAiCompatibleProbe();
+    setError(null);
+    setNotice(null);
+  }
+
+  function updateApiKey(nextApiKey: string) {
+    setApiKey(nextApiKey);
+    resetOpenAiCompatibleProbe();
+  }
 
   function chooseProvider(nextProvider: string) {
     cancelOAuth();
@@ -147,7 +178,7 @@ export default function Models() {
         : "",
     );
     setApiKey("");
-    setProbeModels([]);
+    resetOpenAiCompatibleProbe();
     setError(null);
     setNotice(null);
   }
@@ -157,17 +188,19 @@ export default function Models() {
     setProbing(true);
     setError(null);
     setNotice(null);
+    resetOpenAiCompatibleProbe();
     try {
+      const trimmedBaseUrl = baseUrl.trim();
       const result = await rpc<{ models: string[] }>("models/probeOpenAiCompatible", {
-        baseUrl: baseUrl.trim(),
+        baseUrl: trimmedBaseUrl,
         apiKey: apiKey.trim() || undefined,
       });
       setProbeModels(result.models);
+      setProbedBaseUrl(trimmedBaseUrl);
       if (result.models[0]) setModelId(result.models[0]!);
-      setNotice(`Found ${result.models.length} model${result.models.length === 1 ? "" : "s"}.`);
+      setNotice(openAiCompatibleProbeSuccessMessage(result.models.length));
     } catch (err) {
-      setProbeModels([]);
-      setError(err instanceof Error ? err.message : "Could not list models from server");
+      setError(err instanceof Error ? err.message : "Could not reach this model server");
     } finally {
       setProbing(false);
     }
@@ -374,32 +407,22 @@ export default function Models() {
 
         {selected ? (
           <>
-            <Text style={styles.sectionTitle}>Model</Text>
+            {!isOpenAiCompatible ? <Text style={styles.sectionTitle}>Model</Text> : null}
             {isOpenAiCompatible ? (
               <>
-                <TextInput
-                  accessibilityLabel="Model id"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  editable={!busy}
-                  onChangeText={setModelId}
-                  placeholder="exact-model-id"
-                  placeholderTextColor={native.tertiaryLabel}
-                  style={styles.keyInput}
-                  value={modelId}
-                />
-                <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Base URL</Text>
+                <Text style={styles.sectionTitle}>Base URL</Text>
                 <TextInput
                   accessibilityLabel="OpenAI-compatible base URL"
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!busy}
-                  onChangeText={setBaseUrl}
+                  onChangeText={updateBaseUrl}
                   placeholder="http://127.0.0.1:8000/v1"
                   placeholderTextColor={native.tertiaryLabel}
                   style={styles.keyInput}
                   value={baseUrl}
                 />
+                <Text style={styles.hint}>{OPENAI_COMPATIBLE_BASE_URL_HINT}</Text>
                 <Pressable
                   accessibilityRole="button"
                   disabled={busy || probing || !baseUrl.trim()}
@@ -410,8 +433,11 @@ export default function Models() {
                     pressed && styles.pressed,
                   ]}
                 >
-                  <Text style={styles.outlineLabel}>{probing ? "Listing…" : "List models"}</Text>
+                  <Text style={styles.outlineLabel}>
+                    {probing ? "Testing…" : "Test & list models"}
+                  </Text>
                 </Pressable>
+                <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Model id</Text>
                 {probeModels.length ? (
                   <View style={styles.card}>
                     {probeModels.map((entry) => (
@@ -433,7 +459,19 @@ export default function Models() {
                       </Pressable>
                     ))}
                   </View>
-                ) : null}
+                ) : (
+                  <TextInput
+                    accessibilityLabel="Model id"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!busy}
+                    onChangeText={setModelId}
+                    placeholder="exact-model-id"
+                    placeholderTextColor={native.tertiaryLabel}
+                    style={styles.keyInput}
+                    value={modelId}
+                  />
+                )}
               </>
             ) : (
               <View style={styles.card}>
@@ -559,7 +597,7 @@ export default function Models() {
                   autoComplete="off"
                   editable={!busy}
                   importantForAutofill="no"
-                  onChangeText={setApiKey}
+                  onChangeText={updateApiKey}
                   placeholder={isOpenAiCompatible ? "optional" : "sk-…"}
                   placeholderTextColor={native.tertiaryLabel}
                   secureTextEntry
@@ -570,18 +608,13 @@ export default function Models() {
                 <Pressable
                   accessibilityRole="button"
                   disabled={
-                    busy ||
-                    (isOpenAiCompatible
-                      ? !baseUrl.trim() || !modelId.trim()
-                      : apiKey.trim().length < 8)
+                    busy || (isOpenAiCompatible ? !openAiCompatibleReady : apiKey.trim().length < 8)
                   }
                   onPress={() => void connectKey()}
                   style={({ pressed }) => [
                     styles.primaryButton,
                     (busy ||
-                      (isOpenAiCompatible
-                        ? !baseUrl.trim() || !modelId.trim()
-                        : apiKey.trim().length < 8)) &&
+                      (isOpenAiCompatible ? !openAiCompatibleReady : apiKey.trim().length < 8)) &&
                       styles.disabled,
                     pressed && styles.pressed,
                   ]}
@@ -744,6 +777,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     marginTop: 2,
+  },
+  hint: {
+    color: native.secondaryLabel,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8,
   },
   credentialCard: {
     borderRadius: 14,
