@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  assertAllowedOpenAiCompatibleRequestUrl,
   assertAllowedOpenAiCompatibleUrl,
   normalizeOpenAiCompatibleBaseUrl,
   openAiCompatAllowPublicHosts,
@@ -23,6 +24,12 @@ describe("openai-compatible URL policy", () => {
     expect(normalizeOpenAiCompatibleBaseUrl("http://127.0.0.1:8000/v1/")).toBe(
       "http://127.0.0.1:8000/v1",
     );
+  });
+
+  it("validates request URLs without changing their path", () => {
+    expect(
+      assertAllowedOpenAiCompatibleRequestUrl("http://127.0.0.1:8000/v1/chat/completions").href,
+    ).toBe("http://127.0.0.1:8000/v1/chat/completions");
   });
 
   it("rejects non-http(s) and credential-bearing URLs", () => {

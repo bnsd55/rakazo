@@ -5,15 +5,19 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { Agent } from "undici";
 import { combineSignals } from "./connector-safety.js";
-import { isPrivateAddress } from "./network-address.js";
+import {
+  createAddressCheckedLookup,
+  isPrivateAddress,
+  type ResolvedAddress,
+  type ResolveHostname,
+} from "./network-address.js";
 
 const MAX_MCP_TOOLS = 250;
 const MAX_MCP_PAGES = 20;
 const MCP_TIMEOUT_MS = 30_000;
 const MAX_RESULT_BYTES = 1_000_000;
 
-type ResolvedAddress = { address: string; family: number };
-export type ResolveHostname = (hostname: string) => Promise<ResolvedAddress[]>;
+export type { ResolveHostname } from "./network-address.js";
 
 export interface RemoteTransportDependencies {
   fetch?: typeof globalThis.fetch;
@@ -154,25 +158,7 @@ export function createSafeRemoteFetch(
 }
 
 export function createSafeLookup(resolve: ResolveHostname = resolveHostname): LookupFunction {
-  return (hostname, options, callback) => {
-    void resolve(hostname)
-      .then((addresses) => {
-        assertPublicAddresses(addresses);
-        if (options.all) {
-          callback(null, addresses);
-          return;
-        }
-        const requestedFamily = typeof options.family === "number" ? options.family : 0;
-        const selected =
-          addresses.find((entry) => requestedFamily === 0 || entry.family === requestedFamily) ??
-          addresses[0];
-        if (!selected) throw new Error("Connector URL did not resolve to an address");
-        callback(null, selected.address, selected.family);
-      })
-      .catch((error: unknown) =>
-        callback(error instanceof Error ? error : new Error(String(error)), "", 0),
-      );
-  };
+  return createAddressCheckedLookup(resolve, assertPublicAddresses);
 }
 
 function isPrivateHostname(hostname: string): boolean {

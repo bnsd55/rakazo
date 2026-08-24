@@ -5,6 +5,7 @@ import { buildModelConnectPlaintext } from "./model-connect.js";
 import { listPiCatalog } from "./pi-models.js";
 import { parseModelSecret, secretValuesToRedact, serializeModelSecret } from "./pi-oauth.js";
 import {
+  createOpenAiCompatibleLookup,
   OPENAI_COMPATIBLE_CATALOG_MODEL_ID,
   openAiCompatibleCatalogProvider,
   probeOpenAiCompatibleModels,
@@ -45,6 +46,33 @@ describe("model connect", () => {
 });
 
 describe("openai-compatible provider", () => {
+  it("rejects public hostnames that resolve to private addresses", async () => {
+    const lookup = createOpenAiCompatibleLookup(
+      new URL("https://models.example.test/v1"),
+      async () => [{ address: "127.0.0.1", family: 4 }],
+    );
+    const error = await new Promise<Error | null>((resolve) => {
+      lookup("models.example.test", { family: 0, all: false }, (lookupError) => {
+        resolve(lookupError);
+      });
+    });
+    expect(error).toMatchObject({
+      message: "Public model server hostname resolved to a private address",
+    });
+  });
+
+  it("rejects local hostnames that resolve to link-local addresses", async () => {
+    const lookup = createOpenAiCompatibleLookup(new URL("http://localhost:8000/v1"), async () => [
+      { address: "169.254.1.1", family: 4 },
+    ]);
+    const error = await new Promise<Error | null>((resolve) => {
+      lookup("localhost", { family: 0, all: false }, (lookupError) => resolve(lookupError));
+    });
+    expect(error).toMatchObject({
+      message: "Local model server hostname resolved outside the private network",
+    });
+  });
+
   it("always exposes a catalog provider entry", () => {
     const provider = openAiCompatibleCatalogProvider();
     expect(provider.id).toBe(OPENAI_COMPATIBLE_PROVIDER_ID);

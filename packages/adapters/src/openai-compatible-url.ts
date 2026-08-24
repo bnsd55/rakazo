@@ -38,7 +38,7 @@ function normalizeHostname(hostname: string): string {
     .replace(/\.$/, "");
 }
 
-function isPrivateHostname(hostname: string): boolean {
+export function isPrivateOpenAiCompatibleHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
   if (
     normalized === "localhost" ||
@@ -65,13 +65,31 @@ export function assertAllowedOpenAiCompatibleUrl(
   opts?: { allowPublic?: boolean },
 ): URL {
   const normalized = normalizeOpenAiCompatibleBaseUrl(raw);
-  const url = new URL(normalized);
+  return assertAllowedOpenAiCompatibleRequestUrl(normalized, opts);
+}
+
+export function assertAllowedOpenAiCompatibleRequestUrl(
+  raw: string,
+  opts?: { allowPublic?: boolean },
+): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("Model server URL must be an absolute HTTP(S) URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Model server URL must use http or https");
+  }
+  if (url.username || url.password) {
+    throw new Error("Model server URL must not contain credentials");
+  }
   const hostname = normalizeHostname(url.hostname);
   if (isBlockedHostname(hostname)) {
     throw new Error("Base URL targets a blocked metadata or link-local host");
   }
   const allowPublic = opts?.allowPublic ?? openAiCompatAllowPublicHosts();
-  if (isPrivateHostname(hostname)) return url;
+  if (isPrivateOpenAiCompatibleHostname(hostname)) return url;
   if (!allowPublic) {
     throw new Error(
       "Public model endpoints are blocked. Set RAKAZO_OPENAI_COMPAT_ALLOW_PUBLIC=1 to allow them.",

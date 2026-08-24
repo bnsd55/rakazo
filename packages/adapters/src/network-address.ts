@@ -1,4 +1,32 @@
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
+
+export type ResolvedAddress = { address: string; family: number };
+export type ResolveHostname = (hostname: string) => Promise<ResolvedAddress[]>;
+
+export function createAddressCheckedLookup(
+  resolve: ResolveHostname,
+  validate: (addresses: ResolvedAddress[]) => void,
+): LookupFunction {
+  return (hostname, options, callback) => {
+    void resolve(hostname)
+      .then((addresses) => {
+        validate(addresses);
+        if (options.all) {
+          callback(null, addresses);
+          return;
+        }
+        const requestedFamily = typeof options.family === "number" ? options.family : 0;
+        const selected =
+          addresses.find((entry) => requestedFamily === 0 || entry.family === requestedFamily) ??
+          addresses[0];
+        if (!selected) throw new Error("Endpoint did not resolve to an address");
+        callback(null, selected.address, selected.family);
+      })
+      .catch((error: unknown) =>
+        callback(error instanceof Error ? error : new Error(String(error)), "", 0),
+      );
+  };
+}
 
 export function isPrivateAddress(address: string): boolean {
   const value = address.toLowerCase().replace(/^\[|\]$/g, "");

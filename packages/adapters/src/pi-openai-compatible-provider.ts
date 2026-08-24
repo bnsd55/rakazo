@@ -1,12 +1,24 @@
+import { lookup } from "node:dns/promises";
+import { isIP, type LookupFunction } from "node:net";
 import {
   createProvider,
   type Model,
   type MutableModels,
   type Provider,
+  type ProviderStreams,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { Agent } from "undici";
 import {
+  createAddressCheckedLookup,
+  isLinkLocalAddress,
+  isPrivateAddress,
+  type ResolveHostname,
+} from "./network-address.js";
+import {
+  assertAllowedOpenAiCompatibleRequestUrl,
   assertAllowedOpenAiCompatibleUrl,
+  isPrivateOpenAiCompatibleHostname,
   normalizeOpenAiCompatibleBaseUrl,
   OPENAI_COMPATIBLE_PROVIDER_ID,
 } from "./openai-compatible-url.js";
@@ -23,6 +35,8 @@ const MAX_MODEL_IDS = 500;
 const MAX_MODEL_ID_LENGTH = 256;
 
 const OPENAI_COMPAT_BASE = "http://127.0.0.1:1/v1";
+const resolveHostname: ResolveHostname = (hostname) =>
+  lookup(hostname, { all: true, verbatim: true });
 
 function openAiCompatibleModel(id: string, baseUrl: string): Model<"openai-completions"> {
   return {
@@ -44,6 +58,14 @@ function openAiCompatibleModel(id: string, baseUrl: string): Model<"openai-compl
 }
 
 function openAiCompatibleProvider(models: Model<"openai-completions">[]): Provider {
+  const api = openAICompletionsApi();
+  const safeFetch = createOpenAiCompatibleFetch();
+  const safeApi: ProviderStreams = {
+    stream: (model, context, options) =>
+      api.stream(model, context, { ...options, fetch: safeFetch }),
+    streamSimple: (model, context, options) =>
+      api.streamSimple(model, context, { ...options, fetch: safeFetch }),
+  };
   return createProvider({
     id: OPENAI_COMPATIBLE_PROVIDER_ID,
     name: "OpenAI-compatible",
@@ -58,7 +80,105 @@ function openAiCompatibleProvider(models: Model<"openai-completions">[]): Provid
       },
     },
     models,
-    api: openAICompletionsApi(),
+    api: safeApi,
+  });
+}
+
+export function createOpenAiCompatibleLookup(
+  url: URL,
+  resolve: ResolveHostname = resolveHostname,
+): LookupFunction {
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const privateHostname = isPrivateOpenAiCompatibleHostname(hostname);
+  return createAddressCheckedLookup(resolve, (addresses) => {
+    if (addresses.length === 0) throw new Error("Model server did not resolve to an address");
+    if (privateHostname) {
+      if (
+        addresses.some(
+          (entry) =>
+            isIP(entry.address) === 0 ||
+            !isPrivateAddress(entry.address) ||
+            isLinkLocalAddress(entry.address),
+        )
+      ) {
+        throw new Error("Local model server hostname resolved outside the private network");
+      }
+      return;
+    }
+    if (addresses.some((entry) => isPrivateAddress(entry.address))) {
+      throw new Error("Public model server hostname resolved to a private address");
+    }
+  });
+}
+
+export function createOpenAiCompatibleFetch(
+  baseFetch: typeof globalThis.fetch = globalThis.fetch,
+  resolve: ResolveHostname = resolveHostname,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const rawUrl = input instanceof Request ? input.url : String(input);
+    const url = assertAllowedOpenAiCompatibleRequestUrl(rawUrl);
+    const hostname = url.hostname.replace(/^\[|\]$/g, "");
+    const dispatcher =
+      isIP(hostname) === 0
+        ? new Agent({ connect: { lookup: createOpenAiCompatibleLookup(url, resolve) } })
+        : undefined;
+    try {
+      const response = await baseFetch(input instanceof Request ? input : url, {
+        ...init,
+        redirect: "error",
+        ...(dispatcher ? { dispatcher } : {}),
+      } as RequestInit & { dispatcher?: Agent });
+      return dispatcher ? await closeDispatcherWithResponse(response, dispatcher) : response;
+    } catch (error) {
+      await dispatcher?.close().catch(() => undefined);
+      throw error;
+    }
+  };
+}
+
+async function closeDispatcherWithResponse(
+  response: Response,
+  dispatcher: Agent,
+): Promise<Response> {
+  if (!response.body) {
+    await dispatcher.close();
+    return response;
+  }
+  const reader = response.body.getReader();
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await dispatcher.close().catch(() => undefined);
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          controller.close();
+          await close();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        controller.error(error);
+        await close();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        await close();
+      }
+    },
+  });
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
   });
 }
 
@@ -173,15 +293,18 @@ export async function probeOpenAiCompatibleModels(
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (input.apiKey?.trim()) headers.Authorization = `Bearer ${input.apiKey.trim()}`;
-    const response = await fetchImpl(new URL("models", `${baseUrl.href}/`).href, {
+    const safeFetch = createOpenAiCompatibleFetch(fetchImpl);
+    const response = await safeFetch(new URL("models", `${baseUrl.href}/`).href, {
       headers,
       redirect: "error",
       signal: merged,
     });
     if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error("Model server redirects are not allowed");
     }
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`Model server returned ${response.status}`);
     }
     const body = await readBoundedJson(response);
