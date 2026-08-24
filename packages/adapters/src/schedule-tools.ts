@@ -183,7 +183,6 @@ export async function createScheduleFromTool(
   const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  // Keep inactive until wakeup is queued so failed creates cannot be reconciled live.
   const row = await deps.prisma.routine.create({
     data: {
       workspaceId: input.workspaceId,
@@ -194,7 +193,7 @@ export async function createScheduleFromTool(
       cron: resolved.cron,
       timezone,
       notify: true,
-      active: false,
+      active: true,
       nextRunAt: resolved.nextRunAt,
     },
   });
@@ -205,27 +204,11 @@ export async function createScheduleFromTool(
     try {
       await deps.prisma.routine.delete({ where: { id: row.id } });
     } catch {
-      // Already inactive; delete is best effort.
-    }
-    return { error: "Could not schedule the reminder. Try again." };
-  }
-
-  let active: Awaited<ReturnType<ScheduleToolDeps["prisma"]["routine"]["update"]>>;
-  try {
-    active = await deps.prisma.routine.update({
-      where: { id: row.id },
-      data: { active: true },
-    });
-  } catch {
-    try {
-      await deps.jobs.cancel(routineJobKey(row.id));
-    } catch {
-      // Best effort.
-    }
-    try {
-      await deps.prisma.routine.delete({ where: { id: row.id } });
-    } catch {
-      // Already inactive.
+      // Do not soft-return while the row may still be active.
+      await deps.prisma.routine.update({
+        where: { id: row.id },
+        data: { active: false, nextRunAt: null },
+      });
     }
     return { error: "Could not schedule the reminder. Try again." };
   }
@@ -236,7 +219,7 @@ export async function createScheduleFromTool(
       threadId: input.threadId,
       botId: input.botId,
       type: "routine.created",
-      payload: { name: active.name },
+      payload: { name: row.name },
     });
   } catch {
     // Match routines.create: the reminder is live even if the thread signal fails.
@@ -244,10 +227,10 @@ export async function createScheduleFromTool(
 
   return {
     ok: true as const,
-    routineId: active.id,
-    name: active.name,
-    cron: active.cron,
-    nextRunAt: active.nextRunAt?.toISOString() ?? null,
+    routineId: row.id,
+    name: row.name,
+    cron: row.cron,
+    nextRunAt: row.nextRunAt?.toISOString() ?? null,
     oneShot: resolved.oneShot,
   };
 }

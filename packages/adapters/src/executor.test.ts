@@ -108,45 +108,6 @@ describe("createRunExecutor", () => {
     expect(cancel).toHaveBeenCalledWith("routine:routine-1");
   });
 
-  it("retries wake briefly when routine is still inactive after create", async () => {
-    const scheduledAt = new Date(Date.now() - 1_000);
-    const enqueue = vi.fn(async () => undefined);
-    const prisma = {
-      routine: {
-        findUnique: vi.fn(async () => ({
-          id: "routine-1",
-          workspaceId: "ws-1",
-          botId: "bot-1",
-          userId: "user-1",
-          prompt: "say hi",
-          cron: ONCE_ROUTINE_CRON,
-          timezone: "UTC",
-          active: false,
-          nextRunAt: scheduledAt,
-          createdAt: new Date(),
-        })),
-      },
-    } as unknown as PrismaClient;
-    const executor = createRunExecutor({
-      prisma,
-      jobs: { enqueue, cancel: vi.fn(async () => undefined), close: vi.fn(async () => undefined) },
-      events: { append: vi.fn(async () => undefined) },
-    } as unknown as Parameters<typeof createRunExecutor>[0]);
-
-    await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
-
-    expect(enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "routine.wakeup",
-        availableAt: expect.any(Date),
-        payload: expect.objectContaining({
-          routineId: "routine-1",
-          scheduledFor: scheduledAt.toISOString(),
-        }),
-      }),
-    );
-  });
-
   it("consumes a persisted takeover checkpoint when claiming the run", async () => {
     const updateMany = vi.fn(async () => ({ count: 0 }));
     const prisma = {
