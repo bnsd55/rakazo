@@ -1499,8 +1499,12 @@ export function createRouter(deps: RouterDeps) {
           });
         }
         const bot = await repos.getBot(context.actor, input.botId);
-        // Inactive @once rows skip nextRoutineDate — it rejects @once.
-        const nextRunAt = input.active ? nextRoutineDate(input.cron, input.timezone) : null;
+        // Validate recurring cron even when inactive; @once has no next date.
+        let nextRunAt: Date | null = null;
+        if (!isOneShotRoutineCron(input.cron)) {
+          const computedNextRunAt = nextRoutineDate(input.cron, input.timezone);
+          nextRunAt = input.active ? computedNextRunAt : null;
+        }
         const row = await deps.prisma.routine.create({
           data: {
             workspaceId: context.actor.workspaceId,
