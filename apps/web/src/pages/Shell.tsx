@@ -7,6 +7,7 @@ import type {
   ComputerStatus,
   Group,
   Me,
+  MessageBlock,
   ProductEvent,
   Routine,
   SearchHit,
@@ -77,6 +78,12 @@ import {
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArtifactFileCard } from "../components/ArtifactFileCard";
 import { AskCard } from "../components/AskCard";
+import {
+  BuiButton,
+  BuiCard,
+  LoadingState,
+  SuccessPop,
+} from "../components/beautiful-ui/primitives";
 import { SkillDraftCard } from "../components/teach/SkillDraftCard";
 import { TeachCaptureOverlay } from "../components/teach/TeachCaptureOverlay";
 import { TeachComputerSection } from "../components/teach/TeachComputerSection";
@@ -84,7 +91,9 @@ import { TeachRecordingChrome, TeachStopButton } from "../components/teach/Teach
 import { type ArtifactTarget, decodeArtifactBase64 } from "../lib/artifact-open";
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
+import { chartViewport } from "../lib/chart-viewport";
 import { dictation } from "../lib/dictation";
+import { connectMcpOauth } from "../lib/mcp-connect";
 import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
 import { rpc } from "../lib/rpc";
@@ -119,6 +128,9 @@ const ModelSettingsOverlay = lazy(() =>
 );
 const PluginsOverlay = lazy(() =>
   import("./PluginsOverlay").then((module) => ({ default: module.PluginsOverlay })),
+);
+const McpServersOverlay = lazy(() =>
+  import("./McpServersOverlay").then((module) => ({ default: module.McpServersOverlay })),
 );
 const MemorySettingsOverlay = lazy(() =>
   import("./MemorySettingsOverlay").then((module) => ({
@@ -179,6 +191,7 @@ export function ShellPage() {
   const [teachBusy, setTeachBusy] = useState(false);
   const [computer, setComputer] = useState<ComputerStatus | null>(null);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [memorySettingsOpen, setMemorySettingsOpen] = useState(false);
@@ -307,36 +320,44 @@ export function ShellPage() {
     [markBotRead],
   );
 
-  async function refreshBots(includeArchived = false) {
-    markOnce("rk:renderer:bots-request-start");
-    const [list, sections, archived, groupList] = await Promise.all([
-      rpc.bots.list(),
-      rpc.botSections.list(),
-      includeArchived ? rpc.bots.listArchived() : Promise.resolve(null),
-      rpc.groups.list(),
-    ]);
-    markOnce("rk:renderer:bots-response");
-    setBots(list);
-    setBotSections(sections);
-    setGroups(groupList);
-    setInitialBotsLoaded(true);
-    if (archived) setArchivedBots(archived);
-    if (includeArchived && list.length === 0 && archived?.length === 0 && groupList.length === 0) {
-      navigate("/onboarding", { replace: true });
-      return;
-    }
-    const currentGroupId = routeGroupId.current;
-    if (currentGroupId) {
-      if (!groupList.some((group) => group.id === currentGroupId)) {
+  const refreshBots = useCallback(
+    async (includeArchived = false) => {
+      markOnce("rk:renderer:bots-request-start");
+      const [list, sections, archived, groupList] = await Promise.all([
+        rpc.bots.list(),
+        rpc.botSections.list(),
+        includeArchived ? rpc.bots.listArchived() : Promise.resolve(null),
+        rpc.groups.list(),
+      ]);
+      markOnce("rk:renderer:bots-response");
+      setBots(list);
+      setBotSections(sections);
+      setGroups(groupList);
+      setInitialBotsLoaded(true);
+      if (archived) setArchivedBots(archived);
+      if (
+        includeArchived &&
+        list.length === 0 &&
+        archived?.length === 0 &&
+        groupList.length === 0
+      ) {
+        navigate("/onboarding", { replace: true });
+        return;
+      }
+      const currentGroupId = routeGroupId.current;
+      if (currentGroupId) {
+        if (!groupList.some((group) => group.id === currentGroupId)) {
+          navigate(firstThreadRoute(list, groupList), { replace: true });
+        }
+        return;
+      }
+      const currentBotId = routeBotId.current;
+      if (!currentBotId || !list.some((bot) => bot.id === currentBotId)) {
         navigate(firstThreadRoute(list, groupList), { replace: true });
       }
-      return;
-    }
-    const currentBotId = routeBotId.current;
-    if (!currentBotId || !list.some((bot) => bot.id === currentBotId)) {
-      navigate(firstThreadRoute(list, groupList), { replace: true });
-    }
-  }
+    },
+    [navigate],
+  );
 
   async function refreshGroupThread(id: string) {
     const scrollElement = messageScroll.current;
@@ -1636,6 +1657,7 @@ export function ShellPage() {
           onReply={setReplyTarget}
           memberName={resolveTranscriptMemberName}
           onRefresh={refreshActiveThread}
+          onBotChanged={refreshBots}
           onAddRoutine={addSkillRoutine}
           voiceReady={Boolean(voiceStatus?.ready)}
           speakingMessageId={speakingMessageId}
@@ -2155,7 +2177,16 @@ export function ShellPage() {
           />
         ) : null}
 
-        {pluginsOpen ? <PluginsOverlay onClose={() => setPluginsOpen(false)} /> : null}
+        {pluginsOpen ? (
+          <PluginsOverlay
+            onClose={() => setPluginsOpen(false)}
+            onOpenMcp={() => {
+              setPluginsOpen(false);
+              setMcpOpen(true);
+            }}
+          />
+        ) : null}
+        {mcpOpen ? <McpServersOverlay onClose={() => setMcpOpen(false)} /> : null}
       </Suspense>
 
       <Suspense fallback={null}>
@@ -2321,6 +2352,7 @@ const Transcript = memo(function Transcript({
   onReply,
   memberName,
   onRefresh,
+  onBotChanged,
   onAddRoutine,
   voiceReady,
   speakingMessageId,
@@ -2339,6 +2371,7 @@ const Transcript = memo(function Transcript({
   onReply: (message: ThreadMessage) => void;
   memberName?: (botId: string | undefined) => string | undefined;
   onRefresh: () => Promise<void>;
+  onBotChanged: () => Promise<void>;
   onAddRoutine: (name: string, prompt: string) => void;
   voiceReady: boolean;
   speakingMessageId: string | null;
@@ -2386,6 +2419,7 @@ const Transcript = memo(function Transcript({
               message.replyToMessageId ? messageById.get(message.replyToMessageId) : undefined
             }
             onRefresh={onRefresh}
+            onBotChanged={onBotChanged}
             onAddRoutine={onAddRoutine}
             voiceReady={voiceReady}
             speaking={speakingMessageId === message.id}
@@ -2403,11 +2437,8 @@ const Transcript = memo(function Transcript({
         <div className="flex justify-start">
           {/* Box metrics match the progress bubble exactly so swapping between
               them never changes height or text position. */}
-          <div
-            className="max-w-[74%] rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5] text-[#85858A]"
-            style={{ animation: "rkPulse 1.2s ease-in-out infinite" }}
-          >
-            working…
+          <div className="flex max-w-[74%] items-center rounded-[20px] bg-[#1A1A1D] px-[18px] py-3 text-[15.5px] leading-[1.5]">
+            <LoadingState label="working" />
           </div>
         </div>
       ) : null}
@@ -2768,6 +2799,7 @@ const MessageView = memo(function MessageView({
   memberName,
   replyPreview,
   onRefresh,
+  onBotChanged,
   onAddRoutine,
   voiceReady,
   speaking,
@@ -2782,6 +2814,7 @@ const MessageView = memo(function MessageView({
   memberName?: (botId: string | undefined) => string | undefined;
   replyPreview?: ThreadMessage;
   onRefresh: () => Promise<void>;
+  onBotChanged: () => Promise<void>;
   onAddRoutine: (name: string, prompt: string) => void;
   voiceReady: boolean;
   speaking: boolean;
@@ -2970,10 +3003,38 @@ const MessageView = memo(function MessageView({
             </button>
           );
         }
+        if (block.kind === "choice") {
+          const botId = "botId" in artifactTarget ? artifactTarget.botId : message.botId;
+          if (!botId) return null;
+          return <ChoiceCard key={i} botId={botId} block={block} onBotChanged={onBotChanged} />;
+        }
+        if (block.kind === "app_connect") {
+          const botId = "botId" in artifactTarget ? artifactTarget.botId : message.botId;
+          if (!botId) return null;
+          return (
+            <div key={i} className="flex justify-start">
+              <AppConnectCard botId={botId} block={block} />
+            </div>
+          );
+        }
         if (block.kind === "chart") {
           return (
             <div key={i} className="flex justify-start">
               <ChartBlockView name={block.name} spec={block.spec} data={block.data} />
+            </div>
+          );
+        }
+        if (block.kind === "mcp_approval") {
+          return (
+            <div key={i} className="flex justify-start">
+              <McpApprovalCard
+                botId={"botId" in artifactTarget ? artifactTarget.botId : message.botId}
+                name={block.name}
+                serverId={block.serverId}
+                transport={block.transport}
+                endpoint={block.endpoint}
+                needsOAuth={block.needsOAuth}
+              />
             </div>
           );
         }
@@ -3763,6 +3824,160 @@ function computerLabel(mode: ComputerStatus["mode"] | undefined, botName: string
   return mode === "dedicated" ? `${botName}’s computer` : "Team Computer";
 }
 
+function ChoiceCard({
+  botId,
+  block,
+  onBotChanged,
+}: {
+  botId: string;
+  block: Extract<MessageBlock, { kind: "choice" }>;
+  onBotChanged: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function choose(optionId: string) {
+    setPending(true);
+    setError(null);
+    try {
+      await rpc.onboarding.choose({ botId, optionId });
+      await onBotChanged().catch(() => undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save this choice");
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="w-[min(420px,80%)] rounded-[20px] bg-[#1A1A1D] px-[18px] py-[14px]">
+        <div className="text-[15.5px] text-[#DFDFE2]">{block.question}</div>
+        {block.subtitle ? (
+          <div className="mt-0.5 text-[13px] text-[#85858A]">{block.subtitle}</div>
+        ) : null}
+        <div className="mt-3 space-y-1.5">
+          {block.options
+            .filter((option) => !block.answerId || option.id === block.answerId)
+            .map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                disabled={Boolean(block.answerId) || pending}
+                onClick={() => void choose(option.id)}
+                className={`flex w-full items-center gap-3 rounded-[12px] border border-[#2A2A2F] px-3.5 py-3 text-left disabled:opacity-60 ${block.answerId ? "bg-[#1F1F23]" : "bg-[#161619] hover:bg-[#222226]"}`}
+              >
+                <span className="grid h-[24px] w-[24px] place-items-center rounded-[7px] bg-[#232327] text-[12.5px] text-[#9A9AA0]">
+                  {option.letter}
+                </span>
+                <span
+                  className={`flex-1 text-[15px] ${block.answerId ? "text-[#85858A]" : "text-[#ECECEE]"}`}
+                >
+                  {option.label}
+                </span>
+                {block.answerId === option.id ? <span className="text-[#B9B9C0]">✓</span> : null}
+              </button>
+            ))}
+        </div>
+        {error ? <p className="mt-2 text-xs text-[#F07178]">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function AppConnectCard({
+  botId,
+  block,
+}: {
+  botId: string;
+  block: Extract<MessageBlock, { kind: "app_connect" }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [localStatus, setLocalStatus] = useState<"pending" | "connected">(block.status);
+  const [error, setError] = useState<string | null>(null);
+  const connectionAttempt = useRef<AbortController | null>(null);
+  const status = block.status === "connected" ? "connected" : localStatus;
+  useEffect(() => () => connectionAttempt.current?.abort(), []);
+
+  async function authorize() {
+    connectionAttempt.current?.abort();
+    const controller = new AbortController();
+    connectionAttempt.current = controller;
+    setBusy(true);
+    setError(null);
+    try {
+      const started = await rpc.connections.begin({
+        provider: block.provider,
+        displayName: block.name,
+      });
+      if (started.authorizationUrl) {
+        window.open(started.authorizationUrl, "rakazo-app-connect", "popup,width=560,height=720");
+      }
+      for (let i = 0; i < 60; i += 1) {
+        if (controller.signal.aborted) return;
+        const row = await rpc.connections
+          .complete({ connectionId: started.connectionId })
+          .catch(() => undefined);
+        if (row?.status === "connected") {
+          if (controller.signal.aborted) return;
+          setLocalStatus("connected");
+          await rpc.onboarding
+            .appConnected({ botId, provider: block.provider })
+            .catch(() => undefined);
+          return;
+        }
+        await abortableDelay(2_000, controller.signal);
+      }
+      if (!controller.signal.aborted) setError("Authorization timed out. Please try again.");
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setError(error instanceof Error ? error.message : "Could not authorize this app");
+      }
+    } finally {
+      if (connectionAttempt.current === controller) {
+        connectionAttempt.current = null;
+        setBusy(false);
+      }
+    }
+  }
+  return (
+    <BuiCard
+      role="group"
+      aria-label={`${block.name} connection`}
+      className="w-[min(420px,80%)] px-4 py-3.5"
+    >
+      <div className="flex items-center gap-3.5">
+        {block.logo ? (
+          <img
+            src={block.logo}
+            alt=""
+            className="h-10 w-10 rounded-[10px] bg-white object-contain p-1"
+          />
+        ) : (
+          <span className="grid h-10 w-10 place-items-center rounded-[10px] bg-[#30356A] text-[15px] text-[#E2E4FF]">
+            {block.name.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-medium" style={{ color: "var(--bui-ink)" }}>
+            {block.name}
+          </span>
+          <span className="block truncate text-[13px]" style={{ color: "var(--bui-ink-3)" }}>
+            {block.description}
+          </span>
+        </span>
+        {status === "connected" ? (
+          <SuccessPop label="Connected" />
+        ) : (
+          <BuiButton disabled={busy} onClick={() => void authorize()}>
+            {busy ? "Waiting…" : "Authorize"}
+          </BuiButton>
+        )}
+      </div>
+      {error ? <p className="mt-2 text-xs text-[#F07178]">{error}</p> : null}
+    </BuiCard>
+  );
+}
+
 function ChartCanvas({
   spec,
   data,
@@ -3806,9 +4021,7 @@ function ChartCanvas({
         setError(null);
         ref.current.replaceChildren(parts.plotted);
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not render chart");
-        }
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not render chart");
       }
     })();
     return () => {
@@ -3843,6 +4056,99 @@ function ChartCanvas({
   );
 }
 
+type McpApprovalState = "pending" | "connecting" | "connected" | "dismissed";
+
+/** Approval card for an agent-created MCP server: the user completes browser
+ * OAuth (or confirms no authorization is needed) without leaving the chat. */
+function McpApprovalCard({
+  botId,
+  name,
+  serverId,
+  transport,
+  endpoint,
+  needsOAuth,
+}: {
+  botId: string | undefined;
+  name: string;
+  serverId: string;
+  transport: string;
+  endpoint: string | null;
+  needsOAuth: boolean;
+}) {
+  const [state, setState] = useState<McpApprovalState>("pending");
+  const [error, setError] = useState<string | null>(null);
+
+  async function authorize() {
+    if (!botId) {
+      setError("This server cannot be assigned without a bot.");
+      return;
+    }
+    setState("connecting");
+    setError(null);
+    try {
+      if (needsOAuth) {
+        const result = await connectMcpOauth(serverId);
+        if (result === "cancelled") {
+          setState("pending");
+          return;
+        }
+      }
+      await rpc.mcp.assignments.approve({ botId, serverId });
+      setState("connected");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not approve this server");
+      setState("pending");
+    }
+  }
+
+  const summary = endpoint ?? `stdio · ${transport}`;
+  return (
+    <BuiCard className="max-w-[74%] p-4">
+      <div className="flex items-center gap-2">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-[#30356A] text-xs text-[#E2E4FF]">
+          M
+        </span>
+        <span className="text-[14.5px] font-medium" style={{ color: "var(--bui-ink)" }}>
+          Connect MCP server “{name}”
+        </span>
+      </div>
+      <p className="mt-1.5 truncate text-[12px]" style={{ color: "var(--bui-ink-3)" }}>
+        {summary}
+      </p>
+      {state === "pending" || state === "connecting" ? (
+        <>
+          <p className="mt-2 text-[13px] leading-[1.5]" style={{ color: "var(--bui-ink-2)" }}>
+            {needsOAuth
+              ? "This server uses browser sign-in. Authorize it to let your agents use its tools — a popup will open."
+              : "Approve this server to let your agent use its tools."}
+          </p>
+          {error ? <p className="mt-2 text-xs text-[#F07178]">{error}</p> : null}
+          <div className="mt-3 flex gap-2">
+            <BuiButton
+              tone="accent"
+              disabled={state === "connecting"}
+              onClick={() => void authorize()}
+            >
+              {state === "connecting" ? "Connecting…" : needsOAuth ? "Authorize" : "Approve"}
+            </BuiButton>
+            <BuiButton onClick={() => setState("dismissed")}>Not now</BuiButton>
+          </div>
+        </>
+      ) : null}
+      {state === "connected" ? (
+        <div className="mt-3">
+          <SuccessPop label="Connected — its tools are available from your next message." />
+        </div>
+      ) : null}
+      {state === "dismissed" ? (
+        <p className="mt-2 text-[13px] text-[#85858A]">
+          Dismissed — reconnect anytime from MCP settings.
+        </p>
+      ) : null}
+    </BuiCard>
+  );
+}
+
 function ChartBlockView({
   name,
   spec,
@@ -3853,14 +4159,25 @@ function ChartBlockView({
   data: unknown[];
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   useEffect(() => {
     if (!expanded) return;
+    setViewport({ width: window.innerWidth, height: window.innerHeight });
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setExpanded(false);
     };
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+    };
   }, [expanded]);
+  const expandedViewport = chartViewport(viewport.width, viewport.height);
   return (
     <>
       <div className="group relative max-w-[74%] rounded-[20px] bg-[#17171A] p-4">
@@ -3874,20 +4191,19 @@ function ChartBlockView({
         </button>
       </div>
       {expanded ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(4,4,5,.78)] p-8">
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="Close expanded chart"
-            onClick={() => setExpanded(false)}
-            className="absolute inset-0 cursor-default"
-          />
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Expanded chart: ${name}`}
-            className="relative max-h-[92vh] w-[min(1320px,94vw)] overflow-auto rounded-[24px] border border-[#2A2A31] bg-[#141416] p-8 shadow-[0_40px_90px_rgba(0,0,0,.6)]"
-          >
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(4,4,5,.78)] p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label={name}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setExpanded(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setExpanded(false);
+          }}
+        >
+          <div className="max-h-[92vh] w-[min(1320px,94vw)] overflow-auto rounded-[24px] border border-[#2A2A31] bg-[#141416] p-8 shadow-[0_40px_90px_rgba(0,0,0,.6)]">
             <div className="mb-3 flex items-center justify-between">
               <span className="text-[13px] text-[#85858A]">{name}</span>
               <button
@@ -3902,10 +4218,10 @@ function ChartBlockView({
             <ChartCanvas
               spec={spec}
               data={data}
-              width={Math.min(1240, Math.floor(window.innerWidth * 0.88))}
-              height={Math.floor(window.innerHeight * 0.66)}
+              width={expandedViewport.width}
+              height={expandedViewport.height}
             />
-          </section>
+          </div>
         </div>
       ) : null}
     </>

@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { ThreadMessageSchema } from "./events.js";
 import { Id, MemoryScope, RunStatus, SandboxKind } from "./ids.js";
+import { McpHeadersSchema, McpRemoteEndpointSchema, McpTransportSchema } from "./mcp.js";
 
 export const ComputerModeSchema = z.enum(["team", "dedicated"]);
 export type ComputerMode = z.infer<typeof ComputerModeSchema>;
@@ -268,6 +269,79 @@ export const CapabilityInstallSchema = z.object({
   createdAt: z.string(),
 });
 export type CapabilityInstall = z.infer<typeof CapabilityInstallSchema>;
+
+export type { McpTransport } from "./mcp.js";
+
+const McpServerBaseInput = z.object({
+  slug: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().max(2000).default(""),
+  enabled: z.boolean().default(true),
+  /** Update-only: drop the stored static credential (secret/env/headers).
+   * OAuth state survives so a connected server stays connected. */
+  clearCredential: z.boolean().optional(),
+});
+export const McpServerConfigInput = z.discriminatedUnion("transport", [
+  McpServerBaseInput.extend({
+    transport: z.literal("streamable_http"),
+    endpoint: McpRemoteEndpointSchema,
+    headers: McpHeadersSchema.default({}),
+    secret: z.string().max(16384).optional(),
+  }),
+  McpServerBaseInput.extend({
+    transport: z.literal("sse"),
+    endpoint: McpRemoteEndpointSchema,
+    headers: McpHeadersSchema.default({}),
+    secret: z.string().max(16384).optional(),
+  }),
+  McpServerBaseInput.extend({
+    transport: z.literal("stdio"),
+    command: z.string().min(1).max(512),
+    args: z.array(z.string().max(2048)).max(64).default([]),
+    env: z
+      .record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.string().max(4096))
+      .superRefine((value, ctx) => {
+        if (Object.keys(value).length > 32) {
+          ctx.addIssue({ code: "custom", message: "At most 32 environment variables are allowed" });
+        }
+      })
+      .default({}),
+    secret: z.string().max(16384).optional(),
+  }),
+]);
+export type McpServerConfigInput = z.infer<typeof McpServerConfigInput>;
+
+export const McpServerSchema = z.object({
+  id: Id,
+  workspaceId: Id,
+  slug: z.string(),
+  name: z.string(),
+  description: z.string(),
+  transport: McpTransportSchema,
+  endpoint: z.string().url().nullable(),
+  command: z.string().nullable(),
+  args: z.array(z.string()),
+  envKeys: z.array(z.string()),
+  headerKeys: z.array(z.string()),
+  hasSecret: z.boolean(),
+  oauthStatus: z.enum(["none", "connected", "reconnect"]),
+  enabled: z.boolean(),
+  revision: z.number().int().positive(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type McpServer = z.infer<typeof McpServerSchema>;
+
+export const BotMcpServerSchema = z.object({
+  id: Id,
+  botId: Id,
+  serverId: Id,
+  allowAllTools: z.boolean(),
+  allowedTools: z.array(z.string().min(1).max(200)),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type BotMcpServer = z.infer<typeof BotMcpServerSchema>;
 
 export const ArtifactSchema = z.object({
   id: Id,

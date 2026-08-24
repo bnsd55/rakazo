@@ -48,6 +48,9 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   const oauthAbortRef = useRef<AbortController | null>(null);
   const oauthLoginIdRef = useRef<string | null>(null);
   const oauthCodeSubmittingRef = useRef(false);
+  const refreshRevisionRef = useRef(0);
+  const selectionRevisionRef = useRef(0);
+  const probeRequestIdRef = useRef(0);
 
   function cancelOAuthAttempt(resetState = true) {
     const loginId = oauthLoginIdRef.current;
@@ -62,11 +65,14 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   }
 
   async function refresh() {
+    const refreshRevision = ++refreshRevisionRef.current;
+    const selectionRevision = selectionRevisionRef.current;
     const [nextCatalog, nextCredentials, nextMe] = await Promise.all([
       rpc.models.list(),
       rpc.models.credentials(),
       rpc.me(),
     ]);
+    if (refreshRevision !== refreshRevisionRef.current) return;
     const nextProvider =
       provider && nextCatalog.some((entry) => entry.provider === provider)
         ? provider
@@ -87,10 +93,13 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
     setMe(nextMe);
-    setProvider(nextProvider);
-    setModelId(nextModel);
-    if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
-      setBaseUrl(nextCredential?.baseUrl ?? "");
+    if (selectionRevision === selectionRevisionRef.current) {
+      resetOpenAiCompatibleProbe();
+      setProvider(nextProvider);
+      setModelId(nextModel);
+      if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
+        setBaseUrl(nextCredential?.baseUrl ?? "");
+      }
     }
   }
 
@@ -100,7 +109,11 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
         setError(err instanceof Error ? err.message : "Could not load model settings"),
       )
       .finally(() => setLoading(false));
-    return () => cancelOAuthAttempt(false);
+    return () => {
+      refreshRevisionRef.current += 1;
+      probeRequestIdRef.current += 1;
+      cancelOAuthAttempt(false);
+    };
   }, []);
 
   const groups = useMemo(() => {
@@ -149,8 +162,10 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   });
 
   function resetOpenAiCompatibleProbe() {
+    probeRequestIdRef.current += 1;
     setProbeModels([]);
     setProbedBaseUrl(null);
+    setProbing(false);
   }
 
   function updateBaseUrl(nextBaseUrl: string) {
@@ -167,6 +182,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
 
   function chooseProvider(nextProvider: string) {
     cancelOAuthAttempt();
+    selectionRevisionRef.current += 1;
     setProvider(nextProvider);
     setModelId(
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
@@ -186,35 +202,38 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   }
 
   async function probeServerModels() {
-    if (!baseUrl.trim()) return;
+    const trimmedBaseUrl = baseUrl.trim();
+    if (!trimmedBaseUrl) return;
+    resetOpenAiCompatibleProbe();
+    const requestId = probeRequestIdRef.current;
     setProbing(true);
     setError(null);
     setNotice(null);
-    resetOpenAiCompatibleProbe();
     try {
-      const trimmedBaseUrl = baseUrl.trim();
       const result = await rpc.models.probeOpenAiCompatible({
         baseUrl: trimmedBaseUrl,
         apiKey: apiKey.trim() || undefined,
       });
+      if (requestId !== probeRequestIdRef.current) return;
       setProbeModels(result.models);
       setProbedBaseUrl(trimmedBaseUrl);
       if (result.models[0]) setModelId(result.models[0]!);
       setNotice(openAiCompatibleProbeSuccessMessage(result.models.length));
     } catch (err) {
+      if (requestId !== probeRequestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Could not reach this model server");
     } finally {
-      setProbing(false);
+      if (requestId === probeRequestIdRef.current) setProbing(false);
     }
   }
 
   async function setModelDefault() {
     if (!selected || !credential) return;
+    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
+    if (isOpenAiCompatible && !activeModelId) return;
     setError(null);
     setNotice(null);
     setPending("default");
-    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
-    if (isOpenAiCompatible && !activeModelId) return;
     try {
       await rpc.models.setDefault({ provider: selected.provider, modelId: activeModelId });
       await refresh();
@@ -475,6 +494,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                             value={modelId}
                             onChange={(event) => {
                               cancelOAuthAttempt();
+                              selectionRevisionRef.current += 1;
                               setModelId(event.target.value);
                               setError(null);
                               setNotice(null);
@@ -493,6 +513,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                             value={modelId}
                             onChange={(event) => {
                               cancelOAuthAttempt();
+                              selectionRevisionRef.current += 1;
                               setModelId(event.target.value);
                               setError(null);
                               setNotice(null);
@@ -512,6 +533,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                         value={selected.id}
                         onChange={(nextModelId) => {
                           cancelOAuthAttempt();
+                          selectionRevisionRef.current += 1;
                           setModelId(nextModelId);
                           setError(null);
                           setNotice(null);

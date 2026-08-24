@@ -13,6 +13,9 @@ describe("describeToolActivity", () => {
       "Writing out.csv",
     );
     expect(describeToolActivity("render_plot", { spec: {} })).toBe("Rendering a chart");
+    expect(describeToolActivity("add_mcp_server", { name: "Linear" })).toBe(
+      "Connecting MCP server: Linear",
+    );
     expect(describeToolActivity("run_subagent", { name: "scout", task: "…" })).toBe(
       "Delegating to helper: scout",
     );
@@ -33,14 +36,14 @@ describe("describeToolActivity", () => {
   });
 
   it("redacts credentials from activity details", () => {
+    const token = "fake-token";
     const line = describeToolActivity("shell", {
-      command:
-        "curl -H 'Authorization: Bearer fake-token' https://example.test?api_key=fake-key password=fake-password",
+      command: `curl -H 'Authorization: Bearer ${token}' https://example.test?api_key=fake-key password=fake-password`,
     });
 
     expect(line).toContain("Bearer [redacted]");
     expect(line).toContain("api_key=[redacted]");
-    expect(line).not.toContain("fake-token");
+    expect(line).not.toContain(token);
     expect(line).not.toContain("fake-key");
     expect(line).not.toContain("fake-password");
   });

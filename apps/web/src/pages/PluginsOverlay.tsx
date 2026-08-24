@@ -22,7 +22,13 @@ function markConnected(
   );
 }
 
-export function PluginsOverlay({ onClose }: { onClose: () => void }) {
+export function PluginsOverlay({
+  onClose,
+  onOpenMcp,
+}: {
+  onClose: () => void;
+  onOpenMcp?: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState<CatalogView>("all");
   const [catalog, setCatalog] = useState<ConnectionCatalogItem[]>([]);
@@ -206,14 +212,25 @@ export function PluginsOverlay({ onClose }: { onClose: () => void }) {
               Connect apps or add Treg, MCP, and OpenAPI tool sources.
             </p>
           </div>
-          <button
-            type="button"
-            aria-label="Close integrations"
-            onClick={onClose}
-            className="text-[#85858A]"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-3">
+            {onOpenMcp ? (
+              <button
+                type="button"
+                onClick={onOpenMcp}
+                className="rounded-full border border-[#383844] px-3 py-1.5 text-xs text-[#C9C9CE] hover:bg-[#232327]"
+              >
+                MCP servers
+              </button>
+            ) : null}
+            <button
+              type="button"
+              aria-label="Close integrations"
+              onClick={onClose}
+              className="text-[#85858A]"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2 px-8 pt-4">

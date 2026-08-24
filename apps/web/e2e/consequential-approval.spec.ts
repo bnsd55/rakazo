@@ -6,7 +6,7 @@ test("actions run by default while optional confirmations live in advanced user 
 }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `action-confirmations-${stamp}@rakazo.test`, "password12", "Approval UI");
-  await completeOnboarding(page, ["A bit of everything", "Clear and tight"]);
+  await completeOnboarding(page, testInfo);
 
   await sendDestinationWrite(page, "write this to the destination crm as a note");
   await waitForRunIdle(page);

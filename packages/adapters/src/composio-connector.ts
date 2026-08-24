@@ -46,6 +46,7 @@ function mapOneTool(item: unknown): ConnectorTool | undefined {
       name,
       description: String(fn.description ?? name),
       inputSchema: asObject(fn.parameters) ?? { type: "object", properties: {} },
+      route: { connectorId: "composio", toolName: name },
     };
   }
   const name = String(raw.slug ?? raw.name ?? "");
@@ -56,6 +57,7 @@ function mapOneTool(item: unknown): ConnectorTool | undefined {
     inputSchema: asObject(raw.inputParameters) ??
       asObject(raw.inputSchema) ??
       asObject(raw.parameters) ?? { type: "object", properties: {} },
+    route: { connectorId: "composio", toolName: name },
   };
 }
 
