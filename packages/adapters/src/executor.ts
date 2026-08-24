@@ -287,9 +287,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
       if (!routine) return;
       if (routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return;
       if (!routine.active) {
-        // createScheduleFromTool activates after enqueue; briefly retry a race.
+        // createScheduleFromTool activates after enqueue; retry briefly while activation can still land.
         const ageMs = Date.now() - routine.createdAt.getTime();
-        if (ageMs >= 0 && ageMs < 5_000 && routine.nextRunAt) {
+        if (ageMs >= 0 && ageMs < 30_000 && routine.nextRunAt) {
           await deps.jobs.enqueue({
             ...routineWakeupJob(routine.id, routine.nextRunAt),
             availableAt: new Date(Date.now() + 250),
