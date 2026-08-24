@@ -3,9 +3,11 @@ import { ONCE_ROUTINE_CRON } from "@rakazo/core";
 import {
   cancelScheduleFromTool,
   createScheduleFromTool,
+  filterBuiltinToolsForThread,
   isOneShotRoutineCron,
   listSchedulesFromTool,
   resolveScheduleTiming,
+  SCHEDULE_TOOL_NAMES,
 } from "./schedule-tools.js";
 
 describe("resolveScheduleTiming", () => {
@@ -65,6 +67,33 @@ describe("resolveScheduleTiming", () => {
       ok: false,
       error: "Provide either a repeating schedule or a one-shot time, not both.",
     });
+  });
+});
+
+describe("filterBuiltinToolsForThread", () => {
+  const tools = [
+    { name: "handoff_to_bot" },
+    { name: "schedule_create" },
+    { name: "remember" },
+  ];
+
+  it("keeps handoff only in groups and hides schedule tools outside 1:1", () => {
+    expect(filterBuiltinToolsForThread(tools, "group-1").map((tool) => tool.name)).toEqual([
+      "handoff_to_bot",
+      "remember",
+    ]);
+    expect(filterBuiltinToolsForThread(tools, null).map((tool) => tool.name)).toEqual([
+      "schedule_create",
+      "remember",
+    ]);
+  });
+
+  it("covers every schedule tool name", () => {
+    for (const name of SCHEDULE_TOOL_NAMES) {
+      expect(filterBuiltinToolsForThread([{ name }, { name: "remember" }], "group-1")).toEqual([
+        { name: "remember" },
+      ]);
+    }
   });
 });
 

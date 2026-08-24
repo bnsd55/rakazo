@@ -146,6 +146,16 @@ export function formatCron(cron: string): string {
   return formatSchedule(presetFromCron(cron));
 }
 
+export function resolveRoutineNextRunAt(
+  cron: string,
+  from: Date,
+  timezone: string,
+  existing: Date | null | undefined,
+): Date | null {
+  if (isOneShotRoutineCron(cron)) return existing ?? null;
+  return nextCronDate(cron, from, timezone);
+}
+
 export function nextCronDate(cron: string, from: Date, timezone = "UTC"): Date {
   if (isOneShotRoutineCron(cron)) {
     throw new Error("nextCronDate does not apply to one-shot routines");

@@ -67,7 +67,9 @@ import {
   ACTIVE_RUN_STATUSES,
   AttachmentValidationError,
   containsSecret,
+  isOneShotRoutineCron,
   nextCronDate,
+  resolveRoutineNextRunAt,
 } from "@rakazo/core";
 import {
   appendEventInTransaction,
@@ -1466,7 +1468,9 @@ export function createRouter(deps: RouterDeps) {
             timezone: input.timezone,
             notify: input.notify,
             active: input.active,
-            nextRunAt: input.active ? nextCronDate(input.cron, new Date(), input.timezone) : null,
+            nextRunAt: input.active
+              ? resolveRoutineNextRunAt(input.cron, new Date(), input.timezone, null)
+              : null,
           },
         });
         if (bot.thread) {
@@ -1501,9 +1505,11 @@ export function createRouter(deps: RouterDeps) {
           (input.timezone !== undefined && input.timezone !== existing.timezone);
         const nextRunAt = !active
           ? null
-          : scheduleChanged || !existing.nextRunAt
-            ? nextCronDate(cron, new Date(), timezone)
-            : existing.nextRunAt;
+          : isOneShotRoutineCron(cron)
+            ? existing.nextRunAt
+            : scheduleChanged || !existing.nextRunAt
+              ? nextCronDate(cron, new Date(), timezone)
+              : existing.nextRunAt;
         const row = await deps.prisma.routine.update({
           where: { id: existing.id },
           data: {

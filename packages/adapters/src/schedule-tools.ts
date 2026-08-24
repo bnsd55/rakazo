@@ -16,6 +16,17 @@ export const SCHEDULE_TOOL_NAMES = new Set([
   "schedule_cancel",
 ]);
 
+export function filterBuiltinToolsForThread<T extends { name: string }>(
+  tools: T[],
+  groupId: string | null | undefined,
+): T[] {
+  return tools.filter(
+    (tool) =>
+      (groupId || tool.name !== "handoff_to_bot") &&
+      (!groupId || !SCHEDULE_TOOL_NAMES.has(tool.name)),
+  );
+}
+
 type ScheduleUnit = "minutes" | "hours" | "days" | "seconds";
 
 export type ResolvedSchedule =

@@ -135,9 +135,9 @@ import {
 import {
   cancelScheduleFromTool,
   createScheduleFromTool,
+  filterBuiltinToolsForThread,
   isOneShotRoutineCron,
   listSchedulesFromTool,
-  SCHEDULE_TOOL_NAMES,
 } from "./schedule-tools.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
@@ -639,14 +639,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const groupContext = thread.groupId
           ? await loadGroupContext(deps.prisma, thread.groupId)
           : undefined;
-        const availableBuiltins = (
+        const availableBuiltins = filterBuiltinToolsForThread(
           graphical
             ? builtinAgentTools
-            : builtinAgentTools.filter((tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name))
-        ).filter(
-          (tool) =>
-            !thread.groupId ||
-            (tool.name !== "handoff_to_bot" && !SCHEDULE_TOOL_NAMES.has(tool.name)),
+            : builtinAgentTools.filter((tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name)),
+          thread.groupId,
         );
         const builtins = selectMemoryTools(availableBuiltins, semanticMemoryEnabled);
         const exposedConnectorTools = discovered.filter(

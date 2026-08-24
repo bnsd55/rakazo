@@ -6,6 +6,7 @@ import {
   formatCron,
   ONCE_ROUTINE_CRON,
   presetFromCron,
+  resolveRoutineNextRunAt,
 } from "./cron.js";
 
 function preset(partial: Partial<CronPreset> & Pick<CronPreset, "freq">): CronPreset {
@@ -93,6 +94,21 @@ describe("presetFromCron", () => {
       freq: "Advanced",
       cron: ONCE_ROUTINE_CRON,
     });
+  });
+});
+
+describe("resolveRoutineNextRunAt", () => {
+  it("preserves existing nextRunAt for one-shot routines", () => {
+    const existing = new Date("2030-01-01T09:00:00.000Z");
+    expect(resolveRoutineNextRunAt(ONCE_ROUTINE_CRON, new Date(), "UTC", existing)).toEqual(
+      existing,
+    );
+    expect(resolveRoutineNextRunAt(ONCE_ROUTINE_CRON, new Date(), "UTC", null)).toBeNull();
+  });
+
+  it("computes cron schedules for repeating routines", () => {
+    const next = resolveRoutineNextRunAt("*/1 * * * *", new Date(), "UTC", null);
+    expect(next?.getTime()).toBeGreaterThan(Date.now());
   });
 });
 
