@@ -183,7 +183,7 @@ export async function createScheduleFromTool(
   const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  // Persist inactive first so a crash before activation cannot be reconciled live.
+  // Keep inactive until wakeup is queued so failed creates cannot be reconciled live.
   const row = await deps.prisma.routine.create({
     data: {
       workspaceId: input.workspaceId,
@@ -199,7 +199,17 @@ export async function createScheduleFromTool(
     },
   });
 
-  // Activate before enqueue so an immediately-due wakeup cannot run while inactive.
+  try {
+    await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+  } catch {
+    try {
+      await deps.prisma.routine.delete({ where: { id: row.id } });
+    } catch {
+      // Already inactive; delete is best effort.
+    }
+    return { error: "Could not schedule the reminder. Try again." };
+  }
+
   let active: Awaited<ReturnType<ScheduleToolDeps["prisma"]["routine"]["update"]>>;
   try {
     active = await deps.prisma.routine.update({
@@ -208,24 +218,14 @@ export async function createScheduleFromTool(
     });
   } catch {
     try {
-      await deps.prisma.routine.delete({ where: { id: row.id } });
+      await deps.jobs.cancel(routineJobKey(row.id));
     } catch {
       // Best effort.
     }
-    return { error: "Could not schedule the reminder. Try again." };
-  }
-
-  try {
-    await deps.jobs.enqueue(routineWakeupJob(active.id, resolved.nextRunAt));
-  } catch {
     try {
-      await deps.prisma.routine.delete({ where: { id: active.id } });
+      await deps.prisma.routine.delete({ where: { id: row.id } });
     } catch {
-      // Do not swallow deactivation failure — avoid soft-failing while still active.
-      await deps.prisma.routine.update({
-        where: { id: active.id },
-        data: { active: false, nextRunAt: null },
-      });
+      // Already inactive.
     }
     return { error: "Could not schedule the reminder. Try again." };
   }

@@ -284,7 +284,19 @@ export function createRunExecutor(deps: ExecutorDeps) {
       const scheduledAt = new Date(scheduledFor);
       if (!Number.isFinite(scheduledAt.getTime())) return;
       const routine = await deps.prisma.routine.findUnique({ where: { id: routineId } });
-      if (!routine?.active || routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return;
+      if (!routine) return;
+      if (routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return;
+      if (!routine.active) {
+        // createScheduleFromTool activates after enqueue; briefly retry a race.
+        const ageMs = Date.now() - routine.createdAt.getTime();
+        if (ageMs >= 0 && ageMs < 5_000 && routine.nextRunAt) {
+          await deps.jobs.enqueue({
+            ...routineWakeupJob(routine.id, routine.nextRunAt),
+            availableAt: new Date(Date.now() + 250),
+          });
+        }
+        return;
+      }
       if (await deferFutureRoutine(deps.jobs, routineId, scheduledAt)) return;
       const bot = await deps.prisma.bot.findUnique({
         where: { id: routine.botId },
