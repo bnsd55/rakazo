@@ -201,7 +201,19 @@ export async function createScheduleFromTool(
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
   } catch {
-    await deps.prisma.routine.delete({ where: { id: row.id } });
+    try {
+      await deps.prisma.routine.delete({ where: { id: row.id } });
+    } catch {
+      // If delete fails, deactivate so a reconciler cannot fire a "failed" create.
+      try {
+        await deps.prisma.routine.update({
+          where: { id: row.id },
+          data: { active: false, nextRunAt: null },
+        });
+      } catch {
+        // Compensation exhausted; still report failure to the tool caller.
+      }
+    }
     return { error: "Could not schedule the reminder. Try again." };
   }
 

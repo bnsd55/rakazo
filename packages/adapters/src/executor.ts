@@ -339,15 +339,20 @@ export function createRunExecutor(deps: ExecutorDeps) {
         });
       });
       if (!claimed) return;
-      await deps.events.append({
-        workspaceId: routine.workspaceId,
-        threadId: bot.thread.id,
-        botId: bot.id,
-        type: "routine.fired",
-        runId: claimed.id,
-        payload: { routineId: routine.id, scheduledFor },
-      });
+      // Enqueue continuation first so a thread-signal failure cannot strand the run.
       await deps.jobs.enqueue(runContinueJob(claimed.id));
+      try {
+        await deps.events.append({
+          workspaceId: routine.workspaceId,
+          threadId: bot.thread.id,
+          botId: bot.id,
+          type: "routine.fired",
+          runId: claimed.id,
+          payload: { routineId: routine.id, scheduledFor },
+        });
+      } catch {
+        // Best effort: the run is already queued.
+      }
       if (isOneShotRoutineCron(routine.cron)) {
         try {
           await deps.jobs.cancel(routineJobKey(routine.id));

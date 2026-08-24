@@ -1499,7 +1499,10 @@ export function createRouter(deps: RouterDeps) {
           });
         }
         const bot = await repos.getBot(context.actor, input.botId);
-        const nextRunAt = nextRoutineDate(input.cron, input.timezone);
+        // Inactive @once rows skip nextRoutineDate — it rejects @once.
+        const nextRunAt = input.active
+          ? nextRoutineDate(input.cron, input.timezone)
+          : null;
         const row = await deps.prisma.routine.create({
           data: {
             workspaceId: context.actor.workspaceId,
@@ -1511,7 +1514,7 @@ export function createRouter(deps: RouterDeps) {
             timezone: input.timezone,
             notify: input.notify,
             active: input.active,
-            nextRunAt: input.active ? nextRunAt : null,
+            nextRunAt,
           },
         });
         if (bot.thread) {
@@ -1540,10 +1543,17 @@ export function createRouter(deps: RouterDeps) {
         const active = input.active ?? existing.active;
         const cron = input.cron ?? existing.cron;
         const timezone = input.timezone ?? existing.timezone;
-        if (active && isOneShotRoutineCron(cron) && !existing.nextRunAt) {
-          throw new ORPCError("BAD_REQUEST", {
-            message: "One-shot schedules cannot be reactivated after they fire.",
-          });
+        if (active && isOneShotRoutineCron(cron)) {
+          if (!isOneShotRoutineCron(existing.cron)) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: "One-shot schedules must be created from chat.",
+            });
+          }
+          if (!existing.nextRunAt) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: "One-shot schedules cannot be reactivated after they fire.",
+            });
+          }
         }
         const scheduleChanged =
           (!existing.active && active) ||
