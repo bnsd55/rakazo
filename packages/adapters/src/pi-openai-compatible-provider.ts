@@ -18,6 +18,9 @@ export const OPENAI_COMPATIBLE_CATALOG_MODEL_ID = "custom";
 
 const DEFAULT_CONTEXT_WINDOW = 32_768;
 const DEFAULT_MAX_TOKENS = 4_096;
+const MAX_MODELS_RESPONSE_BYTES = 64 * 1024;
+const MAX_MODEL_IDS = 500;
+const MAX_MODEL_ID_LENGTH = 256;
 
 const OPENAI_COMPAT_BASE = "http://127.0.0.1:1/v1";
 
@@ -49,7 +52,7 @@ function openAiCompatibleProvider(models: Model<"openai-completions">[]): Provid
       apiKey: {
         name: "OpenAI-compatible server",
         resolve: async () => ({
-          auth: { apiKey: "" },
+          auth: { apiKey: "local" },
           source: "OpenAI-compatible endpoint",
         }),
       },
@@ -102,8 +105,7 @@ export function prepareOpenAiCompatibleConnect(input: OpenAiCompatibleConnectInp
   const modelId = input.modelId?.trim();
   if (!baseUrl) throw new Error("Base URL is required for OpenAI-compatible models");
   if (!modelId) throw new Error("Model id is required for OpenAI-compatible models");
-  assertAllowedOpenAiCompatibleUrl(baseUrl);
-  const normalized = normalizeOpenAiCompatibleBaseUrl(baseUrl);
+  const normalized = assertAllowedOpenAiCompatibleUrl(baseUrl).href;
   const apiKey = input.apiKey?.trim();
   return apiKey ? { baseUrl: normalized, modelId, apiKey } : { baseUrl: normalized, modelId };
 }
@@ -123,9 +125,40 @@ function probeModelIds(body: OpenAiCompatibleModelsResponse): string[] {
   if (!entries) {
     throw new Error("Model server response did not include a models list");
   }
-  return entries
-    .map((entry) => (typeof entry?.id === "string" ? entry.id.trim() : ""))
-    .filter((id) => id.length > 0);
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+    if (!id) continue;
+    if (id.length > MAX_MODEL_ID_LENGTH || ids.length >= MAX_MODEL_IDS) {
+      throw new Error("Model server returned too many or overly long model ids");
+    }
+    ids.push(id);
+  }
+  return ids;
+}
+
+async function readBoundedJson(response: Response): Promise<OpenAiCompatibleModelsResponse> {
+  const declaredSize = Number(response.headers.get("content-length") ?? 0);
+  if (declaredSize > MAX_MODELS_RESPONSE_BYTES) {
+    throw new Error("Model server response is too large");
+  }
+  if (!response.body) throw new Error("Model server returned an empty response");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > MAX_MODELS_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("Model server response is too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return JSON.parse(text) as OpenAiCompatibleModelsResponse;
 }
 
 export async function probeOpenAiCompatibleModels(
@@ -151,7 +184,7 @@ export async function probeOpenAiCompatibleModels(
     if (!response.ok) {
       throw new Error(`Model server returned ${response.status}`);
     }
-    const body = (await response.json()) as OpenAiCompatibleModelsResponse;
+    const body = await readBoundedJson(response);
     return probeModelIds(body);
   } finally {
     clearTimeout(timeout);

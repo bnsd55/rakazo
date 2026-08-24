@@ -6,7 +6,7 @@ describe("modelCredentialDto", () => {
   it("returns stored baseUrl and modelId for openai-compatible credentials", () => {
     const plaintext = serializeModelSecret({
       kind: "openai_compatible",
-      baseUrl: "http://192.168.1.20:8000/v1",
+      baseUrl: "https://example.invalid/v1",
     });
     expect(
       modelCredentialDto(
@@ -25,7 +25,7 @@ describe("modelCredentialDto", () => {
       label: "Local MLX",
       hasKey: true,
       isDefault: true,
-      baseUrl: "http://192.168.1.20:8000/v1",
+      baseUrl: "https://example.invalid/v1",
       modelId: "qwen3-4b",
     });
   });

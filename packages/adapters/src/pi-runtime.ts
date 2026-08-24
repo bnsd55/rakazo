@@ -1,5 +1,5 @@
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
-import { type Api, type Model, type Models, type MutableModels, Type } from "@earendil-works/pi-ai";
+import { type Api, type Model, type Models, Type } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
   AdapterContext,
@@ -22,8 +22,8 @@ const running = new Map<string, AbortController>();
 // Built on first use, not at module load: entry points call loadRootEnv() after
 // their imports, and ESM hoists those imports, so module-level env reads here
 // would run before .env is loaded and miss the local provider entirely.
-let catalogModelsCache: MutableModels | undefined;
-function catalogModels(): MutableModels {
+let catalogModelsCache: Models | undefined;
+function catalogModels(): Models {
   catalogModelsCache ??= registerOpenAiCompatibleCatalog(registerLocalProvider(builtinModels()));
   return catalogModelsCache;
 }
@@ -96,7 +96,7 @@ export class PiAgentRuntime implements AgentRuntime {
         const apiKey = request.model.oauth
           ? undefined
           : request.model.provider === OPENAI_COMPATIBLE_PROVIDER_ID
-            ? (request.model.apiKey ?? "")
+            ? request.model.apiKey || "local"
             : (request.model.apiKey ?? process.env.OPENROUTER_API_KEY);
         const toolDefs = request.tools.length ? request.tools : builtinAgentTools;
         const nestedAgents = new Set<Agent>();
@@ -253,32 +253,37 @@ function configuredOpenRouterModel(id: string): Model<"openai-completions"> {
   };
 }
 
-function modelsForRequest(request: AgentRunRequest, provider: string): MutableModels {
+export function modelsForRequest(
+  request: Pick<AgentRunRequest, "model">,
+  provider: string,
+): Models {
   const oauth = request.model.oauth;
-  let models = oauth
-    ? registerOpenAiCompatibleCatalog(
-        registerLocalProvider(
-          builtinModels({
-            credentials: new PiRuntimeCredentialStore(
-              provider,
-              toOAuthCredential(oauth.credential),
-              oauth.persist ? (next) => oauth.persist!(next) : undefined,
-            ),
-          }),
-        ),
-      )
-    : catalogModels();
+  if (oauth) {
+    const persist = oauth.persist;
+    return registerOpenAiCompatibleCatalog(
+      registerLocalProvider(
+        builtinModels({
+          credentials: new PiRuntimeCredentialStore(
+            provider,
+            toOAuthCredential(oauth.credential),
+            persist ? (next) => persist(next) : undefined,
+          ),
+        }),
+      ),
+    );
+  }
   if (
     provider === OPENAI_COMPATIBLE_PROVIDER_ID &&
     request.model.baseUrl &&
     request.model.id.trim()
   ) {
-    models = registerOpenAiCompatibleRuntime(models, {
+    const models = registerOpenAiCompatibleCatalog(registerLocalProvider(builtinModels()));
+    return registerOpenAiCompatibleRuntime(models, {
       modelId: request.model.id,
       baseUrl: request.model.baseUrl,
     });
   }
-  return models;
+  return catalogModels();
 }
 
 function toAgentTools(toolDefs: readonly ConnectorTool[], host: ToolHost): AgentTool[] {

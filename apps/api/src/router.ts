@@ -65,6 +65,7 @@ import {
   type ComputerStatus,
   type McpServer,
   type Me,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
 } from "@rakazo/contracts";
 import {
   ACTIVE_RUN_STATUSES,
@@ -374,20 +375,27 @@ export function createRouter(deps: RouterDeps) {
           where: { userId: context.actor.userId, workspaceId: context.actor.workspaceId },
           orderBy: newestModelCredentialOrder,
         });
-        return Promise.all(
-          rows.map(async (row) => {
-            const secret = await deps.prisma.secret.findUnique({ where: { id: row.secretId } });
-            let plaintext: string | undefined;
-            if (secret?.ciphertext) {
-              try {
-                plaintext = deps.secrets.load(secret.ciphertext);
-              } catch {
-                plaintext = undefined;
-              }
-            }
-            return modelCredentialDto(row, plaintext);
-          }),
-        );
+        const compatibleRows = rows.filter((row) => row.provider === OPENAI_COMPATIBLE_PROVIDER_ID);
+        const secrets = compatibleRows.length
+          ? await deps.prisma.secret.findMany({
+              where: {
+                id: { in: compatibleRows.map((row) => row.secretId) },
+                userId: context.actor.userId,
+                workspaceId: context.actor.workspaceId,
+              },
+              select: { id: true, ciphertext: true },
+            })
+          : [];
+        const ciphertextById = new Map(secrets.map((secret) => [secret.id, secret.ciphertext]));
+        return rows.map((row) => {
+          const ciphertext = ciphertextById.get(row.secretId);
+          if (!ciphertext) return modelCredentialDto(row);
+          try {
+            return modelCredentialDto(row, deps.secrets.load(ciphertext));
+          } catch {
+            return modelCredentialDto(row);
+          }
+        });
       }),
       connect: authed.models.connect.handler(async ({ context, input }) => {
         let plaintext: string;

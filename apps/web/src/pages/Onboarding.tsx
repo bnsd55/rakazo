@@ -39,6 +39,7 @@ export function OnboardingPage() {
   const oauthAbortRef = useRef<AbortController | null>(null);
   const oauthLoginIdRef = useRef<string | null>(null);
   const oauthCodeSubmittingRef = useRef(false);
+  const probeRequestIdRef = useRef(0);
 
   function cancelOAuthAttempt(resetState = true) {
     const loginId = oauthLoginIdRef.current;
@@ -69,7 +70,10 @@ export function OnboardingPage() {
         setStep("model");
       })
       .catch(() => setStep("bot"));
-    return () => cancelOAuthAttempt(false);
+    return () => {
+      probeRequestIdRef.current += 1;
+      cancelOAuthAttempt(false);
+    };
   }, []);
 
   const providers = useMemo(() => {
@@ -113,8 +117,10 @@ export function OnboardingPage() {
   });
 
   function resetOpenAiCompatibleProbe() {
+    probeRequestIdRef.current += 1;
     setProbeModels([]);
     setProbedBaseUrl(null);
+    setProbing(false);
   }
 
   function updateBaseUrl(nextBaseUrl: string) {
@@ -130,25 +136,28 @@ export function OnboardingPage() {
   }
 
   async function probeServerModels() {
-    if (!baseUrl.trim()) return;
+    const trimmedBaseUrl = baseUrl.trim();
+    if (!trimmedBaseUrl) return;
+    resetOpenAiCompatibleProbe();
+    const requestId = probeRequestIdRef.current;
     setProbing(true);
     setError(null);
     setNotice(null);
-    resetOpenAiCompatibleProbe();
     try {
-      const trimmedBaseUrl = baseUrl.trim();
       const result = await rpc.models.probeOpenAiCompatible({
         baseUrl: trimmedBaseUrl,
         apiKey: apiKey.trim() || undefined,
       });
+      if (requestId !== probeRequestIdRef.current) return;
       setProbeModels(result.models);
       setProbedBaseUrl(trimmedBaseUrl);
       if (result.models[0]) setModelId(result.models[0]!);
       setNotice(openAiCompatibleProbeSuccessMessage(result.models.length));
     } catch (err) {
+      if (requestId !== probeRequestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Could not reach this model server");
     } finally {
-      setProbing(false);
+      if (requestId === probeRequestIdRef.current) setProbing(false);
     }
   }
 

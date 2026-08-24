@@ -45,8 +45,8 @@ describe("openai-compatible URL policy", () => {
     expect(assertAllowedOpenAiCompatibleUrl("http://host.docker.internal:8000/v1").href).toBe(
       "http://host.docker.internal:8000/v1",
     );
-    expect(assertAllowedOpenAiCompatibleUrl("http://ollama.local:11434/v1").href).toBe(
-      "http://ollama.local:11434/v1",
+    expect(() => assertAllowedOpenAiCompatibleUrl("http://ollama.local:11434/v1")).toThrow(
+      /Public model endpoints are blocked/,
     );
   });
 

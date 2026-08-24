@@ -52,6 +52,7 @@ export default function Models() {
   const oauthAbortRef = useRef<AbortController | null>(null);
   const oauthLoginIdRef = useRef<string | null>(null);
   const oauthCodeSubmittingRef = useRef(false);
+  const probeRequestIdRef = useRef(0);
 
   const cancelOAuth = useCallback(() => {
     const loginId = oauthLoginIdRef.current;
@@ -94,6 +95,10 @@ export default function Models() {
     setMe(nextMe);
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
+    probeRequestIdRef.current += 1;
+    setProbeModels([]);
+    setProbedBaseUrl(null);
+    setProbing(false);
     setProvider(nextProvider);
     setModelId(nextModel);
     if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
@@ -108,7 +113,10 @@ export default function Models() {
           setError(err instanceof Error ? err.message : "Could not load model settings"),
         )
         .finally(() => setLoading(false));
-      return cancelOAuth;
+      return () => {
+        probeRequestIdRef.current += 1;
+        cancelOAuth();
+      };
     }, [cancelOAuth, load]),
   );
 
@@ -148,8 +156,10 @@ export default function Models() {
   });
 
   function resetOpenAiCompatibleProbe() {
+    probeRequestIdRef.current += 1;
     setProbeModels([]);
     setProbedBaseUrl(null);
+    setProbing(false);
   }
 
   function updateBaseUrl(nextBaseUrl: string) {
@@ -186,33 +196,36 @@ export default function Models() {
   async function probeServerModels() {
     const trimmedBaseUrl = effectiveBaseUrl;
     if (!trimmedBaseUrl) return;
+    resetOpenAiCompatibleProbe();
+    const requestId = probeRequestIdRef.current;
     setProbing(true);
     setError(null);
     setNotice(null);
-    resetOpenAiCompatibleProbe();
     try {
       const result = await rpc<{ models: string[] }>("models/probeOpenAiCompatible", {
         baseUrl: trimmedBaseUrl,
         apiKey: apiKey.trim() || undefined,
       });
+      if (requestId !== probeRequestIdRef.current) return;
       setProbeModels(result.models);
       setProbedBaseUrl(trimmedBaseUrl);
       if (result.models[0]) setModelId(result.models[0]!);
       setNotice(openAiCompatibleProbeSuccessMessage(result.models.length));
     } catch (err) {
+      if (requestId !== probeRequestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Could not reach this model server");
     } finally {
-      setProbing(false);
+      if (requestId === probeRequestIdRef.current) setProbing(false);
     }
   }
 
   async function setModelDefault() {
     if (!selected || !credential) return;
+    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
+    if (isOpenAiCompatible && !activeModelId) return;
     setError(null);
     setNotice(null);
     setPending("default");
-    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
-    if (isOpenAiCompatible && !activeModelId) return;
     try {
       await rpc("models/setDefault", { provider: selected.provider, modelId: activeModelId });
       await load({ provider, modelId: activeModelId });
@@ -445,10 +458,12 @@ export default function Models() {
                         key={entry}
                         accessibilityRole="radio"
                         accessibilityState={{ selected: entry === modelId }}
+                        disabled={probing}
                         onPress={() => setModelId(entry)}
                         style={({ pressed }) => [
                           styles.modelRow,
                           entry === modelId && styles.selectedRow,
+                          probing && styles.disabled,
                           pressed && styles.pressed,
                         ]}
                       >
@@ -464,7 +479,7 @@ export default function Models() {
                     accessibilityLabel="Model id"
                     autoCapitalize="none"
                     autoCorrect={false}
-                    editable={!busy}
+                    editable={!busy && !probing}
                     onChangeText={setModelId}
                     placeholder="exact-model-id"
                     placeholderTextColor={native.tertiaryLabel}
