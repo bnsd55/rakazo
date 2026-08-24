@@ -72,6 +72,10 @@ describe("resolveScheduleTiming", () => {
       ok: false,
       error: "cron must be a 5-field cron expression.",
     });
+    expect(resolveScheduleTiming({ cron: "foo * * * *" })).toEqual({
+      ok: false,
+      error: "cron must be a valid 5-field cron expression.",
+    });
   });
 
   it("rejects mixing repeat and one-shot fields", () => {

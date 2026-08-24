@@ -273,6 +273,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         provider,
         id,
         apiKey: resolved.oauth ? undefined : resolved.apiKey,
+        baseUrl: resolved.baseUrl,
         oauth: resolved.oauth
           ? { credential: resolved.oauth, persist: resolved.persistOAuth }
           : undefined,
@@ -290,20 +291,28 @@ export function createRunExecutor(deps: ExecutorDeps) {
         include: { thread: true },
       });
       if (!bot?.thread) return;
-      const nextRunAt = isOneShotRoutineCron(routine.cron)
-        ? null
-        : nextCronDate(
+      let nextRunAt: Date | null = null;
+      if (isOneShotRoutineCron(routine.cron)) {
+        nextRunAt = null;
+      } else {
+        try {
+          nextRunAt = nextCronDate(
             routine.cron,
             new Date(Math.max(Date.now(), scheduledAt.getTime())),
             routine.timezone,
           );
+        } catch {
+          // Legacy rows may contain schedules accepted before cron validation was added.
+          // Fire the already-due run once, then pause the invalid schedule.
+        }
+      }
       const claimed = await deps.prisma.$transaction(async (tx) => {
         const updated = await tx.routine.updateMany({
           where: { id: routine.id, active: true, nextRunAt: scheduledAt },
           data: {
             lastRunAt: new Date(),
             nextRunAt,
-            ...(isOneShotRoutineCron(routine.cron) ? { active: false } : {}),
+            ...(nextRunAt ? {} : { active: false }),
           },
         });
         if (updated.count !== 1) return null;
@@ -1540,6 +1549,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 provider: credential?.provider ?? settings?.defaultModelProvider ?? "scripted",
                 id: credential?.defaultModel ?? settings?.defaultModelId ?? "scripted",
                 apiKey: resolved.oauth ? undefined : resolved.apiKey,
+                baseUrl: resolved.baseUrl,
                 oauth: resolved.oauth
                   ? { credential: resolved.oauth, persist: resolved.persistOAuth }
                   : undefined,
@@ -2205,6 +2215,7 @@ async function resolveModelKey(
   registerSecrets?: (values: string[]) => void,
 ): Promise<{
   apiKey?: string;
+  baseUrl?: string;
   oauth?: AgentModelOAuthCredential;
   persistOAuth?: (credential: AgentModelOAuthCredential) => Promise<void>;
   redact: string[];
@@ -2232,8 +2243,11 @@ async function resolveModelKey(
         persist,
       });
       const oauth = resolved.secret.kind === "oauth" ? resolved.secret.credential : undefined;
+      const baseUrl =
+        resolved.secret.kind === "openai_compatible" ? resolved.secret.baseUrl : undefined;
       return {
         apiKey: resolved.apiKey,
+        baseUrl,
         oauth,
         persistOAuth: oauth
           ? async (next) => {
