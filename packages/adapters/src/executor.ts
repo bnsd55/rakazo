@@ -306,6 +306,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           // Fire the already-due run once, then pause the invalid schedule.
         }
       }
+      const previousLastRunAt = routine.lastRunAt;
       const claimed = await deps.prisma.$transaction(async (tx) => {
         const updated = await tx.routine.updateMany({
           where: { id: routine.id, active: true, nextRunAt: scheduledAt },
@@ -340,7 +341,28 @@ export function createRunExecutor(deps: ExecutorDeps) {
       });
       if (!claimed) return;
       // Enqueue continuation first so a thread-signal failure cannot strand the run.
-      await deps.jobs.enqueue(runContinueJob(claimed.id));
+      try {
+        await deps.jobs.enqueue(runContinueJob(claimed.id));
+      } catch (error) {
+        // Restore the claim so wakeup retry / routine reconciliation can fire again.
+        await deps.prisma.$transaction(async (tx) => {
+          await tx.run.deleteMany({ where: { id: claimed.id, status: "queued" } });
+          await tx.task.deleteMany({ where: { id: claimed.taskId, status: "queued" } });
+          await tx.routine.updateMany({
+            where: {
+              id: routine.id,
+              nextRunAt,
+              ...(nextRunAt ? {} : { active: false }),
+            },
+            data: {
+              nextRunAt: scheduledAt,
+              active: true,
+              lastRunAt: previousLastRunAt,
+            },
+          });
+        });
+        throw error;
+      }
       try {
         await deps.events.append({
           workspaceId: routine.workspaceId,
