@@ -1,4 +1,5 @@
 import type { Me } from "@rakazo/contracts";
+import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@rakazo/contracts";
 import { Button } from "@rakazo/ui-web";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -27,6 +28,9 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   const [providerQuery, setProviderQuery] = useState("");
   const [modelId, setModelId] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8000/v1");
+  const [probeModels, setProbeModels] = useState<string[]>([]);
+  const [probing, setProbing] = useState(false);
   const [oauth, setOauth] = useState<ModelOAuthBegin | null>(null);
   const [pasteCode, setPasteCode] = useState("");
   const [loading, setLoading] = useState(true);
@@ -109,11 +113,14 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   }, [groups, providerQuery]);
   const modelsForProvider = catalog.filter((entry) => entry.provider === provider);
   const selected = modelsForProvider.find((entry) => entry.id === modelId) ?? modelsForProvider[0];
+  const isOpenAiCompatible = provider === OPENAI_COMPATIBLE_PROVIDER_ID;
   const credential = credentials.find((entry) => entry.provider === provider);
   const currentEntry = catalog.find(
     (entry) => entry.provider === me?.defaultProvider && entry.id === me?.defaultModel,
   );
-  const isActive = me?.defaultProvider === selected?.provider && me?.defaultModel === selected?.id;
+  const isActive =
+    me?.defaultProvider === selected?.provider &&
+    me?.defaultModel === (isOpenAiCompatible ? modelId.trim() : selected?.id);
   const acceptsKey = selected?.auth !== "oauth";
   const subscriptionSignIn = selected?.signIn !== undefined;
   const busy = pending !== null || oauthPending;
@@ -124,8 +131,30 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setModelId(catalog.find((entry) => entry.provider === nextProvider)?.id ?? "");
     detailScrollRef.current?.scrollTo({ top: 0 });
     setApiKey("");
+    setProbeModels([]);
     setError(null);
     setNotice(null);
+  }
+
+  async function probeServerModels() {
+    if (!baseUrl.trim()) return;
+    setProbing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await rpc.models.probeOpenAiCompatible({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined,
+      });
+      setProbeModels(result.models);
+      if (result.models[0]) setModelId(result.models[0]!);
+      setNotice(`Found ${result.models.length} model${result.models.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      setProbeModels([]);
+      setError(err instanceof Error ? err.message : "Could not list models from server");
+    } finally {
+      setProbing(false);
+    }
   }
 
   async function setModelDefault() {
@@ -133,10 +162,11 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
     setError(null);
     setNotice(null);
     setPending("default");
+    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
     try {
-      await rpc.models.setDefault({ provider: selected.provider, modelId: selected.id });
+      await rpc.models.setDefault({ provider: selected.provider, modelId: activeModelId });
       await refresh();
-      setNotice(`Now using ${selected.label}.`);
+      setNotice(`Now using ${isOpenAiCompatible ? activeModelId : selected.label}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not change the default model");
     } finally {
@@ -145,20 +175,35 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
   }
 
   async function connectKey() {
-    if (!selected || !apiKey.trim()) return;
+    if (!selected) return;
+    if (isOpenAiCompatible) {
+      if (!baseUrl.trim() || !modelId.trim()) return;
+    } else if (!apiKey.trim()) {
+      return;
+    }
     setError(null);
     setNotice(null);
     setPending("connect");
     try {
-      await rpc.models.connect({
-        provider: selected.provider,
-        apiKey: apiKey.trim(),
-        modelId: selected.id,
-        label: selected.providerName ?? selected.provider,
-      });
+      await rpc.models.connect(
+        isOpenAiCompatible
+          ? {
+              provider: selected.provider,
+              baseUrl: baseUrl.trim(),
+              modelId: modelId.trim(),
+              apiKey: apiKey.trim() || undefined,
+              label: selected.providerName ?? selected.provider,
+            }
+          : {
+              provider: selected.provider,
+              apiKey: apiKey.trim(),
+              modelId: selected.id,
+              label: selected.providerName ?? selected.provider,
+            },
+      );
       setApiKey("");
       await refresh();
-      setNotice(`Connected and using ${selected.label}.`);
+      setNotice(`Connected and using ${isOpenAiCompatible ? modelId.trim() : selected.label}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not connect this provider");
     } finally {
@@ -343,17 +388,72 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
               <>
                 <div className="block text-[13.5px] text-[#85858A]">
                   <span>Model</span>
-                  <ModelPicker
-                    options={modelsForProvider}
-                    value={selected.id}
-                    onChange={(nextModelId) => {
-                      cancelOAuthAttempt();
-                      setModelId(nextModelId);
-                      setError(null);
-                      setNotice(null);
-                    }}
-                  />
+                  {isOpenAiCompatible ? (
+                    <input
+                      value={modelId}
+                      onChange={(event) => {
+                        cancelOAuthAttempt();
+                        setModelId(event.target.value);
+                        setError(null);
+                        setNotice(null);
+                      }}
+                      aria-label="Model id"
+                      placeholder="exact-model-id"
+                      className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
+                    />
+                  ) : (
+                    <ModelPicker
+                      options={modelsForProvider}
+                      value={selected.id}
+                      onChange={(nextModelId) => {
+                        cancelOAuthAttempt();
+                        setModelId(nextModelId);
+                        setError(null);
+                        setNotice(null);
+                      }}
+                    />
+                  )}
                 </div>
+                {isOpenAiCompatible ? (
+                  <>
+                    <label className="mt-4 block text-[13.5px] text-[#85858A]">
+                      Base URL
+                      <input
+                        value={baseUrl}
+                        onChange={(event) => setBaseUrl(event.target.value)}
+                        aria-label="OpenAI-compatible base URL"
+                        placeholder="http://127.0.0.1:8000/v1"
+                        autoComplete="off"
+                        className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
+                      />
+                    </label>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || probing || !baseUrl.trim()}
+                        onClick={() => void probeServerModels()}
+                      >
+                        {probing ? "Listing…" : "List models"}
+                      </Button>
+                      {probeModels.length ? (
+                        <select
+                          value={modelId}
+                          onChange={(event) => setModelId(event.target.value)}
+                          aria-label="Models from server"
+                          className="min-w-0 flex-1 rounded-[11px] border border-[#26262A] bg-[#101012] px-3 py-2 text-sm text-[#ECECEE]"
+                        >
+                          {probeModels.map((id) => (
+                            <option key={id} value={id}>
+                              {id}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
                 <p className="mt-2 text-[13px] leading-[1.5] text-[#85858A]">{selected.billing}</p>
 
                 <div className="mt-5 rounded-[13px] border border-[#26262A] px-4 py-3">
@@ -449,13 +549,15 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                     <label className="block text-[13.5px] text-[#85858A]">
                       {credential
                         ? "Replace API key"
-                        : subscriptionSignIn
-                          ? "Or connect an API key"
-                          : "API key"}
+                        : isOpenAiCompatible
+                          ? "API key (optional)"
+                          : subscriptionSignIn
+                            ? "Or connect an API key"
+                            : "API key"}
                       <input
                         value={apiKey}
                         onChange={(event) => setApiKey(event.target.value)}
-                        placeholder="sk-…"
+                        placeholder={isOpenAiCompatible ? "optional" : "sk-…"}
                         type="password"
                         autoComplete="new-password"
                         className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-[#101012] px-3.5 py-3 text-[#ECECEE] outline-none"
@@ -465,15 +567,24 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
                       type="button"
                       variant="pill"
                       size="sm"
-                      disabled={busy || apiKey.trim().length < 8}
+                      disabled={
+                        busy ||
+                        (isOpenAiCompatible
+                          ? !baseUrl.trim() || !modelId.trim()
+                          : apiKey.trim().length < 8)
+                      }
                       onClick={() => void connectKey()}
                       className="mt-3"
                     >
                       {pending === "connect"
                         ? "Saving…"
                         : credential
-                          ? "Replace API key"
-                          : "Connect API key"}
+                          ? isOpenAiCompatible
+                            ? "Replace connection"
+                            : "Replace API key"
+                          : isOpenAiCompatible
+                            ? "Connect endpoint"
+                            : "Connect API key"}
                     </Button>
                   </div>
                 ) : null}

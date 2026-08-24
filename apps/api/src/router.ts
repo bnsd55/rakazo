@@ -18,6 +18,7 @@ import {
   acquireComputerExecutionLease,
   applyTeachingDesktopInput,
   archiveBot,
+  buildModelConnectPlaintext,
   ComputerBusyError,
   type ComputerExecutionLease,
   type ConnectorRegistry,
@@ -35,6 +36,7 @@ import {
   planLiveConnectionSync,
   prepareApiInstall,
   prepareMemoryProviderConnection,
+  probeOpenAiCompatibleModels,
   provisionComputer,
   type RemoteConnectorDependencies,
   releaseComputerExecutionLease,
@@ -293,14 +295,34 @@ export function createRouter(deps: RouterDeps) {
         }));
       }),
       connect: authed.models.connect.handler(async ({ context, input }) => {
+        let plaintext: string;
+        try {
+          plaintext = buildModelConnectPlaintext(input);
+        } catch (error) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: error instanceof Error ? error.message : "Invalid model connection",
+          });
+        }
         return persistModelCredential(deps, context.actor, {
           provider: input.provider,
-          plaintext: input.apiKey,
+          plaintext,
           label: input.label,
           modelId: input.modelId,
           signal: context.signal,
         });
       }),
+      probeOpenAiCompatible: authed.models.probeOpenAiCompatible.handler(
+        async ({ context, input }) => {
+          try {
+            const models = await probeOpenAiCompatibleModels(input, fetch, context.signal);
+            return { models };
+          } catch (error) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: error instanceof Error ? error.message : "Could not list models",
+            });
+          }
+        },
+      ),
       beginOAuth: authed.models.beginOAuth.handler(async ({ context, input }) => {
         return deps.oauthLogins.begin({
           userId: context.actor.userId,

@@ -1,3 +1,4 @@
+import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@rakazo/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -42,6 +43,9 @@ export function OnboardingPage() {
   const [provider, setProvider] = useState("openrouter");
   const [modelId, setModelId] = useState("deepseek/deepseek-v4-flash-0731");
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8000/v1");
+  const [probeModels, setProbeModels] = useState<string[]>([]);
+  const [probing, setProbing] = useState(false);
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -115,14 +119,42 @@ export function OnboardingPage() {
   );
 
   const selected = modelsForProvider.find((entry) => entry.id === modelId) ?? modelsForProvider[0];
+  const isOpenAiCompatible = provider === OPENAI_COMPATIBLE_PROVIDER_ID;
   const subscriptionSignIn = selected?.signIn !== undefined;
   const acceptsKey = selected?.auth !== "oauth";
   const signInLabel = selected?.oauthLabel ?? "Sign in";
 
+  async function probeServerModels() {
+    if (!baseUrl.trim()) return;
+    setProbing(true);
+    setError(null);
+    try {
+      const result = await rpc.models.probeOpenAiCompatible({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined,
+      });
+      setProbeModels(result.models);
+      if (result.models[0]) setModelId(result.models[0]!);
+    } catch (err) {
+      setProbeModels([]);
+      setError(err instanceof Error ? err.message : "Could not list models from server");
+    } finally {
+      setProbing(false);
+    }
+  }
+
   async function saveModel() {
     setError(null);
     try {
-      if (apiKey) {
+      if (isOpenAiCompatible) {
+        await rpc.models.connect({
+          provider,
+          baseUrl: baseUrl.trim(),
+          modelId: modelId.trim(),
+          apiKey: apiKey.trim() || undefined,
+          label: selected?.providerName ?? provider,
+        });
+      } else if (apiKey) {
         await rpc.models.connect({
           provider,
           apiKey,
@@ -274,23 +306,73 @@ export function OnboardingPage() {
                 </button>
               ))}
             </div>
-            <label className="mt-4 block text-sm text-[#85858A]">
-              Model
-              <select
-                value={selected?.id ?? modelId}
-                onChange={(e) => {
-                  cancelOAuthAttempt();
-                  setModelId(e.target.value);
-                }}
-                className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
-              >
-                {modelsForProvider.map((entry) => (
-                  <option key={`${entry.provider}:${entry.id}`} value={entry.id}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="mt-4 block text-sm text-[#85858A]">
+              <span>Model</span>
+              {isOpenAiCompatible ? (
+                <input
+                  value={modelId}
+                  onChange={(e) => setModelId(e.target.value)}
+                  aria-label="Model id"
+                  placeholder="exact-model-id"
+                  className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+                />
+              ) : (
+                <select
+                  value={selected?.id ?? modelId}
+                  onChange={(e) => {
+                    cancelOAuthAttempt();
+                    setModelId(e.target.value);
+                  }}
+                  aria-label="Model"
+                  className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+                >
+                  {modelsForProvider.map((entry) => (
+                    <option key={`${entry.provider}:${entry.id}`} value={entry.id}>
+                      {entry.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {isOpenAiCompatible ? (
+              <>
+                <label className="mt-4 block text-sm text-[#85858A]">
+                  Base URL
+                  <input
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    aria-label="OpenAI-compatible base URL"
+                    placeholder="http://127.0.0.1:8000/v1"
+                    autoComplete="off"
+                    className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
+                  />
+                </label>
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={probing || !baseUrl.trim()}
+                    onClick={() => void probeServerModels()}
+                    className="rounded-[11px] border border-[#26262A] px-4 py-2 text-sm text-[#ECECEE] disabled:opacity-40"
+                  >
+                    {probing ? "Listing…" : "List models"}
+                  </button>
+                  {probeModels.length ? (
+                    <select
+                      value={modelId}
+                      onChange={(e) => setModelId(e.target.value)}
+                      aria-label="Models from server"
+                      className="min-w-0 flex-1 rounded-[11px] border border-[#26262A] bg-transparent px-3 py-2 text-sm text-[#ECECEE]"
+                    >
+                      {probeModels.map((id) => (
+                        <option key={id} value={id}>
+                          {id}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
             <p className="mt-2 text-[13px] text-[#85858A]">{selected?.billing}</p>
             {subscriptionSignIn ? (
               <div className="mt-4">
@@ -365,11 +447,15 @@ export function OnboardingPage() {
             ) : null}
             {acceptsKey ? (
               <label className="mt-4 block text-sm text-[#85858A]">
-                {subscriptionSignIn ? "Or paste an API key" : "API key"}
+                {isOpenAiCompatible
+                  ? "API key (optional)"
+                  : subscriptionSignIn
+                    ? "Or paste an API key"
+                    : "API key"}
                 <input
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-…"
+                  placeholder={isOpenAiCompatible ? "optional" : "sk-…"}
                   type="password"
                   autoComplete="new-password"
                   className="mt-2 w-full rounded-[11px] border border-[#26262A] bg-transparent px-3.5 py-3 text-[#ECECEE]"
@@ -385,7 +471,9 @@ export function OnboardingPage() {
             <div className="mt-6 flex gap-3">
               <button
                 type="button"
-                disabled={oauthPending}
+                disabled={
+                  oauthPending || (isOpenAiCompatible && (!baseUrl.trim() || !modelId.trim()))
+                }
                 onClick={() => void saveModel()}
                 className="rounded-[11px] bg-[#F1F1EF] px-5 py-2.5 text-[#17171A] disabled:opacity-40"
               >
