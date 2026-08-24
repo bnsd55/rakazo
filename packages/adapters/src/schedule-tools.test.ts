@@ -158,7 +158,7 @@ describe("schedule tool persistence", () => {
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
-  it("rolls back routine and job when event append fails", async () => {
+  it("keeps the routine when event append fails after enqueue", async () => {
     const cancel = vi.fn(async () => undefined);
     const remove = vi.fn(async () => undefined);
     const deps = {
@@ -190,8 +190,44 @@ describe("schedule tool persistence", () => {
       schedule: { every: 1, unit: "minutes" },
     });
 
+    expect(result).toMatchObject({ ok: true, routineId: "routine-1" });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("rolls back routine when enqueue fails", async () => {
+    const remove = vi.fn(async () => undefined);
+    const deps = {
+      prisma: {
+        routine: {
+          create: vi.fn(async () => ({
+            id: "routine-1",
+            name: "Morning joke",
+            nextRunAt: new Date(),
+          })),
+          delete: remove,
+        },
+      },
+      events: { append: vi.fn(async () => undefined) },
+      jobs: {
+        enqueue: vi.fn(async () => {
+          throw new Error("enqueue failed");
+        }),
+        cancel: vi.fn(async () => undefined),
+      },
+    } as unknown as Parameters<typeof createScheduleFromTool>[0];
+
+    const result = await createScheduleFromTool(deps, {
+      workspaceId: "ws-1",
+      botId: "bot-1",
+      userId: "user-1",
+      threadId: "thread-1",
+      name: "Morning joke",
+      prompt: "Tell a joke",
+      schedule: { every: 1, unit: "minutes" },
+    });
+
     expect(result).toEqual({ error: "Could not schedule the reminder. Try again." });
-    expect(cancel).toHaveBeenCalledWith("routine:routine-1");
     expect(remove).toHaveBeenCalledWith({ where: { id: "routine-1" } });
   });
 

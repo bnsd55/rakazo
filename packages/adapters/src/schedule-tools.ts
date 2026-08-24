@@ -200,6 +200,12 @@ export async function createScheduleFromTool(
 
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+  } catch {
+    await deps.prisma.routine.delete({ where: { id: row.id } });
+    return { error: "Could not schedule the reminder. Try again." };
+  }
+
+  try {
     await deps.events.append({
       workspaceId: input.workspaceId,
       threadId: input.threadId,
@@ -208,9 +214,7 @@ export async function createScheduleFromTool(
       payload: { name: row.name },
     });
   } catch {
-    await deps.jobs.cancel(routineJobKey(row.id)).catch(() => undefined);
-    await deps.prisma.routine.delete({ where: { id: row.id } });
-    return { error: "Could not schedule the reminder. Try again." };
+    // Match routines.create: the reminder is live even if the thread signal fails.
   }
 
   return {
