@@ -4,6 +4,7 @@ import {
   cronFromPreset,
   describeCronPreset,
   formatCron,
+  ONCE_ROUTINE_CRON,
   presetFromCron,
 } from "./cron.js";
 
@@ -39,6 +40,9 @@ describe("cronFromPreset", () => {
   it("keeps advanced expressions", () => {
     expect(cronFromPreset(preset({ freq: "Advanced", cron: "0 10 15 * *" }))).toBe("0 10 15 * *");
     expect(cronFromPreset(preset({ freq: "Advanced", cron: "" }))).toBe("*/3 * * * *");
+    expect(cronFromPreset(preset({ freq: "Advanced", cron: ONCE_ROUTINE_CRON }))).toBe(
+      ONCE_ROUTINE_CRON,
+    );
   });
 });
 
@@ -85,6 +89,10 @@ describe("presetFromCron", () => {
       freq: "Advanced",
       cron: "30 14 15 * *",
     });
+    expect(presetFromCron(ONCE_ROUTINE_CRON)).toMatchObject({
+      freq: "Advanced",
+      cron: ONCE_ROUTINE_CRON,
+    });
   });
 });
 
@@ -93,6 +101,7 @@ describe("formatCron", () => {
     expect(formatCron("0 9 * * 1")).toBe("Every Monday at 9:00 AM");
     expect(formatCron("0 8 * * 1-5")).toBe("Weekdays at 8:00 AM");
     expect(formatCron("*/15 * * * *")).toBe("Every 15 minutes");
+    expect(formatCron(ONCE_ROUTINE_CRON)).toBe("One-time");
     expect(describeCronPreset(preset({ freq: "Every hour" }))).toEqual({
       lead: "Every hour",
       detail: "",

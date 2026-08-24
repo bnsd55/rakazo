@@ -1,0 +1,242 @@
+import { routineJobKey, routineWakeupJob } from "@rakazo/adapter-kit";
+import {
+  cronFromPreset,
+  isOneShotRoutineCron,
+  nextCronDate,
+  ONCE_ROUTINE_CRON,
+} from "@rakazo/core";
+import type { PrismaClient, ThreadEvents } from "@rakazo/db";
+import type { JobPublisher } from "@rakazo/adapter-kit";
+
+export { isOneShotRoutineCron, ONCE_ROUTINE_CRON };
+
+export const SCHEDULE_TOOL_NAMES = new Set([
+  "schedule_create",
+  "schedule_list",
+  "schedule_cancel",
+]);
+
+type ScheduleUnit = "minutes" | "hours" | "days" | "seconds";
+
+export type ResolvedSchedule =
+  | { ok: true; cron: string; nextRunAt: Date; oneShot: boolean }
+  | { ok: false; error: string };
+
+export function resolveScheduleTiming(input: {
+  cron?: unknown;
+  every?: unknown;
+  unit?: unknown;
+  runAt?: unknown;
+  delayMinutes?: unknown;
+  delaySeconds?: unknown;
+}): ResolvedSchedule {
+  const hasRepeat = input.cron !== undefined || input.every !== undefined || input.unit !== undefined;
+  const hasOneShot =
+    input.runAt !== undefined ||
+    input.delayMinutes !== undefined ||
+    input.delaySeconds !== undefined;
+  if (hasRepeat && hasOneShot) {
+    return { ok: false, error: "Provide either a repeating schedule or a one-shot time, not both." };
+  }
+  if (!hasRepeat && !hasOneShot) {
+    return {
+      ok: false,
+      error:
+        "Provide cron, every/unit for repeating schedules, or runAt/delayMinutes/delaySeconds for one-shot.",
+    };
+  }
+
+  if (hasOneShot) {
+    const oneShotFields = [input.runAt, input.delayMinutes, input.delaySeconds].filter(
+      (value) => value !== undefined,
+    );
+    if (oneShotFields.length !== 1) {
+      return {
+        ok: false,
+        error: "Provide exactly one of runAt, delayMinutes, or delaySeconds for a one-shot schedule.",
+      };
+    }
+    let nextRunAt: Date;
+    if (input.delaySeconds !== undefined) {
+      const delaySeconds = Number(input.delaySeconds);
+      if (!Number.isFinite(delaySeconds) || delaySeconds < 0) {
+        return { ok: false, error: "delaySeconds must be a non-negative number." };
+      }
+      nextRunAt = new Date(Date.now() + delaySeconds * 1_000);
+    } else if (input.delayMinutes !== undefined) {
+      const delayMinutes = Number(input.delayMinutes);
+      if (!Number.isFinite(delayMinutes) || delayMinutes < 0) {
+        return { ok: false, error: "delayMinutes must be a non-negative number." };
+      }
+      nextRunAt = new Date(Date.now() + delayMinutes * 60_000);
+    } else {
+      const parsed = new Date(String(input.runAt ?? ""));
+      if (!Number.isFinite(parsed.getTime())) {
+        return { ok: false, error: "runAt must be a valid ISO datetime." };
+      }
+      nextRunAt = parsed;
+    }
+    if (nextRunAt.getTime() <= Date.now()) {
+      return { ok: false, error: "One-shot schedules must run in the future." };
+    }
+    return { ok: true, cron: ONCE_ROUTINE_CRON, nextRunAt, oneShot: true };
+  }
+
+  if (input.cron !== undefined) {
+    const cron = String(input.cron).trim();
+    if (!cron) return { ok: false, error: "cron must be a non-empty 5-field cron expression." };
+    if (isOneShotRoutineCron(cron)) {
+      return { ok: false, error: "Use runAt, delayMinutes, or delaySeconds for one-shot schedules." };
+    }
+    const intervalError = validateRepeatingCronFloor(cron);
+    if (intervalError) return { ok: false, error: intervalError };
+    const nextRunAt = nextCronDate(cron, new Date());
+    return { ok: true, cron, nextRunAt, oneShot: false };
+  }
+
+  const every = Number(input.every);
+  const unit = String(input.unit ?? "") as ScheduleUnit;
+  if (!Number.isFinite(every) || every <= 0) {
+    return { ok: false, error: "every must be a positive number." };
+  }
+  if (unit === "seconds") {
+    return { ok: false, error: "minimum interval is 1 minute" };
+  }
+  if (!["minutes", "hours", "days"].includes(unit)) {
+    return { ok: false, error: 'unit must be "minutes", "hours", or "days".' };
+  }
+  if (unit === "minutes" && every < 1) {
+    return { ok: false, error: "minimum interval is 1 minute" };
+  }
+  const cron = cronFromPreset({ freq: "Interval", n: every, unit });
+  const intervalError = validateRepeatingCronFloor(cron);
+  if (intervalError) return { ok: false, error: intervalError };
+  const nextRunAt = nextCronDate(cron, new Date());
+  return { ok: true, cron, nextRunAt, oneShot: false };
+}
+
+function validateRepeatingCronFloor(cron: string): string | null {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length < 5) return null;
+  const minuteExpr = parts[0] ?? "*";
+  const step = /^\*\/(\d+)$/.exec(minuteExpr);
+  if (step) {
+    const n = Number(step[1]);
+    if (Number.isFinite(n) && n < 1) return "minimum interval is 1 minute";
+  }
+  return null;
+}
+
+export interface ScheduleToolDeps {
+  prisma: PrismaClient;
+  events: ThreadEvents;
+  jobs: JobPublisher;
+}
+
+export async function createScheduleFromTool(
+  deps: ScheduleToolDeps,
+  input: {
+    workspaceId: string;
+    botId: string;
+    userId: string;
+    threadId: string;
+    name: string;
+    prompt: string;
+    timezone?: string;
+    schedule: Record<string, unknown>;
+  },
+) {
+  const name = input.name.trim();
+  const prompt = input.prompt.trim();
+  if (!name) return { error: "name is required." };
+  if (!prompt) return { error: "prompt is required." };
+
+  const resolved = resolveScheduleTiming(input.schedule);
+  if (!resolved.ok) return { error: resolved.error };
+
+  const timezone = String(input.timezone ?? "UTC");
+  const row = await deps.prisma.routine.create({
+    data: {
+      workspaceId: input.workspaceId,
+      botId: input.botId,
+      userId: input.userId,
+      name,
+      prompt,
+      cron: resolved.cron,
+      timezone,
+      notify: true,
+      active: true,
+      nextRunAt: resolved.nextRunAt,
+    },
+  });
+
+  await deps.events.append({
+    workspaceId: input.workspaceId,
+    threadId: input.threadId,
+    botId: input.botId,
+    type: "routine.created",
+    payload: { name: row.name },
+  });
+  await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+
+  return {
+    ok: true as const,
+    routineId: row.id,
+    name: row.name,
+    cron: row.cron,
+    nextRunAt: row.nextRunAt?.toISOString() ?? null,
+    oneShot: resolved.oneShot,
+  };
+}
+
+export async function listSchedulesFromTool(
+  deps: Pick<ScheduleToolDeps, "prisma">,
+  input: { workspaceId: string; botId: string; userId: string },
+) {
+  const rows = await deps.prisma.routine.findMany({
+    where: { workspaceId: input.workspaceId, botId: input.botId, userId: input.userId },
+    orderBy: { createdAt: "desc" },
+  });
+  return {
+    routines: rows.map((row) => ({
+      routineId: row.id,
+      name: row.name,
+      prompt: row.prompt,
+      cron: row.cron,
+      active: row.active,
+      nextRunAt: row.nextRunAt?.toISOString() ?? null,
+      oneShot: isOneShotRoutineCron(row.cron),
+    })),
+  };
+}
+
+export async function cancelScheduleFromTool(
+  deps: ScheduleToolDeps,
+  input: {
+    workspaceId: string;
+    botId: string;
+    userId: string;
+    routineId?: string;
+    name?: string;
+  },
+) {
+  const routineId = input.routineId?.trim();
+  const name = input.name?.trim();
+  if (!routineId && !name) {
+    return { error: "Provide routineId or the exact schedule name to cancel." };
+  }
+
+  const existing = await deps.prisma.routine.findFirst({
+    where: {
+      workspaceId: input.workspaceId,
+      botId: input.botId,
+      userId: input.userId,
+      ...(routineId ? { id: routineId } : { name: name! }),
+    },
+  });
+  if (!existing) return { error: "Schedule not found." };
+
+  await deps.prisma.routine.delete({ where: { id: existing.id } });
+  await deps.jobs.cancel(routineJobKey(existing.id));
+  return { ok: true as const, routineId: existing.id, name: existing.name };
+}

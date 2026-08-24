@@ -14,7 +14,7 @@ import type {
   SandboxProvider,
   SemanticMemoryProvider,
 } from "@rakazo/adapter-kit";
-import { historyCompactJob, routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
+import { historyCompactJob, routineJobKey, routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock, RunStatus } from "@rakazo/contracts";
 import { ATTACHMENT_MAX_BYTES, isAttachmentImageMimeType } from "@rakazo/contracts";
 import {
@@ -132,6 +132,13 @@ import {
   renderPlotSpecToSvg,
   searchChartCatalog,
 } from "./plot-tool.js";
+import {
+  cancelScheduleFromTool,
+  createScheduleFromTool,
+  isOneShotRoutineCron,
+  listSchedulesFromTool,
+  SCHEDULE_TOOL_NAMES,
+} from "./schedule-tools.js";
 import { inferScript } from "./scripted-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 import { type TakeoverResumeCheckpoint, takeoverResumeFromRelease } from "./takeover-resume.js";
@@ -150,6 +157,7 @@ const READ_ONLY_AGENT_TOOLS = new Set([
   "request_takeover",
   "run_subagent",
   "recall_memory",
+  "schedule_list",
 ]);
 const MAX_MODEL_FILE_BYTES = 250_000;
 // Same tool, same arguments, this many times in a row means the agent is stuck, not paginating.
@@ -277,15 +285,21 @@ export function createRunExecutor(deps: ExecutorDeps) {
         include: { thread: true },
       });
       if (!bot?.thread) return;
-      const nextRunAt = nextCronDate(
-        routine.cron,
-        new Date(Math.max(Date.now(), scheduledAt.getTime())),
-        routine.timezone,
-      );
+      const nextRunAt = isOneShotRoutineCron(routine.cron)
+        ? null
+        : nextCronDate(
+            routine.cron,
+            new Date(Math.max(Date.now(), scheduledAt.getTime())),
+            routine.timezone,
+          );
       const claimed = await deps.prisma.$transaction(async (tx) => {
         const updated = await tx.routine.updateMany({
           where: { id: routine.id, active: true, nextRunAt: scheduledAt },
-          data: { lastRunAt: new Date(), nextRunAt },
+          data: {
+            lastRunAt: new Date(),
+            nextRunAt,
+            ...(isOneShotRoutineCron(routine.cron) ? { active: false } : {}),
+          },
         });
         if (updated.count !== 1) return null;
         const task = await tx.task.create({
@@ -319,7 +333,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
         runId: claimed.id,
         payload: { routineId: routine.id, scheduledFor },
       });
-      await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
+      if (isOneShotRoutineCron(routine.cron)) {
+        await deps.jobs.cancel(routineJobKey(routine.id));
+      } else if (nextRunAt) {
+        await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
+      }
       await deps.jobs.enqueue(runContinueJob(claimed.id));
     },
 
@@ -625,7 +643,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
           graphical
             ? builtinAgentTools
             : builtinAgentTools.filter((tool) => !GRAPHICAL_AGENT_TOOLS.has(tool.name))
-        ).filter((tool) => thread.groupId || tool.name !== "handoff_to_bot");
+        ).filter(
+          (tool) =>
+            !thread.groupId ||
+            (tool.name !== "handoff_to_bot" && !SCHEDULE_TOOL_NAMES.has(tool.name)),
+        );
         const builtins = selectMemoryTools(availableBuiltins, semanticMemoryEnabled);
         const exposedConnectorTools = discovered.filter(
           (tool) => !builtinAgentTools.some((builtin) => builtin.name === tool.name),
@@ -1138,6 +1160,43 @@ export function createRunExecutor(deps: ExecutorDeps) {
               context,
             );
             return finish({ ok: true });
+          }
+          if (name === "schedule_create") {
+            const created = await createScheduleFromTool(deps, {
+              workspaceId: run.workspaceId,
+              botId: bot.id,
+              userId: run.userId,
+              threadId: thread.id,
+              name: String(args.name ?? ""),
+              prompt: String(args.prompt ?? ""),
+              timezone: args.timezone ? String(args.timezone) : undefined,
+              schedule: {
+                cron: args.cron,
+                every: args.every,
+                unit: args.unit,
+                runAt: args.runAt,
+                delayMinutes: args.delayMinutes,
+                delaySeconds: args.delaySeconds,
+              },
+            });
+            return finish(created);
+          }
+          if (name === "schedule_list") {
+            return listSchedulesFromTool(deps, {
+              workspaceId: run.workspaceId,
+              botId: bot.id,
+              userId: run.userId,
+            });
+          }
+          if (name === "schedule_cancel") {
+            const cancelled = await cancelScheduleFromTool(deps, {
+              workspaceId: run.workspaceId,
+              botId: bot.id,
+              userId: run.userId,
+              routineId: args.routineId ? String(args.routineId) : undefined,
+              name: args.name ? String(args.name) : undefined,
+            });
+            return finish(cancelled);
           }
           if (name === "add_mcp_server") {
             const parsed = parseMcpServerToolArgs(args);

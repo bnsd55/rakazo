@@ -1,5 +1,11 @@
 const WEEKDAYS = "1-5";
 
+export const ONCE_ROUTINE_CRON = "@once";
+
+export function isOneShotRoutineCron(cron: string): boolean {
+  return cron.trim() === ONCE_ROUTINE_CRON;
+}
+
 export const CRON_FREQS = [
   "Every hour",
   "Every day",
@@ -34,7 +40,11 @@ export function defaultCronPreset(): CronPreset {
 }
 
 export function cronFromPreset(input: CronPresetInput): string {
-  if (input.freq === "Advanced") return input.cron?.trim() || "*/3 * * * *";
+  const advancedCron = input.cron?.trim();
+  if (input.freq === "Advanced") {
+    if (advancedCron && isOneShotRoutineCron(advancedCron)) return ONCE_ROUTINE_CRON;
+    return advancedCron || "*/3 * * * *";
+  }
   if (input.freq === "Every hour") return "0 * * * *";
   if (input.freq === "Interval") {
     const n = Number.isFinite(input.n) && (input.n ?? 0) > 0 ? (input.n as number) : 5;
@@ -52,6 +62,9 @@ export function cronFromPreset(input: CronPresetInput): string {
 export function presetFromCron(cron: string): CronPreset {
   const base = defaultCronPreset();
   const trimmed = cron.trim();
+  if (isOneShotRoutineCron(trimmed)) {
+    return { ...base, freq: "Advanced", cron: ONCE_ROUTINE_CRON };
+  }
   const parts = trimmed.split(/\s+/);
   if (parts.length < 5) {
     return { ...base, freq: "Advanced", cron: trimmed };
@@ -129,10 +142,14 @@ export function formatSchedule(preset: CronPreset): string {
 }
 
 export function formatCron(cron: string): string {
+  if (isOneShotRoutineCron(cron)) return "One-time";
   return formatSchedule(presetFromCron(cron));
 }
 
 export function nextCronDate(cron: string, from: Date, timezone = "UTC"): Date {
+  if (isOneShotRoutineCron(cron)) {
+    throw new Error("nextCronDate does not apply to one-shot routines");
+  }
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) {
     return new Date(from.getTime() + 60_000);
