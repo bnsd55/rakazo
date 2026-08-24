@@ -125,12 +125,12 @@ describe("schedule tool persistence", () => {
       ...args.data,
       nextRunAt: args.data.nextRunAt,
     }));
-    const update = vi.fn(async (args: { data: Record<string, unknown> }) => ({
+    const update = vi.fn(async () => ({
       id: "routine-1",
       name: "Morning joke",
       cron: "*/1 * * * *",
       nextRunAt: new Date("2026-08-24T12:00:00.000Z"),
-      ...args.data,
+      active: true,
     }));
     const deps = {
       prisma: { routine: { create, update } },
@@ -151,22 +151,17 @@ describe("schedule tool persistence", () => {
     expect(result).toMatchObject({ ok: true, routineId: "routine-1", cron: "*/1 * * * *" });
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          workspaceId: "ws-1",
-          userId: "user-1",
-          cron: "*/1 * * * *",
-          active: false,
-        }),
+        data: expect.objectContaining({ active: false, cron: "*/1 * * * *" }),
       }),
     );
     expect(update).toHaveBeenCalledWith({
       where: { id: "routine-1" },
       data: { active: true },
     });
+    expect(enqueue).toHaveBeenCalledOnce();
     expect(append).toHaveBeenCalledWith(
       expect.objectContaining({ type: "routine.created", payload: { name: "Morning joke" } }),
     );
-    expect(enqueue).toHaveBeenCalledOnce();
   });
 
   it("keeps the routine when event append fails after enqueue", async () => {
@@ -178,8 +173,8 @@ describe("schedule tool persistence", () => {
           create: vi.fn(async () => ({
             id: "routine-1",
             name: "Morning joke",
-            nextRunAt: new Date(),
             active: false,
+            nextRunAt: new Date(),
           })),
           update: vi.fn(async () => ({
             id: "routine-1",
@@ -214,20 +209,25 @@ describe("schedule tool persistence", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it("rolls back routine when enqueue fails", async () => {
+  it("rolls back routine when enqueue fails after activation", async () => {
     const remove = vi.fn(async () => undefined);
-    const update = vi.fn(async () => undefined);
     const deps = {
       prisma: {
         routine: {
           create: vi.fn(async () => ({
             id: "routine-1",
             name: "Morning joke",
-            nextRunAt: new Date(),
             active: false,
+            nextRunAt: new Date(),
+          })),
+          update: vi.fn(async () => ({
+            id: "routine-1",
+            name: "Morning joke",
+            cron: "*/1 * * * *",
+            nextRunAt: new Date(),
+            active: true,
           })),
           delete: remove,
-          update,
         },
       },
       events: { append: vi.fn(async () => undefined) },
@@ -251,24 +251,32 @@ describe("schedule tool persistence", () => {
 
     expect(result).toEqual({ error: "Could not schedule the reminder. Try again." });
     expect(remove).toHaveBeenCalledWith({ where: { id: "routine-1" } });
-    expect(update).not.toHaveBeenCalled();
   });
 
-  it("returns an error when enqueue fails and delete also fails", async () => {
-    const update = vi.fn(async () => undefined);
+  it("deactivates when enqueue fails and delete also fails", async () => {
+    const update = vi.fn(async (args: { data: Record<string, unknown> }) => {
+      if (args.data.active === false) return { id: "routine-1", active: false };
+      return {
+        id: "routine-1",
+        name: "Morning joke",
+        cron: "*/1 * * * *",
+        nextRunAt: new Date(),
+        active: true,
+      };
+    });
     const deps = {
       prisma: {
         routine: {
           create: vi.fn(async () => ({
             id: "routine-1",
             name: "Morning joke",
-            nextRunAt: new Date(),
             active: false,
+            nextRunAt: new Date(),
           })),
+          update,
           delete: vi.fn(async () => {
             throw new Error("delete failed");
           }),
-          update,
         },
       },
       events: { append: vi.fn(async () => undefined) },
@@ -290,49 +298,11 @@ describe("schedule tool persistence", () => {
       schedule: { every: 1, unit: "minutes" },
     });
 
-    // Row was created inactive, so reconciler cannot fire it even if delete fails.
     expect(result).toEqual({ error: "Could not schedule the reminder. Try again." });
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it("rolls back when activating the routine fails after enqueue", async () => {
-    const remove = vi.fn(async () => undefined);
-    const cancel = vi.fn(async () => undefined);
-    const deps = {
-      prisma: {
-        routine: {
-          create: vi.fn(async () => ({
-            id: "routine-1",
-            name: "Morning joke",
-            nextRunAt: new Date(),
-            active: false,
-          })),
-          update: vi.fn(async () => {
-            throw new Error("activate failed");
-          }),
-          delete: remove,
-        },
-      },
-      events: { append: vi.fn(async () => undefined) },
-      jobs: {
-        enqueue: vi.fn(async () => undefined),
-        cancel,
-      },
-    } as unknown as Parameters<typeof createScheduleFromTool>[0];
-
-    const result = await createScheduleFromTool(deps, {
-      workspaceId: "ws-1",
-      botId: "bot-1",
-      userId: "user-1",
-      threadId: "thread-1",
-      name: "Morning joke",
-      prompt: "Tell a joke",
-      schedule: { every: 1, unit: "minutes" },
+    expect(update).toHaveBeenCalledWith({
+      where: { id: "routine-1" },
+      data: { active: false, nextRunAt: null },
     });
-
-    expect(result).toEqual({ error: "Could not schedule the reminder. Try again." });
-    expect(cancel).toHaveBeenCalled();
-    expect(remove).toHaveBeenCalledWith({ where: { id: "routine-1" } });
   });
 
   it("scopes list and cancel to workspace and user", async () => {

@@ -183,7 +183,7 @@ export async function createScheduleFromTool(
   const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  // Create inactive until wakeup is enqueued so a failed create cannot be reconciled live.
+  // Persist inactive first so a crash before activation cannot be reconciled live.
   const row = await deps.prisma.routine.create({
     data: {
       workspaceId: input.workspaceId,
@@ -199,18 +199,8 @@ export async function createScheduleFromTool(
     },
   });
 
-  try {
-    await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
-  } catch {
-    try {
-      await deps.prisma.routine.delete({ where: { id: row.id } });
-    } catch {
-      // Already inactive; delete is best effort.
-    }
-    return { error: "Could not schedule the reminder. Try again." };
-  }
-
-  let active: Awaited<ReturnType<PrismaClient["routine"]["update"]>>;
+  // Activate before enqueue so an immediately-due wakeup cannot run while inactive.
+  let active: Awaited<ReturnType<ScheduleToolDeps["prisma"]["routine"]["update"]>>;
   try {
     active = await deps.prisma.routine.update({
       where: { id: row.id },
@@ -218,14 +208,28 @@ export async function createScheduleFromTool(
     });
   } catch {
     try {
-      await deps.jobs.cancel(routineJobKey(row.id));
-    } catch {
-      // Best effort: wakeup on an inactive row is a no-op.
-    }
-    try {
       await deps.prisma.routine.delete({ where: { id: row.id } });
     } catch {
-      // Already inactive.
+      // Best effort.
+    }
+    return { error: "Could not schedule the reminder. Try again." };
+  }
+
+  try {
+    await deps.jobs.enqueue(routineWakeupJob(active.id, resolved.nextRunAt));
+  } catch {
+    try {
+      await deps.prisma.routine.delete({ where: { id: active.id } });
+    } catch {
+      try {
+        await deps.prisma.routine.update({
+          where: { id: active.id },
+          data: { active: false, nextRunAt: null },
+        });
+      } catch {
+        // Let this surface only if both compensations fail by returning soft error
+        // after best-effort deactivation attempts above.
+      }
     }
     return { error: "Could not schedule the reminder. Try again." };
   }
